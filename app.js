@@ -1,3 +1,5 @@
+const backgroundCanvas = document.getElementById("boardBackground");
+const backgroundCtx = backgroundCanvas.getContext("2d");
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const app = document.querySelector(".app");
@@ -15,6 +17,16 @@ const boardColorInput = document.getElementById("boardColor");
 const lineWidthInput = document.getElementById("lineWidth");
 const lineWidthDecButton = document.getElementById("lineWidthDec");
 const lineWidthIncButton = document.getElementById("lineWidthInc");
+const documentEditor = document.getElementById("documentEditor");
+const openDocumentPopupButton = document.getElementById("openDocumentPopup");
+const documentPopup = document.getElementById("documentPopup");
+const documentLoadButton = document.getElementById("documentLoadButton");
+const documentInput = document.getElementById("documentInput");
+const pdfPrevPageButton = document.getElementById("pdfPrevPage");
+const pdfNextPageButton = document.getElementById("pdfNextPage");
+const pdfPageIndicator = document.getElementById("pdfPageIndicator");
+const removeDocumentButton = document.getElementById("removeDocumentButton");
+const documentStatus = document.getElementById("documentStatus");
 const eraserToolEditor = document.getElementById("eraserToolEditor");
 const eraserToolPopup = document.getElementById("eraserToolPopup");
 const eraserWidthInput = document.getElementById("eraserWidth");
@@ -58,6 +70,7 @@ const LAST_ERASER_WIDTH_STORAGE_KEY = "board.eraser.lastWidth.v1";
 const LAST_ERASER_MODE_STORAGE_KEY = "board.eraser.lastMode.v1";
 const LAST_BOARD_COLOR_STORAGE_KEY = "board.background.lastColor.v1";
 const LAST_TOOLBAR_LAYOUT_STORAGE_KEY = "board.toolbar.layout.v1";
+const PDF_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const QUALITY_PRESETS = {
   normal: {
@@ -116,6 +129,15 @@ let toolbarLayout = {
   floatX: 120,
   floatY: 120
 };
+let pdfDocument = null;
+let pdfPageNumber = 1;
+let pdfPageRasterCanvas = null;
+let pdfRenderTask = null;
+let pdfRenderToken = 0;
+let pdfRenderDebounceTimer = null;
+let pdfLoadingToken = 0;
+let loadedDocumentName = "";
+let isPdfWorkerConfigured = false;
 
 function getFullscreenElement() {
   return document.fullscreenElement
@@ -250,6 +272,113 @@ function setEraserToolPopupOpen(open) {
 
 function closeEraserToolPopup() {
   setEraserToolPopupOpen(false);
+}
+
+function isDocumentPopupOpen() {
+  return !documentPopup.classList.contains("is-hidden");
+}
+
+function setDocumentPopupOpen(open) {
+  documentPopup.classList.toggle("is-hidden", !open);
+  openDocumentPopupButton.setAttribute("aria-expanded", String(open));
+}
+
+function closeDocumentPopup() {
+  setDocumentPopupOpen(false);
+}
+
+function setDocumentStatus(message, tone = "normal") {
+  documentStatus.textContent = message;
+  documentStatus.classList.remove("is-success", "is-warning", "is-error");
+
+  if (tone === "success") {
+    documentStatus.classList.add("is-success");
+  } else if (tone === "warning") {
+    documentStatus.classList.add("is-warning");
+  } else if (tone === "error") {
+    documentStatus.classList.add("is-error");
+  }
+}
+
+function hasLoadedPdfDocument() {
+  return Boolean(pdfDocument && Number.isFinite(pdfDocument.numPages) && pdfDocument.numPages > 0);
+}
+
+function updatePdfNavigationUI() {
+  const hasPdf = hasLoadedPdfDocument();
+  const currentPage = hasPdf ? pdfPageNumber : 0;
+  const totalPages = hasPdf ? Number(pdfDocument.numPages) : 0;
+
+  pdfPrevPageButton.disabled = !hasPdf || currentPage <= 1;
+  pdfNextPageButton.disabled = !hasPdf || currentPage >= totalPages;
+  removeDocumentButton.disabled = !hasPdf;
+  pdfPageIndicator.textContent = hasPdf
+    ? `${currentPage} / ${totalPages}`
+    : "- / -";
+}
+
+function configurePdfWorker() {
+  if (isPdfWorkerConfigured) {
+    return true;
+  }
+
+  if (!window.pdfjsLib || !window.pdfjsLib.GlobalWorkerOptions) {
+    setDocumentStatus("PDF engine is unavailable. Refresh and try again.", "error");
+    return false;
+  }
+
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
+  isPdfWorkerConfigured = true;
+  return true;
+}
+
+function normalizeFileExtension(fileName) {
+  if (typeof fileName !== "string") {
+    return "";
+  }
+
+  const lastDot = fileName.lastIndexOf(".");
+  if (lastDot < 0 || lastDot >= fileName.length - 1) {
+    return "";
+  }
+
+  return fileName.slice(lastDot + 1).trim().toLowerCase();
+}
+
+function isPdfFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "pdf" || file.type === "application/pdf";
+}
+
+function isPptFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "ppt"
+    || extension === "pptx"
+    || file.type === "application/vnd.ms-powerpoint"
+    || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function clearPdfRenderDebounce() {
+  if (pdfRenderDebounceTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(pdfRenderDebounceTimer);
+  pdfRenderDebounceTimer = null;
+}
+
+function stopPdfRenderTask() {
+  if (!pdfRenderTask) {
+    return;
+  }
+
+  try {
+    pdfRenderTask.cancel();
+  } catch (error) {
+    // Ignore cancellation errors.
+  }
+
+  pdfRenderTask = null;
 }
 
 function getDefaultToolbarFloatPosition() {
@@ -864,6 +993,7 @@ function applyBoardColor(color, persist = true) {
 
   boardColorInput.value = normalized;
   setBoardColor(normalized);
+  renderBoardBackground();
   updateBoardColorTriggerPreview(normalized);
   if (persist) {
     saveStoredColor(LAST_BOARD_COLOR_STORAGE_KEY, normalized);
@@ -1266,19 +1396,287 @@ function updateToolUI() {
   canvas.style.cursor = tool === "pen" ? "crosshair" : "cell";
 }
 
+function renderBoardBackground() {
+  if (backgroundCanvas.width <= 0 || backgroundCanvas.height <= 0) {
+    return;
+  }
+
+  backgroundCtx.setTransform(1, 0, 0, 1, 0, 0);
+  backgroundCtx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  backgroundCtx.fillStyle = normalizeHexColor(boardColorInput.value) || "#ffffff";
+  backgroundCtx.fillRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+
+  if (!pdfPageRasterCanvas || pdfPageRasterCanvas.width <= 0 || pdfPageRasterCanvas.height <= 0) {
+    return;
+  }
+
+  const fitScale = Math.min(
+    backgroundCanvas.width / pdfPageRasterCanvas.width,
+    backgroundCanvas.height / pdfPageRasterCanvas.height
+  );
+  const drawWidth = Math.max(1, Math.floor(pdfPageRasterCanvas.width * fitScale));
+  const drawHeight = Math.max(1, Math.floor(pdfPageRasterCanvas.height * fitScale));
+  const drawX = Math.floor((backgroundCanvas.width - drawWidth) / 2);
+  const drawY = Math.floor((backgroundCanvas.height - drawHeight) / 2);
+
+  backgroundCtx.imageSmoothingEnabled = true;
+  backgroundCtx.imageSmoothingQuality = "high";
+  backgroundCtx.drawImage(
+    pdfPageRasterCanvas,
+    0,
+    0,
+    pdfPageRasterCanvas.width,
+    pdfPageRasterCanvas.height,
+    drawX,
+    drawY,
+    drawWidth,
+    drawHeight
+  );
+}
+
+async function releasePdfDocument(documentRef) {
+  if (!documentRef || typeof documentRef.destroy !== "function") {
+    return;
+  }
+
+  try {
+    await documentRef.destroy();
+  } catch (error) {
+    // Ignore destroy errors.
+  }
+}
+
+async function unloadPdfDocument(updateStatus = true) {
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+  pdfRenderToken += 1;
+  pdfLoadingToken += 1;
+
+  const previousDocument = pdfDocument;
+  pdfDocument = null;
+  pdfPageNumber = 1;
+  pdfPageRasterCanvas = null;
+  loadedDocumentName = "";
+
+  renderBoardBackground();
+  updatePdfNavigationUI();
+
+  if (updateStatus) {
+    setDocumentStatus("No document");
+  }
+
+  await releasePdfDocument(previousDocument);
+}
+
+async function renderPdfPage(pageNumber) {
+  if (!hasLoadedPdfDocument()) {
+    pdfPageRasterCanvas = null;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+
+  const clampedPage = Math.min(
+    Number(pdfDocument.numPages),
+    Math.max(1, Math.round(Number(pageNumber) || 1))
+  );
+  pdfPageNumber = clampedPage;
+  updatePdfNavigationUI();
+
+  const token = ++pdfRenderToken;
+  const statusName = loadedDocumentName || "PDF";
+  setDocumentStatus(`${statusName}: rendering page...`);
+
+  try {
+    const page = await pdfDocument.getPage(clampedPage);
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    const baseViewport = page.getViewport({ scale: 1 });
+    const maxWidth = Math.max(1, backgroundCanvas.width);
+    const maxHeight = Math.max(1, backgroundCanvas.height);
+    const fitScale = Math.min(maxWidth / baseViewport.width, maxHeight / baseViewport.height);
+    const viewport = page.getViewport({ scale: fitScale });
+
+    const rasterCanvas = document.createElement("canvas");
+    rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+    rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+    const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+    if (!rasterContext) {
+      setDocumentStatus("Could not create a PDF rendering context.", "error");
+      return;
+    }
+    rasterContext.imageSmoothingEnabled = true;
+    rasterContext.imageSmoothingQuality = "high";
+
+    pdfRenderTask = page.render({
+      canvasContext: rasterContext,
+      viewport
+    });
+    await pdfRenderTask.promise;
+
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    pdfPageRasterCanvas = rasterCanvas;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
+  } catch (error) {
+    if (error && error.name === "RenderingCancelledException") {
+      return;
+    }
+
+    setDocumentStatus("Failed to render PDF page.", "error");
+  } finally {
+    if (token === pdfRenderToken) {
+      pdfRenderTask = null;
+    }
+  }
+}
+
+function schedulePdfPageRerender() {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  pdfRenderDebounceTimer = window.setTimeout(() => {
+    pdfRenderDebounceTimer = null;
+    renderPdfPage(pdfPageNumber);
+  }, 120);
+}
+
+async function loadPdfFromFile(file) {
+  if (!configurePdfWorker()) {
+    return;
+  }
+
+  const token = ++pdfLoadingToken;
+  const fileName = file.name || "PDF";
+  setDocumentStatus(`${fileName}: loading...`);
+
+  try {
+    const source = await file.arrayBuffer();
+    if (token !== pdfLoadingToken) {
+      return;
+    }
+
+    const loadingTask = window.pdfjsLib.getDocument({
+      data: source
+    });
+    const nextDocument = await loadingTask.promise;
+    if (token !== pdfLoadingToken) {
+      await releasePdfDocument(nextDocument);
+      return;
+    }
+
+    const previousDocument = pdfDocument;
+    clearPdfRenderDebounce();
+    stopPdfRenderTask();
+
+    pdfDocument = nextDocument;
+    pdfPageNumber = 1;
+    pdfPageRasterCanvas = null;
+    loadedDocumentName = fileName;
+
+    await renderPdfPage(1);
+    if (pdfPageRasterCanvas) {
+      closeDocumentPopup();
+    }
+    await releasePdfDocument(previousDocument);
+  } catch (error) {
+    if (token !== pdfLoadingToken) {
+      return;
+    }
+
+    setDocumentStatus("Unable to open this PDF file. Try another file.", "error");
+  } finally {
+    updatePdfNavigationUI();
+  }
+}
+
+async function handleDocumentInputChange(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) {
+    return;
+  }
+
+  if (isPdfFile(file)) {
+    await loadPdfFromFile(file);
+    return;
+  }
+
+  if (isPptFile(file)) {
+    setDocumentStatus("PPT/PPTX cannot be rendered directly. Convert to PDF and load again.", "warning");
+    return;
+  }
+
+  setDocumentStatus("Unsupported file type. Choose PDF or PPT/PPTX.", "error");
+}
+
+function goToPreviousPdfPage() {
+  if (!hasLoadedPdfDocument() || pdfPageNumber <= 1) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber - 1);
+}
+
+function goToNextPdfPage() {
+  if (!hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber + 1);
+}
+
+function requestDocumentFileSelection() {
+  documentInput.click();
+}
+
+function isEditableEventTarget(target) {
+  if (!target) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = String(target.tagName || "").toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select";
+}
+
 function setCanvasSize() {
   const rect = canvas.getBoundingClientRect();
   const previousWidth = canvas.width;
   const previousHeight = canvas.height;
+  const previousBackgroundWidth = backgroundCanvas.width;
+  const previousBackgroundHeight = backgroundCanvas.height;
 
   pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
   const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
   const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
 
-  if (nextWidth === previousWidth && nextHeight === previousHeight) {
+  if (
+    nextWidth === previousWidth
+    && nextHeight === previousHeight
+    && nextWidth === previousBackgroundWidth
+    && nextHeight === previousBackgroundHeight
+  ) {
     return;
   }
 
+  backgroundCanvas.width = nextWidth;
+  backgroundCanvas.height = nextHeight;
   canvas.width = nextWidth;
   canvas.height = nextHeight;
 
@@ -1291,6 +1689,9 @@ function setCanvasSize() {
     scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
     redrawAllStrokes();
   }
+
+  renderBoardBackground();
+  schedulePdfPageRerender();
 }
 
 function getCanvasPoint(event) {
@@ -1589,7 +1990,8 @@ function clearBoard() {
 }
 
 function setBoardColor(color) {
-  canvas.style.backgroundColor = color;
+  canvas.style.backgroundColor = "transparent";
+  backgroundCanvas.style.backgroundColor = color;
 }
 
 penToolButton.addEventListener("click", () => {
@@ -1626,9 +2028,37 @@ strokeEraserModeButton.addEventListener("click", () => {
 
 clearButton.addEventListener("click", clearBoard);
 fullscreenToggleButton.addEventListener("click", toggleFullscreen);
+openDocumentPopupButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = !isDocumentPopupOpen();
+  setDocumentPopupOpen(open);
+
+  if (open) {
+    closeBoardColorPopup();
+    closeEraserToolPopup();
+    closePresetHelp();
+  }
+});
+
+documentLoadButton.addEventListener("click", requestDocumentFileSelection);
+pdfPrevPageButton.addEventListener("click", goToPreviousPdfPage);
+pdfNextPageButton.addEventListener("click", goToNextPdfPage);
+removeDocumentButton.addEventListener("click", () => {
+  unloadPdfDocument(true);
+});
+
+documentInput.addEventListener("change", handleDocumentInputChange);
 openBoardColorPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   setBoardColorPopupOpen(!isBoardColorPopupOpen());
+});
+
+documentPopup.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+});
+
+documentPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
 });
 
 boardColorPopup.addEventListener("click", (event) => {
@@ -1738,6 +2168,9 @@ document.addEventListener("MSFullscreenChange", () => {
   handleViewportResize();
 });
 document.addEventListener("pointerdown", (event) => {
+  if (isDocumentPopupOpen() && !documentEditor.contains(event.target)) {
+    closeDocumentPopup();
+  }
   if (isBoardColorPopupOpen() && !boardColorEditor.contains(event.target)) {
     closeBoardColorPopup();
   }
@@ -1749,7 +2182,24 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  if (!isEditableEventTarget(event.target) && hasLoadedPdfDocument()) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      goToPreviousPdfPage();
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      goToNextPdfPage();
+      return;
+    }
+  }
+
   if (event.key === "Escape") {
+    if (isDocumentPopupOpen()) {
+      closeDocumentPopup();
+    }
     if (isBoardColorPopupOpen()) {
       closeBoardColorPopup();
     }
@@ -1766,9 +2216,12 @@ initToolbarLayout();
 setCanvasSize();
 initPresets();
 initLastUsedSettings();
+closeDocumentPopup();
 closeBoardColorPopup();
 closeEraserToolPopup();
 closePresetHelp();
+setDocumentStatus("No document");
+updatePdfNavigationUI();
 updateFullscreenButtons();
 updateToolUI();
 
