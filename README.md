@@ -71,6 +71,12 @@ npm run desktop:dev
 npm run desktop:build
 ```
 
+This command automatically generates `dist/` from:
+
+- `index.html`
+- `styles.css`
+- `app.js`
+
 Build output:
 
 - Windows: `src-tauri/target/release/boardcanvas.exe`

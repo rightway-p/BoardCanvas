@@ -4,6 +4,7 @@
   "private": true,
   "description": "BoardCanvas desktop wrapper using Tauri",
   "scripts": {
+    "web:build": "node scripts/prepare-dist.js",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "dev": "tauri dev",
@@ -13,4 +14,3 @@
     "@tauri-apps/cli": "^1.6.0"
   }
 }
-
