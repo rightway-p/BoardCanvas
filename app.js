@@ -162,6 +162,28 @@ const strokeHistoryByContext = new Map();
 let overlayMode = false;
 let overlayTransitionInProgress = false;
 let overlayWindowSnapshot = null;
+let nativeFullscreenActive = false;
+const runtimePlatform = detectRuntimePlatform();
+
+function detectRuntimePlatform() {
+  const userAgent = String((window.navigator && window.navigator.userAgent) || "").toLowerCase();
+  const platform = String((window.navigator && window.navigator.platform) || "").toLowerCase();
+  const source = `${userAgent} ${platform}`;
+
+  if (source.includes("win")) {
+    return "windows";
+  }
+
+  if (source.includes("mac")) {
+    return "macos";
+  }
+
+  if (source.includes("linux")) {
+    return "linux";
+  }
+
+  return "unknown";
+}
 
 function getFullscreenElement() {
   return document.fullscreenElement
@@ -170,7 +192,7 @@ function getFullscreenElement() {
     || null;
 }
 
-function isFullscreenSupported() {
+function isBrowserFullscreenSupported() {
   return Boolean(
     document.fullscreenEnabled
     || document.webkitFullscreenEnabled
@@ -178,9 +200,40 @@ function isFullscreenSupported() {
   );
 }
 
+function isFullscreenSupported() {
+  return isBrowserFullscreenSupported() || Boolean(getTauriAppWindow());
+}
+
+function isFullscreenActive() {
+  return Boolean(getFullscreenElement()) || nativeFullscreenActive;
+}
+
+async function refreshNativeFullscreenState() {
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    nativeFullscreenActive = false;
+    return nativeFullscreenActive;
+  }
+
+  const nextState = await callWindowMethod(appWindowRef, "isFullscreen");
+  if (typeof nextState === "boolean") {
+    nativeFullscreenActive = nextState;
+  }
+
+  return nativeFullscreenActive;
+}
+
+function syncFullscreenUiFromNativeWindow() {
+  refreshNativeFullscreenState()
+    .catch(() => null)
+    .finally(() => {
+      updateFullscreenButtons();
+    });
+}
+
 function updateFullscreenButtons() {
   const supported = isFullscreenSupported();
-  const active = Boolean(getFullscreenElement());
+  const active = isFullscreenActive();
 
   fullscreenToggleButton.disabled = !supported;
   fullscreenToggleButton.classList.toggle("is-fullscreen", supported && active);
@@ -198,61 +251,85 @@ function updateFullscreenButtons() {
   fullscreenToggleButton.title = label;
 }
 async function enterFullscreen() {
-  if (!isFullscreenSupported() || getFullscreenElement()) {
+  if (!isFullscreenSupported() || isFullscreenActive()) {
     return;
   }
 
-  const target = document.documentElement;
-  try {
-    if (typeof target.requestFullscreen === "function") {
-      await target.requestFullscreen();
-      return;
-    }
+  if (isBrowserFullscreenSupported()) {
+    const target = document.documentElement;
+    try {
+      if (typeof target.requestFullscreen === "function") {
+        await target.requestFullscreen();
+        return;
+      }
 
-    if (typeof target.webkitRequestFullscreen === "function") {
-      target.webkitRequestFullscreen();
-      return;
-    }
+      if (typeof target.webkitRequestFullscreen === "function") {
+        target.webkitRequestFullscreen();
+        return;
+      }
 
-    if (typeof target.msRequestFullscreen === "function") {
-      target.msRequestFullscreen();
+      if (typeof target.msRequestFullscreen === "function") {
+        target.msRequestFullscreen();
+        return;
+      }
+    } catch (error) {
+      // Browser fullscreen can fail in app webviews.
     }
-  } catch (error) {
-    // Fullscreen request can fail if browser blocks it.
   }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    return;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  updateFullscreenButtons();
 }
 
 async function exitFullscreen() {
-  if (!getFullscreenElement()) {
+  if (!isFullscreenActive()) {
     return;
   }
 
-  try {
-    if (typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
-      return;
-    }
+  if (getFullscreenElement()) {
+    try {
+      if (typeof document.exitFullscreen === "function") {
+        await document.exitFullscreen();
+        return;
+      }
 
-    if (typeof document.webkitExitFullscreen === "function") {
-      document.webkitExitFullscreen();
-      return;
-    }
+      if (typeof document.webkitExitFullscreen === "function") {
+        document.webkitExitFullscreen();
+        return;
+      }
 
-    if (typeof document.msExitFullscreen === "function") {
-      document.msExitFullscreen();
+      if (typeof document.msExitFullscreen === "function") {
+        document.msExitFullscreen();
+        return;
+      }
+    } catch (error) {
+      // Ignore exit errors and try native fallback.
     }
-  } catch (error) {
-    // Ignore exit errors and keep UI in sync via fullscreenchange.
   }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    return;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await refreshNativeFullscreenState();
+  updateFullscreenButtons();
 }
 
-function toggleFullscreen() {
-  if (getFullscreenElement()) {
-    exitFullscreen();
+async function toggleFullscreen() {
+  if (isFullscreenActive()) {
+    await exitFullscreen();
     return;
   }
 
-  enterFullscreen();
+  await enterFullscreen();
 }
 
 function getTauriWindowApi() {
@@ -270,6 +347,14 @@ function getTauriAppWindow() {
   }
 
   return tauriWindowApi.appWindow;
+}
+
+function isDesktopAppRuntime() {
+  return Boolean(getTauriAppWindow());
+}
+
+function isWindowsDesktopRuntime() {
+  return isDesktopAppRuntime() && runtimePlatform === "windows";
 }
 
 async function callWindowMethod(targetWindow, methodName, ...args) {
@@ -350,7 +435,7 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
 }
 
 function isOverlayModeSupported() {
-  return Boolean(getTauriAppWindow());
+  return isWindowsDesktopRuntime();
 }
 
 function updateOverlayModeButton() {
@@ -376,8 +461,8 @@ function updateOverlayModeButton() {
   overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
   overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
   overlayModeToggleButton.title = overlayMode
-    ? "오버레이 모드 종료 (F8)"
-    : "오버레이 모드 (F8)";
+    ? "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC \uC885\uB8CC (F8)"
+    : "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC (F8)";
 }
 
 function applyOverlayModeUI(active) {
@@ -401,6 +486,11 @@ async function enterOverlayMode() {
     const appWindowRef = getTauriAppWindow();
     if (!appWindowRef) {
       setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      return;
+    }
+
+    if (!isOverlayModeSupported()) {
+      setDocumentStatus("Overlay mode is currently supported on Windows desktop. Linux support is planned.", "warning");
       return;
     }
 
@@ -2652,12 +2742,25 @@ function goToNextPdfPage() {
   renderPdfPage(pdfPageNumber + 1);
 }
 
-function requestDocumentFileSelection() {
+async function requestDocumentFileSelection() {
   if (pdfExportInProgress || sessionRestoreInProgress) {
     return;
   }
 
-  documentInput.click();
+  if (typeof documentInput.showPicker === "function") {
+    try {
+      await documentInput.showPicker();
+      return;
+    } catch (error) {
+      // Fallback to click for environments where showPicker is not allowed.
+    }
+  }
+
+  try {
+    documentInput.click();
+  } catch (error) {
+    setDocumentStatus("Unable to open file picker. Try again.", "error");
+  }
 }
 
 function isEditableEventTarget(target) {
@@ -3206,7 +3309,13 @@ canvas.addEventListener("pointerleave", (event) => {
   }
 });
 
-window.addEventListener("resize", handleViewportResize);
+window.addEventListener("resize", () => {
+  handleViewportResize();
+  syncFullscreenUiFromNativeWindow();
+});
+window.addEventListener("focus", () => {
+  syncFullscreenUiFromNativeWindow();
+});
 document.addEventListener("fullscreenchange", () => {
   updateFullscreenButtons();
   handleViewportResize();
@@ -3296,6 +3405,7 @@ initToolbarLayout();
 setCanvasSize();
 initPresets();
 initLastUsedSettings();
+app.dataset.runtimePlatform = runtimePlatform;
 closeDocumentPopup();
 closeBoardColorPopup();
 closeEraserToolPopup();
@@ -3303,6 +3413,7 @@ closePresetHelp();
 setDocumentStatus("No document");
 updatePdfNavigationUI();
 updateFullscreenButtons();
+syncFullscreenUiFromNativeWindow();
 updateToolUI();
 updateUndoRedoUI();
 updateOverlayModeButton();

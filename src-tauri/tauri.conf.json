@@ -4,7 +4,8 @@
     "beforeBuildCommand": "npm run web:build",
     "beforeDevCommand": "",
     "devPath": "../index.html",
-    "distDir": "../dist"
+    "distDir": "../dist",
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "BoardCanvas",

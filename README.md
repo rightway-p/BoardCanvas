@@ -8,6 +8,7 @@ BoardCanvas is a whiteboard app built with HTML/CSS/JS, wrapped as a desktop app
 - Eraser modes: pixel eraser, stroke eraser
 - Clear all
 - Fullscreen toggle
+- Overlay mode (Windows desktop runtime only, for now)
 - Pen color and board background color
 - Pen presets (4 fixed slots)
 - Dockable toolbar (top, bottom, left, right)
@@ -25,7 +26,7 @@ python -m http.server 5500
 
 Then open `http://localhost:5500`.
 
-## Desktop Wrapper (Windows + Linux)
+## Desktop Wrapper (Windows now, Linux prepared)
 
 This repository includes a Tauri wrapper under `src-tauri`.
 
@@ -77,7 +78,7 @@ This command automatically generates `dist/` from:
 - `styles.css`
 - `app.js`
 
-Build output:
+Build output (per OS):
 
 - Windows: `src-tauri/target/release/boardcanvas.exe`
 - Linux: `src-tauri/target/release/boardcanvas`
@@ -88,6 +89,7 @@ One source codebase supports both OSes, but binaries are built per OS.
 
 - Windows binary must be built on Windows.
 - Linux binary must be built on Linux.
+- Overlay mode is currently enabled only on Windows desktop runtime.
 
 ## GitHub Actions: Auto Build
 
@@ -101,10 +103,10 @@ Triggers:
 - Push to `dev`
 - Manual run (`workflow_dispatch`)
 
-Artifacts per run:
+Artifacts:
 
-- `boardcanvas-windows`
-- `boardcanvas-linux`
+- Push runs: `boardcanvas-windows`
+- Manual run with `build_linux=true`: `boardcanvas-windows`, `boardcanvas-linux`
 
 ## Project structure
 
