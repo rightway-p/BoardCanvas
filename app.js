@@ -9,8 +9,11 @@ const penToolButton = document.getElementById("penTool");
 const eraserToolButton = document.getElementById("eraserTool");
 const pixelEraserModeButton = document.getElementById("pixelEraserMode");
 const strokeEraserModeButton = document.getElementById("strokeEraserMode");
+const undoButton = document.getElementById("undoButton");
+const redoButton = document.getElementById("redoButton");
 const clearButton = document.getElementById("clearButton");
 const fullscreenToggleButton = document.getElementById("fullscreenToggle");
+const overlayModeToggleButton = document.getElementById("overlayModeToggle");
 
 const penColorInput = document.getElementById("penColor");
 const boardColorInput = document.getElementById("boardColor");
@@ -72,6 +75,12 @@ const LAST_ERASER_WIDTH_STORAGE_KEY = "board.eraser.lastWidth.v1";
 const LAST_ERASER_MODE_STORAGE_KEY = "board.eraser.lastMode.v1";
 const LAST_BOARD_COLOR_STORAGE_KEY = "board.background.lastColor.v1";
 const LAST_TOOLBAR_LAYOUT_STORAGE_KEY = "board.toolbar.layout.v1";
+const SESSION_STORAGE_KEY = "board.session.state.v1";
+const SESSION_STORAGE_VERSION = 1;
+const SESSION_AUTOSAVE_DELAY_MS = 500;
+const SESSION_DB_NAME = "boardcanvas.session.db";
+const SESSION_DB_STORE = "session-files";
+const SESSION_DB_PDF_KEY = "last-pdf";
 const PDF_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const QUALITY_PRESETS = {
@@ -92,6 +101,7 @@ const QUALITY_PRESETS = {
 };
 const MAX_QUEUE_POINTS = 320;
 const TOOLBAR_DOCK_THRESHOLD = 48;
+const HISTORY_STACK_LIMIT = 120;
 
 let qualityLevel = detectLowSpecDevice() ? "low" : "normal";
 let quality = QUALITY_PRESETS[qualityLevel];
@@ -119,6 +129,7 @@ let activeStroke = null;
 let strokeEraserActive = false;
 let strokeEraserPointerId = null;
 let strokeEraserLastPoint = null;
+let strokeEraserHistoryArmed = false;
 let toolbarDragPointerId = null;
 let toolbarDragOffsetX = 0;
 let toolbarDragOffsetY = 0;
@@ -141,8 +152,16 @@ let pdfRenderToken = 0;
 let pdfRenderDebounceTimer = null;
 let pdfLoadingToken = 0;
 let pdfExportInProgress = false;
+let loadedPdfBytes = null;
+let sessionPdfBytesDirty = false;
 let loadedDocumentName = "";
 let isPdfWorkerConfigured = false;
+let sessionAutosaveTimer = null;
+let sessionRestoreInProgress = false;
+const strokeHistoryByContext = new Map();
+let overlayMode = false;
+let overlayTransitionInProgress = false;
+let overlayWindowSnapshot = null;
 
 function getFullscreenElement() {
   return document.fullscreenElement
@@ -236,6 +255,209 @@ function toggleFullscreen() {
   enterFullscreen();
 }
 
+function getTauriWindowApi() {
+  if (!window.__TAURI__ || !window.__TAURI__.window) {
+    return null;
+  }
+
+  return window.__TAURI__.window;
+}
+
+function getTauriAppWindow() {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!tauriWindowApi || !tauriWindowApi.appWindow) {
+    return null;
+  }
+
+  return tauriWindowApi.appWindow;
+}
+
+async function callWindowMethod(targetWindow, methodName, ...args) {
+  if (!targetWindow || typeof targetWindow[methodName] !== "function") {
+    return null;
+  }
+
+  try {
+    return await targetWindow[methodName](...args);
+  } catch (error) {
+    return null;
+  }
+}
+
+async function captureOverlayWindowSnapshot(appWindowRef) {
+  const [position, size, decorated, alwaysOnTop, fullscreen, maximized] = await Promise.all([
+    callWindowMethod(appWindowRef, "outerPosition"),
+    callWindowMethod(appWindowRef, "outerSize"),
+    callWindowMethod(appWindowRef, "isDecorated"),
+    callWindowMethod(appWindowRef, "isAlwaysOnTop"),
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized")
+  ]);
+
+  return {
+    position: position && Number.isFinite(position.x) && Number.isFinite(position.y)
+      ? { x: Math.round(position.x), y: Math.round(position.y) }
+      : null,
+    size: size && Number.isFinite(size.width) && Number.isFinite(size.height)
+      ? { width: Math.max(200, Math.round(size.width)), height: Math.max(120, Math.round(size.height)) }
+      : null,
+    decorated: typeof decorated === "boolean" ? decorated : null,
+    alwaysOnTop: typeof alwaysOnTop === "boolean" ? alwaysOnTop : null,
+    fullscreen: typeof fullscreen === "boolean" ? fullscreen : null,
+    maximized: typeof maximized === "boolean" ? maximized : null
+  };
+}
+
+async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!appWindowRef || !snapshot) {
+    return;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+
+  if (typeof snapshot.decorated === "boolean") {
+    await callWindowMethod(appWindowRef, "setDecorations", snapshot.decorated);
+  } else {
+    await callWindowMethod(appWindowRef, "setDecorations", true);
+  }
+
+  if (typeof snapshot.alwaysOnTop === "boolean") {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", snapshot.alwaysOnTop);
+  } else {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", false);
+  }
+
+  if (snapshot.maximized === true) {
+    await callWindowMethod(appWindowRef, "maximize");
+  } else {
+    await callWindowMethod(appWindowRef, "unmaximize");
+
+    if (snapshot.size && tauriWindowApi && typeof tauriWindowApi.LogicalSize === "function") {
+      const nextSize = new tauriWindowApi.LogicalSize(snapshot.size.width, snapshot.size.height);
+      await callWindowMethod(appWindowRef, "setSize", nextSize);
+    }
+
+    if (snapshot.position && tauriWindowApi && typeof tauriWindowApi.LogicalPosition === "function") {
+      const nextPosition = new tauriWindowApi.LogicalPosition(snapshot.position.x, snapshot.position.y);
+      await callWindowMethod(appWindowRef, "setPosition", nextPosition);
+    }
+  }
+
+  if (snapshot.fullscreen === true) {
+    await callWindowMethod(appWindowRef, "setFullscreen", true);
+  }
+}
+
+function isOverlayModeSupported() {
+  return Boolean(getTauriAppWindow());
+}
+
+function updateOverlayModeButton() {
+  if (!overlayModeToggleButton) {
+    return;
+  }
+
+  const overlaySupported = isOverlayModeSupported();
+  overlayModeToggleButton.hidden = !overlaySupported;
+
+  if (!overlaySupported) {
+    overlayMode = false;
+    app.classList.remove("overlay-mode");
+    document.body.classList.remove("overlay-mode");
+    document.documentElement.classList.remove("overlay-mode");
+    overlayModeToggleButton.classList.remove("is-active");
+    overlayModeToggleButton.setAttribute("aria-pressed", "false");
+    overlayModeToggleButton.disabled = true;
+    return;
+  }
+
+  overlayModeToggleButton.classList.toggle("is-active", overlayMode);
+  overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
+  overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
+  overlayModeToggleButton.title = overlayMode
+    ? "오버레이 모드 종료 (F8)"
+    : "오버레이 모드 (F8)";
+}
+
+function applyOverlayModeUI(active) {
+  overlayMode = Boolean(active);
+  app.classList.toggle("overlay-mode", overlayMode);
+  document.body.classList.toggle("overlay-mode", overlayMode);
+  document.documentElement.classList.toggle("overlay-mode", overlayMode);
+  updateOverlayModeButton();
+  renderBoardBackground();
+}
+
+async function enterOverlayMode() {
+  if (overlayMode || overlayTransitionInProgress) {
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (!appWindowRef) {
+      setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      return;
+    }
+
+    overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
+    await callWindowMethod(appWindowRef, "setDecorations", false);
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
+    await callWindowMethod(appWindowRef, "unmaximize");
+    await callWindowMethod(appWindowRef, "setFullscreen", true);
+    await callWindowMethod(appWindowRef, "setFocus");
+    applyOverlayModeUI(true);
+    setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+  } catch (error) {
+    setDocumentStatus("Failed to enable overlay mode.", "error");
+  } finally {
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+  }
+}
+
+async function exitOverlayMode() {
+  if (!overlayMode || overlayTransitionInProgress) {
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+    }
+
+    applyOverlayModeUI(false);
+    setDocumentStatus("Board mode enabled.", "success");
+  } catch (error) {
+    setDocumentStatus("Failed to restore board mode.", "error");
+  } finally {
+    overlayWindowSnapshot = null;
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+  }
+}
+
+function toggleOverlayMode() {
+  if (!isOverlayModeSupported() || pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (overlayMode) {
+    exitOverlayMode();
+    return;
+  }
+
+  enterOverlayMode();
+}
+
 function isBoardColorPopupOpen() {
   return !boardColorPopup.classList.contains("is-hidden");
 }
@@ -309,9 +531,56 @@ function hasLoadedPdfDocument() {
   return Boolean(pdfDocument && Number.isFinite(pdfDocument.numPages) && pdfDocument.numPages > 0);
 }
 
+function getStrokeHistoryContextKey() {
+  if (hasLoadedPdfDocument()) {
+    return `pdf:${Math.max(1, Math.round(Number(pdfPageNumber) || 1))}`;
+  }
+
+  return "board";
+}
+
+function getOrCreateStrokeHistoryEntry(contextKey = getStrokeHistoryContextKey()) {
+  let entry = strokeHistoryByContext.get(contextKey);
+  if (!entry) {
+    entry = {
+      undo: [],
+      redo: []
+    };
+    strokeHistoryByContext.set(contextKey, entry);
+  }
+
+  return entry;
+}
+
+function pushStrokeSnapshot(stack, snapshot) {
+  stack.push(snapshot);
+  if (stack.length > HISTORY_STACK_LIMIT) {
+    stack.shift();
+  }
+}
+
+function clearAllStrokeHistory() {
+  strokeHistoryByContext.clear();
+  updateUndoRedoUI();
+}
+
+function updateUndoRedoUI() {
+  const entry = strokeHistoryByContext.get(getStrokeHistoryContextKey());
+  const canUndo = Boolean(entry && entry.undo.length > 0);
+  const canRedo = Boolean(entry && entry.redo.length > 0);
+  const controlsLocked = pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress;
+
+  if (undoButton) {
+    undoButton.disabled = controlsLocked || !canUndo;
+  }
+  if (redoButton) {
+    redoButton.disabled = controlsLocked || !canRedo;
+  }
+}
+
 function updatePdfNavigationUI() {
   const hasPdf = hasLoadedPdfDocument();
-  const controlsLocked = pdfExportInProgress;
+  const controlsLocked = pdfExportInProgress || sessionRestoreInProgress;
   const currentPage = hasPdf ? pdfPageNumber : 0;
   const totalPages = hasPdf ? Number(pdfDocument.numPages) : 0;
   const indicatorText = hasPdf
@@ -331,6 +600,9 @@ function updatePdfNavigationUI() {
     toolbarPdfPageIndicator.textContent = indicatorText;
     toolbarPdfPageIndicator.classList.toggle("is-empty", !hasPdf);
   }
+
+  updateUndoRedoUI();
+  updateOverlayModeButton();
 }
 
 function configurePdfWorker() {
@@ -372,6 +644,308 @@ function isPptFile(file) {
     || extension === "pptx"
     || file.type === "application/vnd.ms-powerpoint"
     || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function openSessionDatabase() {
+  if (!window.indexedDB) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    let request;
+    try {
+      request = window.indexedDB.open(SESSION_DB_NAME, 1);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(SESSION_DB_STORE)) {
+        database.createObjectStore(SESSION_DB_STORE);
+      }
+    };
+
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Failed to open session database."));
+    };
+  });
+}
+
+async function saveSessionPdfBytes(pdfBytes) {
+  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
+    return;
+  }
+
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF save aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to save PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.put(pdfBytes, SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function loadSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return null;
+    }
+
+    const value = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readonly");
+      transaction.onabort = () => reject(transaction.error || new Error("PDF read aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to read PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      const request = store.get(SESSION_DB_PDF_KEY);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("Failed to read PDF data."));
+    });
+
+    if (!value) {
+      return null;
+    }
+    if (value instanceof Uint8Array) {
+      return new Uint8Array(value);
+    }
+    if (value instanceof ArrayBuffer) {
+      return new Uint8Array(value);
+    }
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function clearSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF clear aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to clear PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.delete(SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+function serializeSessionSnapshot() {
+  saveCurrentStrokeState();
+
+  const boardStrokes = cloneStrokeCollection(boardStrokeSnapshot);
+  const pdfPages = Array.from(pdfPageStrokeSnapshots.entries())
+    .map(([pageNumber, pageStrokes]) => {
+      return [Math.max(1, Math.round(Number(pageNumber) || 1)), cloneStrokeCollection(pageStrokes)];
+    })
+    .filter(([, pageStrokes]) => pageStrokes.length > 0)
+    .sort((a, b) => a[0] - b[0]);
+
+  return {
+    version: SESSION_STORAGE_VERSION,
+    savedAt: Date.now(),
+    hasPdf: hasLoadedPdfDocument(),
+    loadedDocumentName,
+    pdfPageNumber: Math.max(1, Math.round(Number(pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPages
+  };
+}
+
+function scheduleSessionAutosave() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+
+  sessionAutosaveTimer = window.setTimeout(() => {
+    sessionAutosaveTimer = null;
+    persistSessionState();
+  }, SESSION_AUTOSAVE_DELAY_MS);
+}
+
+function parseSessionSnapshot(rawValue) {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+
+  if (Number(rawValue.version) !== SESSION_STORAGE_VERSION) {
+    return null;
+  }
+
+  const boardStrokes = normalizeStrokeCollection(rawValue.boardStrokes);
+  const pdfPageMap = new Map();
+
+  if (Array.isArray(rawValue.pdfPages)) {
+    for (const entry of rawValue.pdfPages) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        continue;
+      }
+
+      const pageNumber = Math.max(1, Math.round(Number(entry[0]) || 1));
+      const pageStrokes = normalizeStrokeCollection(entry[1]);
+      if (pageStrokes.length <= 0) {
+        continue;
+      }
+
+      pdfPageMap.set(pageNumber, pageStrokes);
+    }
+  }
+
+  return {
+    hasPdf: Boolean(rawValue.hasPdf),
+    loadedDocumentName: typeof rawValue.loadedDocumentName === "string"
+      ? rawValue.loadedDocumentName
+      : "",
+    pdfPageNumber: Math.max(1, Math.round(Number(rawValue.pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPageMap
+  };
+}
+
+async function persistSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  try {
+    const snapshot = serializeSessionSnapshot();
+    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+
+    if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
+      if (sessionPdfBytesDirty) {
+        await saveSessionPdfBytes(loadedPdfBytes);
+        sessionPdfBytesDirty = false;
+      }
+    } else {
+      await clearSessionPdfBytes();
+      sessionPdfBytesDirty = false;
+    }
+  } catch (error) {
+    // localStorage/IndexedDB can be unavailable; skip recovery persistence.
+  }
+}
+
+async function restoreSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  sessionRestoreInProgress = true;
+  updateUndoRedoUI();
+
+  try {
+    const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const snapshot = parseSessionSnapshot(rawSnapshot ? JSON.parse(rawSnapshot) : null);
+    if (!snapshot) {
+      return;
+    }
+
+    boardStrokeSnapshot = cloneStrokeCollection(snapshot.boardStrokes);
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+    restoreCurrentStrokeState();
+
+    if (!snapshot.hasPdf) {
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredPdfBytes = await loadSessionPdfBytes();
+    if (!(recoveredPdfBytes instanceof Uint8Array) || recoveredPdfBytes.length <= 0) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredFileName = snapshot.loadedDocumentName || "recovered.pdf";
+    const recoveredFile = new File([recoveredPdfBytes], recoveredFileName, { type: "application/pdf" });
+    await loadPdfFromFile(recoveredFile);
+    if (!hasLoadedPdfDocument()) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      return;
+    }
+
+    // Reload saved page-level annotations after document load resets snapshots.
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+
+    const targetPage = Math.min(
+      Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
+      snapshot.pdfPageNumber
+    );
+    await renderPdfPage(targetPage);
+    setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
+    clearAllStrokeHistory();
+    updateUndoRedoUI();
+  } catch (error) {
+    // Ignore recovery failures and continue with a clean runtime state.
+  } finally {
+    sessionRestoreInProgress = false;
+    updatePdfNavigationUI();
+  }
 }
 
 function getAnnotatedPdfFileName() {
@@ -1251,6 +1825,122 @@ function cloneStrokeCollection(collection) {
     .map(cloneStroke);
 }
 
+function normalizeStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length <= 0) {
+    return [];
+  }
+
+  const normalized = [];
+  for (const sourceStroke of collection) {
+    if (!sourceStroke || !Array.isArray(sourceStroke.points)) {
+      continue;
+    }
+
+    const points = [];
+    for (const sourcePoint of sourceStroke.points) {
+      const x = Number(sourcePoint && sourcePoint.x);
+      const y = Number(sourcePoint && sourcePoint.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+
+      points.push({ x, y });
+    }
+
+    if (points.length <= 0) {
+      continue;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+
+    normalized.push({
+      kind: sourceStroke.kind === "pixel-eraser" ? "pixel-eraser" : "pen",
+      color: normalizeHexColor(sourceStroke.color) || "#111111",
+      widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
+      points,
+      minX,
+      minY,
+      maxX,
+      maxY
+    });
+  }
+
+  return normalized;
+}
+
+function saveUndoSnapshotForCurrentContext() {
+  const entry = getOrCreateStrokeHistoryEntry();
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  entry.redo.length = 0;
+  updateUndoRedoUI();
+}
+
+function captureUndoForStrokeMutation() {
+  if (strokeEraserActive) {
+    if (!strokeEraserHistoryArmed) {
+      return;
+    }
+    strokeEraserHistoryArmed = false;
+  }
+
+  saveUndoSnapshotForCurrentContext();
+}
+
+function finalizeStrokeMutation() {
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+}
+
+function undoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.undo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.redo, cloneStrokeCollection(strokes));
+  const previousSnapshot = entry.undo.pop();
+  replaceVisibleStrokes(previousSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function redoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.redo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  const nextSnapshot = entry.redo.pop();
+  replaceVisibleStrokes(nextSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
 function replaceVisibleStrokes(collection) {
   strokes.length = 0;
   const nextStrokes = cloneStrokeCollection(collection);
@@ -1494,8 +2184,10 @@ function eraseTopStrokeAtPoint(point) {
     return false;
   }
 
+  captureUndoForStrokeMutation();
   strokes.splice(index, 1);
   redrawAllStrokes();
+  finalizeStrokeMutation();
   return true;
 }
 
@@ -1521,21 +2213,25 @@ function eraseStrokesAlongSegment(startPoint, endPoint) {
     return false;
   }
 
+  captureUndoForStrokeMutation();
   const sortedIndexes = Array.from(removedIndexes).sort((a, b) => b - a);
   for (const index of sortedIndexes) {
     strokes.splice(index, 1);
   }
 
   redrawAllStrokes();
+  finalizeStrokeMutation();
   return true;
 }
 
 function startStrokeErasing(event) {
   strokeEraserActive = true;
+  strokeEraserHistoryArmed = true;
   strokeEraserPointerId = event.pointerId;
   strokeEraserLastPoint = getCanvasPoint(event);
   eraseTopStrokeAtPoint(strokeEraserLastPoint);
   canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
 }
 
 function continueStrokeErasing(event) {
@@ -1554,12 +2250,15 @@ function stopStrokeErasing(event) {
   }
 
   strokeEraserActive = false;
+  strokeEraserHistoryArmed = false;
   strokeEraserPointerId = null;
   strokeEraserLastPoint = null;
 
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
+
+  updateUndoRedoUI();
 }
 
 function updateToolUI() {
@@ -1582,6 +2281,10 @@ function renderBoardBackground() {
 
   backgroundCtx.setTransform(1, 0, 0, 1, 0, 0);
   backgroundCtx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  if (overlayMode) {
+    return;
+  }
+
   backgroundCtx.fillStyle = normalizeHexColor(boardColorInput.value) || "#ffffff";
   backgroundCtx.fillRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
 
@@ -1641,11 +2344,15 @@ async function unloadPdfDocument(updateStatus = true) {
   pdfPageNumber = 1;
   pdfPageRasterCanvas = null;
   loadedDocumentName = "";
+  loadedPdfBytes = null;
+  sessionPdfBytesDirty = false;
   pdfPageStrokeSnapshots.clear();
 
   restoreCurrentStrokeState();
+  clearAllStrokeHistory();
   renderBoardBackground();
   updatePdfNavigationUI();
+  scheduleSessionAutosave();
 
   if (updateStatus) {
     setDocumentStatus("No document");
@@ -1669,6 +2376,7 @@ async function renderPdfPage(pageNumber) {
     Number(pdfDocument.numPages),
     Math.max(1, Math.round(Number(pageNumber) || 1))
   );
+  const pageChanged = clampedPage !== pdfPageNumber;
   if (clampedPage !== pdfPageNumber) {
     savePdfPageStrokeSnapshot(pdfPageNumber);
     pdfPageNumber = clampedPage;
@@ -1677,6 +2385,9 @@ async function renderPdfPage(pageNumber) {
     pdfPageNumber = clampedPage;
   }
   updatePdfNavigationUI();
+  if (pageChanged) {
+    scheduleSessionAutosave();
+  }
 
   const token = ++pdfRenderToken;
   const statusName = loadedDocumentName || "PDF";
@@ -1877,6 +2588,8 @@ async function loadPdfFromFile(file) {
     pdfPageNumber = 1;
     pdfPageRasterCanvas = null;
     loadedDocumentName = fileName;
+    loadedPdfBytes = new Uint8Array(source);
+    sessionPdfBytesDirty = true;
     restoreCurrentStrokeState();
 
     await renderPdfPage(1);
@@ -1884,6 +2597,8 @@ async function loadPdfFromFile(file) {
       closeDocumentPopup();
     }
     await releasePdfDocument(previousDocument);
+    clearAllStrokeHistory();
+    scheduleSessionAutosave();
   } catch (error) {
     if (token !== pdfLoadingToken) {
       return;
@@ -1922,7 +2637,7 @@ async function handleDocumentInputChange(event) {
 }
 
 function goToPreviousPdfPage() {
-  if (pdfExportInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
     return;
   }
 
@@ -1930,7 +2645,7 @@ function goToPreviousPdfPage() {
 }
 
 function goToNextPdfPage() {
-  if (pdfExportInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
     return;
   }
 
@@ -1938,7 +2653,7 @@ function goToNextPdfPage() {
 }
 
 function requestDocumentFileSelection() {
-  if (pdfExportInProgress) {
+  if (pdfExportInProgress || sessionRestoreInProgress) {
     return;
   }
 
@@ -1991,6 +2706,7 @@ function setCanvasSize() {
   if (previousWidth > 0 && previousHeight > 0) {
     scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
     redrawAllStrokes();
+    scheduleSessionAutosave();
   }
 
   renderBoardBackground();
@@ -2206,6 +2922,7 @@ function startDrawing(event) {
 
   applyCurrentBrush();
   canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
 }
 
 function draw(event) {
@@ -2235,7 +2952,9 @@ function stopDrawing(event) {
   }
 
   if (activeStroke && activeStroke.points.length > 0) {
+    saveUndoSnapshotForCurrentContext();
     strokes.push(activeStroke);
+    finalizeStrokeMutation();
   }
 
   drawing = false;
@@ -2255,6 +2974,8 @@ function stopDrawing(event) {
     setCanvasSize();
     pendingQualityResize = false;
   }
+
+  updateUndoRedoUI();
 }
 
 function handlePointerDown(event) {
@@ -2288,9 +3009,14 @@ function handlePointerEnd(event) {
 }
 
 function clearBoard() {
+  if (strokes.length <= 0) {
+    return;
+  }
+
+  saveUndoSnapshotForCurrentContext();
   strokes.length = 0;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  saveCurrentStrokeState();
+  finalizeStrokeMutation();
 }
 
 function setBoardColor(color) {
@@ -2330,8 +3056,25 @@ strokeEraserModeButton.addEventListener("click", () => {
   updateToolUI();
 });
 
+if (undoButton) {
+  undoButton.addEventListener("click", () => {
+    undoStrokeAction();
+  });
+}
+
+if (redoButton) {
+  redoButton.addEventListener("click", () => {
+    redoStrokeAction();
+  });
+}
+
 clearButton.addEventListener("click", clearBoard);
 fullscreenToggleButton.addEventListener("click", toggleFullscreen);
+if (overlayModeToggleButton) {
+  overlayModeToggleButton.addEventListener("click", () => {
+    toggleOverlayMode();
+  });
+}
 openDocumentPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   const open = !isDocumentPopupOpen();
@@ -2491,7 +3234,35 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (!isEditableEventTarget(event.target) && hasLoadedPdfDocument()) {
+  const editableTarget = isEditableEventTarget(event.target);
+  const hasMeta = event.ctrlKey || event.metaKey;
+
+  if (!editableTarget && hasMeta && !event.altKey && !event.repeat) {
+    const key = String(event.key || "").toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redoStrokeAction();
+      } else {
+        undoStrokeAction();
+      }
+      return;
+    }
+
+    if (key === "y") {
+      event.preventDefault();
+      redoStrokeAction();
+      return;
+    }
+  }
+
+  if (!editableTarget && event.key === "F8" && isOverlayModeSupported()) {
+    event.preventDefault();
+    toggleOverlayMode();
+    return;
+  }
+
+  if (!editableTarget && hasLoadedPdfDocument()) {
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       goToPreviousPdfPage();
@@ -2533,4 +3304,27 @@ setDocumentStatus("No document");
 updatePdfNavigationUI();
 updateFullscreenButtons();
 updateToolUI();
+updateUndoRedoUI();
+updateOverlayModeButton();
+restoreSessionState();
+
+window.addEventListener("beforeunload", () => {
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
 

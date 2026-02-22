@@ -121,8 +121,11 @@ body {
 
 .app.toolbar-placement-floating .toolbar > #toolbarDragHandle,
 .app.toolbar-placement-floating .toolbar > .tool-cluster,
+.app.toolbar-placement-floating .toolbar > #undoButton,
+.app.toolbar-placement-floating .toolbar > #redoButton,
 .app.toolbar-placement-floating .toolbar > #clearButton,
 .app.toolbar-placement-floating .toolbar > #fullscreenToggle,
+.app.toolbar-placement-floating .toolbar > #overlayModeToggle,
 .app.toolbar-placement-floating .toolbar > .preset-group,
 .app.toolbar-placement-floating .toolbar > .toolbar-pdf-page-indicator {
   display: inline-flex;
@@ -366,8 +369,11 @@ body {
 
 #penTool,
 #eraserTool,
+#undoButton,
+#redoButton,
 #clearButton,
 #fullscreenToggle,
+#overlayModeToggle,
 #openDocumentPopup,
 #toolbarDragHandle {
   width: var(--toolbar-control-size);
@@ -379,8 +385,11 @@ body {
 
 #penTool svg,
 #eraserTool svg,
+#undoButton svg,
+#redoButton svg,
 #clearButton svg,
 #fullscreenToggle svg,
+#overlayModeToggle svg,
 #openDocumentPopup svg {
   width: var(--toolbar-action-icon-size);
   height: var(--toolbar-action-icon-size);
@@ -388,8 +397,11 @@ body {
 
 #penTool svg path,
 #eraserTool svg path,
+#undoButton svg path,
+#redoButton svg path,
 #clearButton svg path,
 #fullscreenToggle svg path,
+#overlayModeToggle svg path,
 #openDocumentPopup svg path {
   stroke-width: 2;
 }
@@ -894,6 +906,12 @@ body {
   background: transparent;
   touch-action: none;
   cursor: crosshair;
+}
+
+html.overlay-mode,
+body.overlay-mode,
+.app.overlay-mode {
+  background: transparent;
 }
 
 @media (max-width: 800px) {

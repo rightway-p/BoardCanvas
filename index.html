@@ -1,15 +1,18 @@
 ﻿<!doctype html>
 <html lang="ko">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Web Board</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
   <div class="app toolbar-placement-top">
     <header class="toolbar" aria-label="칠판 도구 모음">
-      <button id="toolbarDragHandle" class="toolbar-drag-handle" type="button" aria-label="툴바 도킹 위치 이동" title="드래그해서 상하좌우 도킹 위치 변경">
+      <button id="toolbarDragHandle" class="toolbar-drag-handle" type="button" aria-label="툴바 도킹 위치 이동"
+        title="드래그해서 상하좌우 도킹 위치 변경">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M6 7h12"></path>
           <path d="M6 12h12"></path>
@@ -25,9 +28,11 @@
           </svg>
         </button>
         <div id="eraserToolEditor" class="eraser-tool-editor">
-          <button id="eraserTool" class="tool-button icon-tool-button" type="button" aria-label="지우개 모드" aria-expanded="false" aria-controls="eraserToolPopup" title="클릭: 지우개 선택 / 선택 상태에서 다시 클릭: 설정">
+          <button id="eraserTool" class="tool-button icon-tool-button" type="button" aria-label="지우개 모드"
+            aria-expanded="false" aria-controls="eraserToolPopup" title="클릭: 지우개 선택 / 선택 상태에서 다시 클릭: 설정">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 15.5L14.8 7.7a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0L7 15.5z"></path>
+              <path d="M7 15.5L14.8 7.7a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0L7 15.5z">
+              </path>
               <path d="M4 20h11"></path>
             </svg>
           </button>
@@ -36,14 +41,14 @@
               <button id="pixelEraserMode" class="eraser-mode-button" type="button">일반 지우개</button>
               <button id="strokeEraserMode" class="eraser-mode-button" type="button">획지우개</button>
             </div>
-          <label class="control eraser-width-control" for="eraserWidth">
-            <span>지우개 굵기</span>
-            <div class="width-stepper">
-              <button id="eraserWidthDec" class="stepper-button" type="button" aria-label="지우개 굵기 감소">-</button>
-              <input id="eraserWidth" type="number" min="1" max="80" step="1" value="14" inputmode="numeric" />
-              <button id="eraserWidthInc" class="stepper-button" type="button" aria-label="지우개 굵기 증가">+</button>
-            </div>
-          </label>
+            <label class="control eraser-width-control" for="eraserWidth">
+              <span>지우개 굵기</span>
+              <div class="width-stepper">
+                <button id="eraserWidthDec" class="stepper-button" type="button" aria-label="지우개 굵기 감소">-</button>
+                <input id="eraserWidth" type="number" min="1" max="80" step="1" value="14" inputmode="numeric" />
+                <button id="eraserWidthInc" class="stepper-button" type="button" aria-label="지우개 굵기 증가">+</button>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -56,6 +61,7 @@
           <path d="M14 11v5"></path>
         </svg>
       </button>
+
       <button id="fullscreenToggle" class="tool-button icon-tool-button" type="button" aria-label="전체화면" title="전체화면">
         <svg class="fullscreen-enter-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M9 3H3v6"></path>
@@ -70,8 +76,17 @@
           <path d="M3 15h6v6"></path>
         </svg>
       </button>
+      <button id="overlayModeToggle" class="tool-button icon-tool-button" type="button" aria-label="오버레이 모드" aria-pressed="false" title="오버레이 모드 (F8)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 6h16v12H4z"></path>
+          <path d="M7 9h10"></path>
+          <path d="M7 12h10"></path>
+          <path d="M7 15h7"></path>
+        </svg>
+      </button>
       <div id="documentEditor" class="document-editor">
-        <button id="openDocumentPopup" class="tool-button icon-tool-button" type="button" aria-label="문서 불러오기" aria-expanded="false" aria-controls="documentPopup" title="PDF/PPT 불러오기">
+        <button id="openDocumentPopup" class="tool-button icon-tool-button" type="button" aria-label="문서 불러오기"
+          aria-expanded="false" aria-controls="documentPopup" title="PDF/PPT 불러오기">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 3h8l4 4v14H6z"></path>
             <path d="M14 3v5h5"></path>
@@ -81,22 +96,34 @@
         </button>
         <div id="documentPopup" class="document-popover is-hidden" role="dialog" aria-label="문서 배경 설정">
           <button id="documentLoadButton" class="document-action-button" type="button">PDF/PPT 불러오기</button>
-          <input
-            id="documentInput"
-            type="file"
+          <input id="documentInput" type="file"
             accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            hidden
-          />
+            hidden />
           <div class="document-page-control" role="group" aria-label="문서 페이지 이동">
             <button id="pdfPrevPage" class="stepper-button" type="button" aria-label="이전 페이지">◀</button>
             <span id="pdfPageIndicator" class="pdf-page-indicator">- / -</span>
             <button id="pdfNextPage" class="stepper-button" type="button" aria-label="다음 페이지">▶</button>
           </div>
           <button id="exportAnnotatedPdfButton" class="document-action-button" type="button">판서 포함 PDF 저장</button>
-          <button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서 제거</button>
+          <button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서
+            제거</button>
           <p id="documentStatus" class="document-status">문서 없음</p>
         </div>
       </div>
+      <button id="undoButton" class="tool-button icon-tool-button" type="button" aria-label="실행 취소"
+        title="실행 취소 (Ctrl/Cmd+Z)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 7L4 12l5 5"></path>
+          <path d="M4 12h8a6 6 0 1 1 0 12"></path>
+        </svg>
+      </button>
+      <button id="redoButton" class="tool-button icon-tool-button" type="button" aria-label="다시 실행"
+        title="다시 실행 (Ctrl/Cmd+Y 또는 Shift+Ctrl/Cmd+Z)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M15 7l5 5-5 5"></path>
+          <path d="M20 12h-8a6 6 0 1 0 0 12"></path>
+        </svg>
+      </button>
       <label class="control" for="penColor">
         <span>펜 색</span>
         <input id="penColor" type="color" value="#111111" />
@@ -104,7 +131,8 @@
 
       <div id="boardColorEditor" class="control board-color-editor">
         <span>배경색</span>
-        <button id="openBoardColorPopup" class="board-color-trigger" type="button" aria-label="배경색 설정" aria-expanded="false" aria-controls="boardColorPopup">
+        <button id="openBoardColorPopup" class="board-color-trigger" type="button" aria-label="배경색 설정"
+          aria-expanded="false" aria-controls="boardColorPopup">
           <span id="boardColorPreview" class="board-color-preview" aria-hidden="true"></span>
         </button>
         <div id="boardColorPopup" class="board-color-popover is-hidden" role="dialog" aria-label="배경색 설정">
@@ -126,8 +154,10 @@
       </div>
 
       <div id="presetHelp" class="preset-help-wrap">
-        <button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button>
-        <div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭) 저장</div>
+        <button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말"
+          aria-expanded="false" aria-controls="presetHelpPopup">?</button>
+        <div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭)
+          저장</div>
       </div>
 
       <label class="control" for="lineWidth">
@@ -153,4 +183,5 @@
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script src="app.js"></script>
 </body>
+
 </html>
