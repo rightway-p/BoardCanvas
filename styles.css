@@ -1,0 +1,774 @@
+﻿:root {
+  --panel: #f5f5f5;
+  --line: #d0d0d0;
+  --text: #1e1e1e;
+  --accent: #2f6ee4;
+  --toolbar-control-size: 36px;
+  --toolbar-padding-y: 10px;
+  --toolbar-border-size: 1px;
+  --toolbar-action-icon-size: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font-family: "Segoe UI", "Noto Sans KR", sans-serif;
+  color: var(--text);
+  background: #ececec;
+}
+
+.app {
+  position: relative;
+  height: 100%;
+  --toolbar-float-x: 120px;
+  --toolbar-float-y: 120px;
+  --toolbar-side-width: calc(var(--toolbar-control-size) + (var(--toolbar-padding-y) * 2) + (var(--toolbar-border-size) * 2));
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 10px;
+  padding: var(--toolbar-padding-y) 12px;
+  border: var(--toolbar-border-size) solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  position: fixed;
+  z-index: 30;
+  max-width: calc(100vw - 24px);
+}
+
+.app.toolbar-placement-top .toolbar {
+  top: 12px;
+  left: 12px;
+  right: 12px;
+}
+
+.app.toolbar-placement-bottom .toolbar {
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+}
+
+.app.toolbar-placement-floating .toolbar {
+  top: var(--toolbar-float-y);
+  left: var(--toolbar-float-x);
+  right: auto;
+  bottom: auto;
+  width: var(--toolbar-side-width);
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app.toolbar-placement-left .toolbar {
+  top: 12px;
+  bottom: 12px;
+  left: 12px;
+  right: auto;
+  width: var(--toolbar-side-width);
+  max-height: calc(100vh - 24px);
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app.toolbar-placement-right .toolbar {
+  top: 12px;
+  bottom: 12px;
+  left: auto;
+  right: 12px;
+  width: var(--toolbar-side-width);
+  max-height: calc(100vh - 24px);
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.app.toolbar-placement-left .toolbar > *,
+.app.toolbar-placement-right .toolbar > * {
+  width: auto;
+  max-width: 100%;
+}
+
+.app.toolbar-placement-floating .toolbar > * {
+  display: none;
+}
+
+.app.toolbar-placement-floating .toolbar > #toolbarDragHandle,
+.app.toolbar-placement-floating .toolbar > .tool-cluster,
+.app.toolbar-placement-floating .toolbar > #clearButton,
+.app.toolbar-placement-floating .toolbar > #fullscreenToggle,
+.app.toolbar-placement-floating .toolbar > .preset-group {
+  display: inline-flex;
+}
+
+.app.toolbar-placement-floating .toolbar > .preset-group {
+  align-items: center;
+}
+
+.app.toolbar-placement-floating .toolbar > .preset-group > .preset-title {
+  display: none;
+}
+
+.app.toolbar-placement-floating .toolbar > .preset-group > .preset-list {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.app.toolbar-placement-floating .toolbar > .tool-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.app.toolbar-placement-left .tool-cluster,
+.app.toolbar-placement-right .tool-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.app.toolbar-placement-left .eraser-tool-editor,
+.app.toolbar-placement-right .eraser-tool-editor {
+  width: auto;
+}
+
+.app.toolbar-placement-left .control,
+.app.toolbar-placement-right .control {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.app.toolbar-placement-left .board-color-trigger,
+.app.toolbar-placement-right .board-color-trigger {
+  width: auto;
+}
+
+.app.toolbar-placement-left .board-color-preview,
+.app.toolbar-placement-right .board-color-preview {
+  width: 34px;
+}
+
+.app.toolbar-placement-left .width-stepper,
+.app.toolbar-placement-right .width-stepper {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.app.toolbar-placement-left .stepper-button,
+.app.toolbar-placement-right .stepper-button {
+  width: 24px;
+}
+
+.app.toolbar-placement-left #lineWidth,
+.app.toolbar-placement-right #lineWidth,
+.app.toolbar-placement-left #eraserWidth,
+.app.toolbar-placement-right #eraserWidth {
+  width: 40px;
+}
+
+.app.toolbar-placement-left .preset-group,
+.app.toolbar-placement-right .preset-group {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.app.toolbar-placement-left .preset-list,
+.app.toolbar-placement-right .preset-list {
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.app.toolbar-placement-left .color-preset,
+.app.toolbar-placement-right .color-preset {
+  width: 20px;
+  height: 20px;
+}
+
+.app.toolbar-placement-left .toolbar > .control > span,
+.app.toolbar-placement-right .toolbar > .control > span,
+.app.toolbar-placement-left .toolbar > .preset-group > .preset-title,
+.app.toolbar-placement-right .toolbar > .preset-group > .preset-title,
+.app.toolbar-placement-left .mode-label,
+.app.toolbar-placement-right .mode-label {
+  display: none;
+}
+
+.app.toolbar-placement-left label.control[for="penColor"] > span,
+.app.toolbar-placement-right label.control[for="penColor"] > span,
+.app.toolbar-placement-left #boardColorEditor > span,
+.app.toolbar-placement-right #boardColorEditor > span {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  color: #5a5a5a;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.app.toolbar-is-dragging::after {
+  content: "";
+  position: fixed;
+  z-index: 25;
+  pointer-events: none;
+  border: 2px dashed rgba(47, 110, 228, 0.65);
+  border-radius: 12px;
+  background: rgba(47, 110, 228, 0.08);
+}
+
+.app.toolbar-is-dragging.toolbar-dock-preview-top::after {
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  height: 64px;
+}
+
+.app.toolbar-is-dragging.toolbar-dock-preview-bottom::after {
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  height: 64px;
+}
+
+.app.toolbar-is-dragging.toolbar-dock-preview-left::after {
+  top: 12px;
+  bottom: 12px;
+  left: 12px;
+  width: var(--toolbar-side-width);
+  height: auto;
+}
+
+.app.toolbar-is-dragging.toolbar-dock-preview-right::after {
+  top: 12px;
+  bottom: 12px;
+  right: 12px;
+  width: var(--toolbar-side-width);
+  height: auto;
+}
+
+.toolbar-drag-handle {
+  display: inline-flex;
+  width: var(--toolbar-control-size);
+  height: var(--toolbar-control-size);
+  min-width: var(--toolbar-control-size);
+  min-height: var(--toolbar-control-size);
+  border: 1px dashed #a5a5a5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #4a4a4a;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  flex: 0 0 auto;
+}
+
+.toolbar-drag-handle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.toolbar-drag-handle svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.toolbar-drag-handle:active {
+  cursor: grabbing;
+}
+
+.tool-button {
+  border: 1px solid #bbbbbb;
+  background: #ffffff;
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tool-button:hover {
+  border-color: #9f9f9f;
+}
+
+.tool-button.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.tool-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-tool-button {
+  width: var(--toolbar-control-size);
+  height: var(--toolbar-control-size);
+  min-width: var(--toolbar-control-size);
+  min-height: var(--toolbar-control-size);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.icon-tool-button svg {
+  width: var(--toolbar-action-icon-size);
+  height: var(--toolbar-action-icon-size);
+}
+
+.icon-tool-button svg path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#penTool,
+#eraserTool,
+#clearButton,
+#fullscreenToggle,
+#toolbarDragHandle {
+  width: var(--toolbar-control-size);
+  height: var(--toolbar-control-size);
+  min-width: var(--toolbar-control-size);
+  min-height: var(--toolbar-control-size);
+  padding: 0;
+}
+
+#penTool svg,
+#eraserTool svg,
+#clearButton svg,
+#fullscreenToggle svg {
+  width: var(--toolbar-action-icon-size);
+  height: var(--toolbar-action-icon-size);
+}
+
+#penTool svg path,
+#eraserTool svg path,
+#clearButton svg path,
+#fullscreenToggle svg path {
+  stroke-width: 2;
+}
+
+#fullscreenToggle .fullscreen-exit-icon {
+  display: none;
+}
+
+#fullscreenToggle.is-fullscreen .fullscreen-enter-icon {
+  display: none;
+}
+
+#fullscreenToggle.is-fullscreen .fullscreen-exit-icon {
+  display: block;
+}
+
+#fullscreenToggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+/* Keep pen color input and board color trigger visually identical. */
+.control input[type="color"] {
+  width: 40px;
+  height: 24px;
+  border: 1px solid #9c9c9c;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 2px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.control input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.control input[type="color"]::-webkit-color-swatch {
+  border: 1px solid #d3d3d3;
+  border-radius: 4px;
+}
+
+.control input[type="color"]::-moz-color-swatch {
+  border: 1px solid #d3d3d3;
+  border-radius: 4px;
+}
+
+.control input[type="color"]:hover {
+  border-color: #787878;
+}
+
+.control input[type="color"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.width-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stepper-button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #9c9c9c;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f1f1f;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 15px;
+}
+
+.stepper-button:hover {
+  border-color: #787878;
+}
+
+#lineWidth,
+#eraserWidth {
+  width: 56px;
+  height: 24px;
+  border: 1px solid #9c9c9c;
+  border-radius: 6px;
+  text-align: center;
+  padding: 0 4px;
+  appearance: textfield;
+}
+
+#lineWidth::-webkit-outer-spin-button,
+#lineWidth::-webkit-inner-spin-button,
+#eraserWidth::-webkit-outer-spin-button,
+#eraserWidth::-webkit-inner-spin-button {
+  margin: 0;
+}
+
+.eraser-tool-editor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.eraser-tool-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  border: var(--toolbar-border-size) solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app.toolbar-placement-right .eraser-tool-popover,
+.app.toolbar-placement-right .board-color-popover,
+.app.toolbar-placement-right .preset-help-popover {
+  left: auto;
+  right: 0;
+}
+
+.eraser-tool-popover.is-hidden {
+  display: none;
+}
+
+.eraser-mode-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.eraser-mode-button {
+  border: 1px solid #b7b7b7;
+  background: #ffffff;
+  color: #2d2d2d;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.eraser-mode-button:hover {
+  border-color: #8e8e8e;
+}
+
+.eraser-mode-button.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.eraser-width-control {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.preset-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-title {
+  font-size: 13px;
+  color: #4a4a4a;
+  white-space: nowrap;
+}
+
+.preset-list {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.color-preset {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #888888;
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+  background: #ffffff;
+}
+
+.color-preset:hover {
+  border-color: #656565;
+}
+
+.color-preset.is-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.color-preset:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pen-preset {
+  position: relative;
+}
+
+.pen-preset::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: var(--pen-line-size, 4px);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--pen-line-color, #ffffff);
+}
+
+.preset-help-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.help-icon-button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #9c9c9c;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #3d3d3d;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.help-icon-button:hover {
+  border-color: #787878;
+}
+
+.help-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.preset-help-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 260px;
+  max-width: 320px;
+  border: var(--toolbar-border-size) solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  font-size: 12px;
+  color: #4a4a4a;
+  line-height: 1.4;
+  z-index: 20;
+}
+
+.preset-help-popover.is-hidden {
+  display: none;
+}
+
+.board-color-editor {
+  position: relative;
+}
+
+.board-color-trigger {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.board-color-preview {
+  display: block;
+  width: 40px;
+  height: 24px;
+  border: 1px solid #9c9c9c;
+  border-radius: 6px;
+  background: #ffffff;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.board-color-preview::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border: 1px solid #d3d3d3;
+  border-radius: 4px;
+  background: var(--board-color-preview, #ffffff);
+  box-sizing: border-box;
+}
+
+.board-color-trigger:hover .board-color-preview {
+  border-color: #787878;
+}
+
+.board-color-trigger:focus-visible .board-color-preview {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.board-color-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  border: var(--toolbar-border-size) solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.board-color-popover.is-hidden {
+  display: none;
+}
+
+.board-color-control {
+  justify-content: space-between;
+}
+
+.board-preset-group {
+  align-items: flex-start;
+}
+
+.mode-label {
+  margin-left: auto;
+  font-size: 14px;
+  color: #444444;
+}
+
+.app.toolbar-placement-left .mode-label,
+.app.toolbar-placement-right .mode-label {
+  margin-left: 0;
+}
+
+.board-wrapper {
+  padding: 0;
+  margin: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+#board {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+@media (max-width: 800px) {
+  .preset-help-wrap {
+    width: 100%;
+  }
+
+  .mode-label {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+
