@@ -1,0 +1,16 @@
+{
+  "name": "boardcanvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BoardCanvas desktop wrapper using Tauri",
+  "scripts": {
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.6.0"
+  }
+}
+
