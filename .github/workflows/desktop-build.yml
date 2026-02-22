@@ -44,12 +44,32 @@ jobs:
       - name: Build desktop binary
         run: npm run desktop:build
 
+      - name: Locate build outputs
+        shell: pwsh
+        run: |
+          $candidates = Get-ChildItem -Path . -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -in @("BoardCanvas.exe", "boardcanvas.exe", "BoardCanvas", "boardcanvas")
+          }
+          if (-not $candidates) {
+            Write-Output "No known binary names found."
+          } else {
+            $candidates | ForEach-Object { Write-Output $_.FullName }
+          }
+
       - name: Upload Windows artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: boardcanvas-windows
-          path: src-tauri/target/release/boardcanvas.exe
+          path: |
+            src-tauri/target/release/BoardCanvas.exe
+            src-tauri/target/release/boardcanvas.exe
+            src-tauri/target/*/release/BoardCanvas.exe
+            src-tauri/target/*/release/boardcanvas.exe
+            target/release/BoardCanvas.exe
+            target/release/boardcanvas.exe
+            target/*/release/BoardCanvas.exe
+            target/*/release/boardcanvas.exe
           if-no-files-found: error
 
       - name: Upload Linux artifact
@@ -57,5 +77,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: boardcanvas-linux
-          path: src-tauri/target/release/
+          path: |
+            src-tauri/target/release/BoardCanvas
+            src-tauri/target/release/boardcanvas
+            src-tauri/target/*/release/BoardCanvas
+            src-tauri/target/*/release/boardcanvas
+            target/release/BoardCanvas
+            target/release/boardcanvas
+            target/*/release/BoardCanvas
+            target/*/release/boardcanvas
           if-no-files-found: error
