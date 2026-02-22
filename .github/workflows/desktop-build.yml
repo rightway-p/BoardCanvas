@@ -57,6 +57,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: boardcanvas-linux
-          path: src-tauri/target/release/boardcanvas
+          path: src-tauri/target/release/
           if-no-files-found: error
-
