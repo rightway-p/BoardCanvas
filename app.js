@@ -25,6 +25,8 @@ const documentInput = document.getElementById("documentInput");
 const pdfPrevPageButton = document.getElementById("pdfPrevPage");
 const pdfNextPageButton = document.getElementById("pdfNextPage");
 const pdfPageIndicator = document.getElementById("pdfPageIndicator");
+const exportAnnotatedPdfButton = document.getElementById("exportAnnotatedPdfButton");
+const toolbarPdfPageIndicator = document.getElementById("toolbarPdfPageIndicator");
 const removeDocumentButton = document.getElementById("removeDocumentButton");
 const documentStatus = document.getElementById("documentStatus");
 const eraserToolEditor = document.getElementById("eraserToolEditor");
@@ -89,7 +91,7 @@ const QUALITY_PRESETS = {
   }
 };
 const MAX_QUEUE_POINTS = 320;
-const TOOLBAR_DOCK_THRESHOLD = 88;
+const TOOLBAR_DOCK_THRESHOLD = 48;
 
 let qualityLevel = detectLowSpecDevice() ? "low" : "normal";
 let quality = QUALITY_PRESETS[qualityLevel];
@@ -111,6 +113,8 @@ const pendingPoints = [];
 let pendingHead = 0;
 let frameRequested = false;
 const strokes = [];
+let boardStrokeSnapshot = [];
+const pdfPageStrokeSnapshots = new Map();
 let activeStroke = null;
 let strokeEraserActive = false;
 let strokeEraserPointerId = null;
@@ -136,6 +140,7 @@ let pdfRenderTask = null;
 let pdfRenderToken = 0;
 let pdfRenderDebounceTimer = null;
 let pdfLoadingToken = 0;
+let pdfExportInProgress = false;
 let loadedDocumentName = "";
 let isPdfWorkerConfigured = false;
 
@@ -306,15 +311,26 @@ function hasLoadedPdfDocument() {
 
 function updatePdfNavigationUI() {
   const hasPdf = hasLoadedPdfDocument();
+  const controlsLocked = pdfExportInProgress;
   const currentPage = hasPdf ? pdfPageNumber : 0;
   const totalPages = hasPdf ? Number(pdfDocument.numPages) : 0;
-
-  pdfPrevPageButton.disabled = !hasPdf || currentPage <= 1;
-  pdfNextPageButton.disabled = !hasPdf || currentPage >= totalPages;
-  removeDocumentButton.disabled = !hasPdf;
-  pdfPageIndicator.textContent = hasPdf
+  const indicatorText = hasPdf
     ? `${currentPage} / ${totalPages}`
     : "- / -";
+
+  documentLoadButton.disabled = controlsLocked;
+  pdfPrevPageButton.disabled = !hasPdf || controlsLocked || currentPage <= 1;
+  pdfNextPageButton.disabled = !hasPdf || controlsLocked || currentPage >= totalPages;
+  if (exportAnnotatedPdfButton) {
+    exportAnnotatedPdfButton.disabled = !hasPdf || controlsLocked;
+  }
+  removeDocumentButton.disabled = !hasPdf || controlsLocked;
+  pdfPageIndicator.textContent = indicatorText;
+
+  if (toolbarPdfPageIndicator) {
+    toolbarPdfPageIndicator.textContent = indicatorText;
+    toolbarPdfPageIndicator.classList.toggle("is-empty", !hasPdf);
+  }
 }
 
 function configurePdfWorker() {
@@ -356,6 +372,91 @@ function isPptFile(file) {
     || extension === "pptx"
     || file.type === "application/vnd.ms-powerpoint"
     || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function getAnnotatedPdfFileName() {
+  const rawName = typeof loadedDocumentName === "string"
+    ? loadedDocumentName.trim()
+    : "";
+  const baseName = rawName
+    ? rawName.replace(/\.pdf$/i, "")
+    : "board";
+  const safeName = baseName
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .trim();
+  return `${safeName || "board"}-annotated.pdf`;
+}
+
+function downloadBlobFile(blob, fileName) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl);
+  }, 1000);
+}
+
+function canvasToJpegBytes(targetCanvas, quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    targetCanvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error("Could not encode JPEG image."));
+        return;
+      }
+
+      try {
+        const buffer = await blob.arrayBuffer();
+        resolve(new Uint8Array(buffer));
+      } catch (error) {
+        reject(error);
+      }
+    }, "image/jpeg", quality);
+  });
+}
+
+async function drawPdfPageToContext(pageNumber, targetContext, targetWidth, targetHeight) {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  const page = await pdfDocument.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const fitScale = Math.min(
+    Math.max(1, targetWidth) / baseViewport.width,
+    Math.max(1, targetHeight) / baseViewport.height
+  );
+  const viewport = page.getViewport({ scale: fitScale });
+
+  const rasterCanvas = document.createElement("canvas");
+  rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+  rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+  const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+  if (!rasterContext) {
+    throw new Error("Could not create export rendering context.");
+  }
+
+  rasterContext.imageSmoothingEnabled = true;
+  rasterContext.imageSmoothingQuality = "high";
+
+  const renderTask = page.render({
+    canvasContext: rasterContext,
+    viewport
+  });
+  await renderTask.promise;
+
+  const drawWidth = Math.max(1, Math.floor(rasterCanvas.width));
+  const drawHeight = Math.max(1, Math.floor(rasterCanvas.height));
+  const drawX = Math.floor((targetWidth - drawWidth) / 2);
+  const drawY = Math.floor((targetHeight - drawHeight) / 2);
+
+  targetContext.imageSmoothingEnabled = true;
+  targetContext.imageSmoothingQuality = "high";
+  targetContext.drawImage(rasterCanvas, drawX, drawY, drawWidth, drawHeight);
 }
 
 function clearPdfRenderDebounce() {
@@ -1133,6 +1234,69 @@ function clonePoint(point) {
   return { x: point.x, y: point.y };
 }
 
+function cloneStroke(stroke) {
+  return {
+    ...stroke,
+    points: Array.isArray(stroke.points) ? stroke.points.map(clonePoint) : []
+  };
+}
+
+function cloneStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return [];
+  }
+
+  return collection
+    .filter((stroke) => stroke && Array.isArray(stroke.points) && stroke.points.length > 0)
+    .map(cloneStroke);
+}
+
+function replaceVisibleStrokes(collection) {
+  strokes.length = 0;
+  const nextStrokes = cloneStrokeCollection(collection);
+  if (nextStrokes.length > 0) {
+    strokes.push(...nextStrokes);
+  }
+  redrawAllStrokes();
+}
+
+function savePdfPageStrokeSnapshot(pageNumber) {
+  const numericPage = Math.round(Number(pageNumber));
+  if (!Number.isFinite(numericPage) || numericPage < 1) {
+    return;
+  }
+
+  const snapshot = cloneStrokeCollection(strokes);
+  if (snapshot.length === 0) {
+    pdfPageStrokeSnapshots.delete(numericPage);
+    return;
+  }
+
+  pdfPageStrokeSnapshots.set(numericPage, snapshot);
+}
+
+function saveCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    return;
+  }
+
+  boardStrokeSnapshot = cloneStrokeCollection(strokes);
+}
+
+function restoreCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    const numericPage = Math.round(Number(pdfPageNumber));
+    const snapshot = Number.isFinite(numericPage) && numericPage >= 1
+      ? (pdfPageStrokeSnapshots.get(numericPage) || [])
+      : [];
+    replaceVisibleStrokes(snapshot);
+    return;
+  }
+
+  replaceVisibleStrokes(boardStrokeSnapshot);
+}
+
 function createStrokeRecord(kind, startPoint) {
   const point = clonePoint(startPoint);
   const sourceWidth = kind === "pixel-eraser"
@@ -1161,22 +1325,24 @@ function appendPointToStroke(stroke, point) {
   stroke.maxY = Math.max(stroke.maxY, next.y);
 }
 
-function drawStrokePath(stroke) {
+function drawStrokePath(stroke, targetContext = ctx) {
   if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) {
     return;
   }
 
   const isPixelEraser = stroke.kind === "pixel-eraser";
-  ctx.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
-  ctx.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
-  ctx.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
-  ctx.lineWidth = Math.max(1, Number(stroke.widthPx));
+  targetContext.lineJoin = "round";
+  targetContext.lineCap = "round";
+  targetContext.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
+  targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.lineWidth = Math.max(1, Number(stroke.widthPx));
 
   if (stroke.points.length === 1) {
     const point = stroke.points[0];
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, ctx.lineWidth / 2, 0, Math.PI * 2);
-    ctx.fill();
+    targetContext.beginPath();
+    targetContext.arc(point.x, point.y, targetContext.lineWidth / 2, 0, Math.PI * 2);
+    targetContext.fill();
     return;
   }
 
@@ -1184,18 +1350,18 @@ function drawStrokePath(stroke) {
   let previous = points[0];
   let previousMidpoint = previous;
 
-  ctx.beginPath();
-  ctx.moveTo(previousMidpoint.x, previousMidpoint.y);
+  targetContext.beginPath();
+  targetContext.moveTo(previousMidpoint.x, previousMidpoint.y);
 
   for (let index = 1; index < points.length; index += 1) {
     const current = points[index];
     const midpoint = getMidpoint(previous, current);
-    ctx.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
+    targetContext.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
     previous = current;
     previousMidpoint = midpoint;
   }
 
-  ctx.stroke();
+  targetContext.stroke();
 }
 
 function redrawAllStrokes() {
@@ -1208,14 +1374,14 @@ function redrawAllStrokes() {
   }
 }
 
-function scaleStoredStrokes(scaleX, scaleY) {
-  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+function scaleStrokeCollection(collection, scaleX, scaleY) {
+  if (!Array.isArray(collection) || collection.length === 0) {
     return;
   }
 
   const widthScale = (scaleX + scaleY) / 2;
 
-  for (const stroke of strokes) {
+  for (const stroke of collection) {
     if (!stroke.points.length) {
       continue;
     }
@@ -1235,6 +1401,19 @@ function scaleStoredStrokes(scaleX, scaleY) {
     }
 
     stroke.widthPx = Math.max(1, stroke.widthPx * widthScale);
+  }
+}
+
+function scaleStoredStrokes(scaleX, scaleY) {
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+    return;
+  }
+
+  scaleStrokeCollection(strokes, scaleX, scaleY);
+  scaleStrokeCollection(boardStrokeSnapshot, scaleX, scaleY);
+
+  for (const snapshot of pdfPageStrokeSnapshots.values()) {
+    scaleStrokeCollection(snapshot, scaleX, scaleY);
   }
 }
 
@@ -1447,6 +1626,11 @@ async function releasePdfDocument(documentRef) {
 }
 
 async function unloadPdfDocument(updateStatus = true) {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  saveCurrentStrokeState();
   clearPdfRenderDebounce();
   stopPdfRenderTask();
   pdfRenderToken += 1;
@@ -1457,7 +1641,9 @@ async function unloadPdfDocument(updateStatus = true) {
   pdfPageNumber = 1;
   pdfPageRasterCanvas = null;
   loadedDocumentName = "";
+  pdfPageStrokeSnapshots.clear();
 
+  restoreCurrentStrokeState();
   renderBoardBackground();
   updatePdfNavigationUI();
 
@@ -1483,7 +1669,13 @@ async function renderPdfPage(pageNumber) {
     Number(pdfDocument.numPages),
     Math.max(1, Math.round(Number(pageNumber) || 1))
   );
-  pdfPageNumber = clampedPage;
+  if (clampedPage !== pdfPageNumber) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    pdfPageNumber = clampedPage;
+    restoreCurrentStrokeState();
+  } else {
+    pdfPageNumber = clampedPage;
+  }
   updatePdfNavigationUI();
 
   const token = ++pdfRenderToken;
@@ -1541,6 +1733,99 @@ async function renderPdfPage(pageNumber) {
   }
 }
 
+async function exportAnnotatedPdf() {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  if (!hasLoadedPdfDocument()) {
+    setDocumentStatus("Load a PDF first.", "warning");
+    return;
+  }
+
+  if (!window.PDFLib || !window.PDFLib.PDFDocument) {
+    setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
+    return;
+  }
+
+  saveCurrentStrokeState();
+  pdfExportInProgress = true;
+  updatePdfNavigationUI();
+
+  const statusName = loadedDocumentName || "PDF";
+  const totalPages = Math.max(1, Number(pdfDocument.numPages) || 1);
+  const outputFileName = getAnnotatedPdfFileName();
+
+  try {
+    const exportWidth = Math.max(1, Math.floor(backgroundCanvas.width));
+    const exportHeight = Math.max(1, Math.floor(backgroundCanvas.height));
+    const boardColor = normalizeHexColor(boardColorInput.value) || "#ffffff";
+    const outputPdf = await window.PDFLib.PDFDocument.create();
+
+    const mergedCanvas = document.createElement("canvas");
+    mergedCanvas.width = exportWidth;
+    mergedCanvas.height = exportHeight;
+    const mergedContext = mergedCanvas.getContext("2d", { alpha: false });
+    if (!mergedContext) {
+      throw new Error("Could not create output context.");
+    }
+
+    const annotationCanvas = document.createElement("canvas");
+    annotationCanvas.width = exportWidth;
+    annotationCanvas.height = exportHeight;
+    const annotationContext = annotationCanvas.getContext("2d", { alpha: true });
+    if (!annotationContext) {
+      throw new Error("Could not create annotation context.");
+    }
+
+    for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+      setDocumentStatus(`${statusName}: exporting ${pageNumber}/${totalPages}...`);
+
+      mergedContext.setTransform(1, 0, 0, 1, 0, 0);
+      mergedContext.globalCompositeOperation = "source-over";
+      mergedContext.clearRect(0, 0, exportWidth, exportHeight);
+      mergedContext.fillStyle = boardColor;
+      mergedContext.fillRect(0, 0, exportWidth, exportHeight);
+
+      await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
+
+      annotationContext.setTransform(1, 0, 0, 1, 0, 0);
+      annotationContext.globalCompositeOperation = "source-over";
+      annotationContext.clearRect(0, 0, exportWidth, exportHeight);
+      annotationContext.lineJoin = "round";
+      annotationContext.lineCap = "round";
+
+      const pageStrokes = pdfPageStrokeSnapshots.get(pageNumber) || [];
+      for (const stroke of pageStrokes) {
+        drawStrokePath(stroke, annotationContext);
+      }
+
+      annotationContext.globalCompositeOperation = "source-over";
+      mergedContext.drawImage(annotationCanvas, 0, 0);
+
+      const pageImageBytes = await canvasToJpegBytes(mergedCanvas);
+      const embeddedImage = await outputPdf.embedJpg(pageImageBytes);
+      const outputPage = outputPdf.addPage([exportWidth, exportHeight]);
+      outputPage.drawImage(embeddedImage, {
+        x: 0,
+        y: 0,
+        width: exportWidth,
+        height: exportHeight
+      });
+    }
+
+    const outputBytes = await outputPdf.save();
+    const outputBlob = new Blob([outputBytes], { type: "application/pdf" });
+    downloadBlobFile(outputBlob, outputFileName);
+    setDocumentStatus(`${outputFileName} saved.`, "success");
+  } catch (error) {
+    setDocumentStatus("Failed to save annotated PDF.", "error");
+  } finally {
+    pdfExportInProgress = false;
+    updatePdfNavigationUI();
+  }
+}
+
 function schedulePdfPageRerender() {
   if (!hasLoadedPdfDocument()) {
     return;
@@ -1554,6 +1839,11 @@ function schedulePdfPageRerender() {
 }
 
 async function loadPdfFromFile(file) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    return;
+  }
+
   if (!configurePdfWorker()) {
     return;
   }
@@ -1577,14 +1867,17 @@ async function loadPdfFromFile(file) {
       return;
     }
 
+    saveCurrentStrokeState();
     const previousDocument = pdfDocument;
     clearPdfRenderDebounce();
     stopPdfRenderTask();
 
+    pdfPageStrokeSnapshots.clear();
     pdfDocument = nextDocument;
     pdfPageNumber = 1;
     pdfPageRasterCanvas = null;
     loadedDocumentName = fileName;
+    restoreCurrentStrokeState();
 
     await renderPdfPage(1);
     if (pdfPageRasterCanvas) {
@@ -1603,6 +1896,12 @@ async function loadPdfFromFile(file) {
 }
 
 async function handleDocumentInputChange(event) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    event.target.value = "";
+    return;
+  }
+
   const file = event.target.files && event.target.files[0];
   event.target.value = "";
   if (!file) {
@@ -1623,7 +1922,7 @@ async function handleDocumentInputChange(event) {
 }
 
 function goToPreviousPdfPage() {
-  if (!hasLoadedPdfDocument() || pdfPageNumber <= 1) {
+  if (pdfExportInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
     return;
   }
 
@@ -1631,7 +1930,7 @@ function goToPreviousPdfPage() {
 }
 
 function goToNextPdfPage() {
-  if (!hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
+  if (pdfExportInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
     return;
   }
 
@@ -1639,6 +1938,10 @@ function goToNextPdfPage() {
 }
 
 function requestDocumentFileSelection() {
+  if (pdfExportInProgress) {
+    return;
+  }
+
   documentInput.click();
 }
 
@@ -1685,7 +1988,7 @@ function setCanvasSize() {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  if (previousWidth > 0 && previousHeight > 0 && strokes.length > 0) {
+  if (previousWidth > 0 && previousHeight > 0) {
     scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
     redrawAllStrokes();
   }
@@ -1987,6 +2290,7 @@ function handlePointerEnd(event) {
 function clearBoard() {
   strokes.length = 0;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  saveCurrentStrokeState();
 }
 
 function setBoardColor(color) {
@@ -2043,6 +2347,11 @@ openDocumentPopupButton.addEventListener("click", (event) => {
 documentLoadButton.addEventListener("click", requestDocumentFileSelection);
 pdfPrevPageButton.addEventListener("click", goToPreviousPdfPage);
 pdfNextPageButton.addEventListener("click", goToNextPdfPage);
+if (exportAnnotatedPdfButton) {
+  exportAnnotatedPdfButton.addEventListener("click", () => {
+    exportAnnotatedPdf();
+  });
+}
 removeDocumentButton.addEventListener("click", () => {
   unloadPdfDocument(true);
 });

@@ -92,6 +92,7 @@
             <span id="pdfPageIndicator" class="pdf-page-indicator">- / -</span>
             <button id="pdfNextPage" class="stepper-button" type="button" aria-label="다음 페이지">▶</button>
           </div>
+          <button id="exportAnnotatedPdfButton" class="document-action-button" type="button">판서 포함 PDF 저장</button>
           <button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서 제거</button>
           <p id="documentStatus" class="document-status">문서 없음</p>
         </div>
@@ -139,6 +140,7 @@
       </label>
 
       <span id="modeLabel" class="mode-label">모드: 펜</span>
+      <span id="toolbarPdfPageIndicator" class="toolbar-pdf-page-indicator is-empty" aria-live="polite">- / -</span>
     </header>
 
     <main class="board-wrapper">
@@ -148,6 +150,7 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" referrerpolicy="no-referrer"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
