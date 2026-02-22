@@ -1,59 +1,58 @@
-# Web Board
+# BoardCanvas
 
-브라우저에서 동작하는 전자칠판(화이트보드) 애플리케이션입니다.  
-현재 버전은 도킹 가능한 툴바와 최소 기능의 플로팅 툴바를 함께 지원합니다.
+Web-based whiteboard app with dockable toolbar and lightweight floating mode.
 
-## 주요 기능
+## Features
 
-- 펜/지우개(일반, 획 지우개) 그리기
-- 전체 지우기
-- 펜 색상 선택, 배경색 선택
-- 펜 프리셋 4칸 고정
-- 전체화면 토글
-- 툴바 도킹: 상/하/좌/우
-- 툴바 플로팅: 드래그 후 화면 중앙 영역에 놓으면 최소 기능 UI로 전환
-- 드래그 중 도킹 위치 점선 프리뷰 표시
-- 마지막 사용 설정 저장(`localStorage`)
-- 저사양 디바이스 대응 입력 보간/품질 제어
+- Pen and eraser drawing
+- Eraser modes:
+- Pixel eraser
+- Stroke eraser
+- Clear all
+- Fullscreen toggle
+- Pen color picker
+- Board background color picker
+- Pen presets (fixed 4 slots)
+- Dockable toolbar: top, bottom, left, right
+- Floating mini toolbar:
+- Drop the drag handle near screen center to switch to floating
+- Shows only core controls
+- Real-time drag movement while floating
+- Dock preview guide (dashed outline) while dragging
+- Last-used settings persisted in localStorage
 
-## 툴바 동작
+## Toolbar behavior
 
-- 드래그 핸들을 끌어 가장자리 근처에 놓으면 도킹됩니다.
-- 드래그 핸들을 화면 중앙 쪽에 놓으면 `floating` 모드가 됩니다.
-- `floating` 모드에서는 최소 기능만 노출됩니다.
-- `floating` 노출 항목: 펜/지우개, 전체지우기, 펜 프리셋(색), 전체화면
-- `floating` 상태에서 드래그하면 실시간으로 이동합니다.
+- Drag toolbar handle toward an edge to dock.
+- Drag toolbar handle to center area to use floating mode.
+- In floating mode, only these controls are shown:
+- Pen / Eraser
+- Clear all
+- Pen color presets
+- Fullscreen
 
-## 프리셋 사용
+## Presets
 
-- 펜 프리셋: 클릭 시 적용
-- 펜 프리셋: `Shift + 클릭` 또는 우클릭 시 현재 펜 설정 저장
-- 배경색 프리셋: 클릭 시 적용
-- 배경색 프리셋: `Shift + 클릭` 또는 우클릭 시 현재 배경색 저장
+- Pen preset:
+- Click to apply
+- Right-click or Shift+Click to save current pen state
+- Board color preset:
+- Click to apply
+- Right-click or Shift+Click to save current board color
 
-## 실행 방법
+## Run locally
 
-1. 저장소를 열고 `index.html`을 브라우저로 실행합니다.
-2. 또는 간단한 로컬 서버를 사용합니다.
+Open `index.html` directly, or use a local server:
 
 ```bash
-# Python 3
 python -m http.server 5500
 ```
 
-브라우저에서 `http://localhost:5500`에 접속합니다.
+Then open `http://localhost:5500`.
 
-## 파일 구조
+## Project files
 
-- `index.html`: UI 마크업
-- `styles.css`: 툴바/캔버스 스타일, 도킹/플로팅 레이아웃
-- `app.js`: 그리기 로직, 툴 상태, 프리셋/설정 저장, 도킹/플로팅 동작
-
-## 저장되는 사용자 설정
-
-- 마지막 펜 색상/굵기
-- 마지막 지우개 모드/굵기
-- 마지막 배경색
-- 펜 프리셋/배경색 프리셋
-- 툴바 배치(도킹 위치 또는 floating 위치)
+- `index.html`: UI markup
+- `styles.css`: layout and visual styles
+- `app.js`: drawing logic, toolbar mode/state, persistence
 
