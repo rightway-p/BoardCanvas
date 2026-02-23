@@ -279,6 +279,22 @@ function syncFullscreenUiFromNativeWindow() {
     });
 }
 
+function bootstrapRuntimeBridgeSync() {
+  let attempts = 0;
+  const maxAttempts = 24;
+  const timerId = window.setInterval(() => {
+    attempts += 1;
+    updateFullscreenButtons();
+    updateOverlayModeButton();
+
+    if (isDesktopAppRuntime() || attempts >= maxAttempts) {
+      window.clearInterval(timerId);
+      syncFullscreenUiFromNativeWindow();
+      updateOverlayModeButton();
+    }
+  }, 250);
+}
+
 function updateFullscreenButtons() {
   const supported = isFullscreenSupported();
   const active = isFullscreenActive();
@@ -300,6 +316,17 @@ function updateFullscreenButtons() {
 }
 async function enterFullscreen() {
   if (!isFullscreenSupported() || isFullscreenActive()) {
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    await requestNativeFullscreenLike(appWindowRef);
+    await refreshNativeFullscreenState();
+    updateFullscreenButtons();
+    if (!isFullscreenActive()) {
+      setDocumentStatus("Unable to enable fullscreen in desktop runtime.", "warning");
+    }
     return;
   }
 
@@ -333,18 +360,19 @@ async function enterFullscreen() {
       // Browser fullscreen can fail in app webviews.
     }
   }
-
-  const appWindowRef = getTauriAppWindow();
-  if (!appWindowRef) {
-    return;
-  }
-
-  await requestNativeFullscreenLike(appWindowRef);
   updateFullscreenButtons();
 }
 
 async function exitFullscreen() {
   if (!isFullscreenActive()) {
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    await requestNativeExitFullscreenLike(appWindowRef);
+    await refreshNativeFullscreenState();
+    updateFullscreenButtons();
     return;
   }
 
@@ -377,17 +405,14 @@ async function exitFullscreen() {
       // Ignore exit errors and try native fallback.
     }
   }
-
-  const appWindowRef = getTauriAppWindow();
-  if (!appWindowRef) {
-    return;
-  }
-
-  await requestNativeExitFullscreenLike(appWindowRef);
   updateFullscreenButtons();
 }
 
 async function toggleFullscreen() {
+  if (isDesktopAppRuntime()) {
+    await refreshNativeFullscreenState();
+  }
+
   if (isFullscreenActive()) {
     await exitFullscreen();
     return;
@@ -573,6 +598,7 @@ async function enterOverlayMode() {
       return;
     }
     applyOverlayModeUI(true);
+    updateFullscreenButtons();
     setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
   } catch (error) {
     setDocumentStatus("Failed to enable overlay mode.", "error");
@@ -594,9 +620,11 @@ async function exitOverlayMode() {
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      await refreshNativeFullscreenState();
     }
 
     applyOverlayModeUI(false);
+    updateFullscreenButtons();
     setDocumentStatus("Board mode enabled.", "success");
   } catch (error) {
     setDocumentStatus("Failed to restore board mode.", "error");
@@ -2814,25 +2842,30 @@ function goToNextPdfPage() {
   renderPdfPage(pdfPageNumber + 1);
 }
 
-async function requestDocumentFileSelection() {
+function requestDocumentFileSelection() {
   if (pdfExportInProgress || sessionRestoreInProgress) {
     return;
   }
 
-  if (typeof documentInput.showPicker === "function") {
-    try {
-      await documentInput.showPicker();
-      return;
-    } catch (error) {
-      // Fallback to click for environments where showPicker is not allowed.
-    }
-  }
+  documentInput.value = "";
 
   try {
     documentInput.click();
+    return;
   } catch (error) {
-    setDocumentStatus("Unable to open file picker. Try again.", "error");
+    // Fallback for runtimes that block synthetic click.
   }
+
+  if (typeof documentInput.showPicker === "function") {
+    try {
+      documentInput.showPicker();
+      return;
+    } catch (error) {
+      // ignore and surface unified error below.
+    }
+  }
+
+  setDocumentStatus("Unable to open file picker. Try again.", "error");
 }
 
 function isEditableEventTarget(target) {
@@ -3489,6 +3522,7 @@ syncFullscreenUiFromNativeWindow();
 updateToolUI();
 updateUndoRedoUI();
 updateOverlayModeButton();
+bootstrapRuntimeBridgeSync();
 if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
   setDocumentStatus("Desktop bridge not detected in this build. Rebuild Tauri app and run latest exe.", "warning");
 }
