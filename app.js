@@ -163,6 +163,7 @@ let overlayMode = false;
 let overlayTransitionInProgress = false;
 let overlayWindowSnapshot = null;
 let nativeFullscreenActive = false;
+let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
 
 function detectRuntimePlatform() {
@@ -185,6 +186,11 @@ function detectRuntimePlatform() {
   return "unknown";
 }
 
+function isLikelyTauriProtocol() {
+  const protocol = String((window.location && window.location.protocol) || "").toLowerCase();
+  return protocol === "tauri:";
+}
+
 function getFullscreenElement() {
   return document.fullscreenElement
     || document.webkitFullscreenElement
@@ -205,22 +211,58 @@ function isFullscreenSupported() {
 }
 
 function isFullscreenActive() {
-  return Boolean(getFullscreenElement()) || nativeFullscreenActive;
+  return Boolean(getFullscreenElement()) || nativeFullscreenActive || nativeWindowMaximized;
 }
 
 async function refreshNativeFullscreenState() {
   const appWindowRef = getTauriAppWindow();
   if (!appWindowRef) {
     nativeFullscreenActive = false;
+    nativeWindowMaximized = false;
     return nativeFullscreenActive;
   }
 
-  const nextState = await callWindowMethod(appWindowRef, "isFullscreen");
-  if (typeof nextState === "boolean") {
-    nativeFullscreenActive = nextState;
+  const [nextFullscreenState, nextMaximizedState] = await Promise.all([
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized")
+  ]);
+
+  if (typeof nextFullscreenState === "boolean") {
+    nativeFullscreenActive = nextFullscreenState;
+  }
+
+  if (typeof nextMaximizedState === "boolean") {
+    nativeWindowMaximized = nextMaximizedState;
   }
 
   return nativeFullscreenActive;
+}
+
+async function requestNativeFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    return false;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    return true;
+  }
+
+  await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  return nativeFullscreenActive || nativeWindowMaximized;
+}
+
+async function requestNativeExitFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    return false;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await callWindowMethod(appWindowRef, "unmaximize");
+  await refreshNativeFullscreenState();
+  return !nativeFullscreenActive && !nativeWindowMaximized;
 }
 
 function syncFullscreenUiFromNativeWindow() {
@@ -282,8 +324,7 @@ async function enterFullscreen() {
     return;
   }
 
-  await callWindowMethod(appWindowRef, "setFullscreen", true);
-  await refreshNativeFullscreenState();
+  await requestNativeFullscreenLike(appWindowRef);
   updateFullscreenButtons();
 }
 
@@ -318,8 +359,7 @@ async function exitFullscreen() {
     return;
   }
 
-  await callWindowMethod(appWindowRef, "setFullscreen", false);
-  await refreshNativeFullscreenState();
+  await requestNativeExitFullscreenLike(appWindowRef);
   updateFullscreenButtons();
 }
 
@@ -498,8 +538,16 @@ async function enterOverlayMode() {
     await callWindowMethod(appWindowRef, "setDecorations", false);
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
     await callWindowMethod(appWindowRef, "unmaximize");
-    await callWindowMethod(appWindowRef, "setFullscreen", true);
+    await requestNativeFullscreenLike(appWindowRef);
     await callWindowMethod(appWindowRef, "setFocus");
+    await refreshNativeFullscreenState();
+    if (!nativeFullscreenActive && !nativeWindowMaximized) {
+      setDocumentStatus("Unable to switch window to fullscreen. Check Windows display permissions.", "error");
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      overlayWindowSnapshot = null;
+      applyOverlayModeUI(false);
+      return;
+    }
     applyOverlayModeUI(true);
     setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
   } catch (error) {
@@ -3417,6 +3465,9 @@ syncFullscreenUiFromNativeWindow();
 updateToolUI();
 updateUndoRedoUI();
 updateOverlayModeButton();
+if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
+  setDocumentStatus("Desktop bridge not detected in this build. Rebuild Tauri app and run latest exe.", "warning");
+}
 restoreSessionState();
 
 window.addEventListener("beforeunload", () => {
