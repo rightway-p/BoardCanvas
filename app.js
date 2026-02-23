@@ -2756,18 +2756,22 @@ async function loadPdfFromFile(file) {
 
     let nextDocument = null;
     let usedCompatibilityMode = false;
-    const binaryData = new Uint8Array(source);
+    const sourceBytes = new Uint8Array(source);
     let lastLoadError = null;
 
     const loadAttempts = [
-      { data: binaryData },
-      { data: binaryData, disableWorker: true },
-      { data: binaryData, disableWorker: true, useWorkerFetch: false, isEvalSupported: false }
+      {},
+      { disableWorker: true },
+      { disableWorker: true, useWorkerFetch: false, isEvalSupported: false }
     ];
 
     for (let index = 0; index < loadAttempts.length; index += 1) {
       try {
-        const loadingTask = window.pdfjsLib.getDocument(loadAttempts[index]);
+        // pdf.js may detach transferred buffers, so each attempt gets a fresh copy.
+        const loadingTask = window.pdfjsLib.getDocument({
+          ...loadAttempts[index],
+          data: sourceBytes.slice()
+        });
         nextDocument = await loadingTask.promise;
         usedCompatibilityMode = index > 0;
         break;
@@ -2795,7 +2799,7 @@ async function loadPdfFromFile(file) {
     pdfPageNumber = 1;
     pdfPageRasterCanvas = null;
     loadedDocumentName = fileName;
-    loadedPdfBytes = new Uint8Array(source);
+    loadedPdfBytes = sourceBytes.slice();
     sessionPdfBytesDirty = true;
     restoreCurrentStrokeState();
 
