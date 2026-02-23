@@ -1,3 +1,5 @@
+const backgroundCanvas = document.getElementById("boardBackground");
+const backgroundCtx = backgroundCanvas.getContext("2d");
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const app = document.querySelector(".app");
@@ -7,14 +9,29 @@ const penToolButton = document.getElementById("penTool");
 const eraserToolButton = document.getElementById("eraserTool");
 const pixelEraserModeButton = document.getElementById("pixelEraserMode");
 const strokeEraserModeButton = document.getElementById("strokeEraserMode");
+const undoButton = document.getElementById("undoButton");
+const redoButton = document.getElementById("redoButton");
 const clearButton = document.getElementById("clearButton");
 const fullscreenToggleButton = document.getElementById("fullscreenToggle");
+const overlayModeToggleButton = document.getElementById("overlayModeToggle");
 
 const penColorInput = document.getElementById("penColor");
 const boardColorInput = document.getElementById("boardColor");
 const lineWidthInput = document.getElementById("lineWidth");
 const lineWidthDecButton = document.getElementById("lineWidthDec");
 const lineWidthIncButton = document.getElementById("lineWidthInc");
+const documentEditor = document.getElementById("documentEditor");
+const openDocumentPopupButton = document.getElementById("openDocumentPopup");
+const documentPopup = document.getElementById("documentPopup");
+const documentLoadButton = document.getElementById("documentLoadButton");
+const documentInput = document.getElementById("documentInput");
+const pdfPrevPageButton = document.getElementById("pdfPrevPage");
+const pdfNextPageButton = document.getElementById("pdfNextPage");
+const pdfPageIndicator = document.getElementById("pdfPageIndicator");
+const exportAnnotatedPdfButton = document.getElementById("exportAnnotatedPdfButton");
+const toolbarPdfPageIndicator = document.getElementById("toolbarPdfPageIndicator");
+const removeDocumentButton = document.getElementById("removeDocumentButton");
+const documentStatus = document.getElementById("documentStatus");
 const eraserToolEditor = document.getElementById("eraserToolEditor");
 const eraserToolPopup = document.getElementById("eraserToolPopup");
 const eraserWidthInput = document.getElementById("eraserWidth");
@@ -58,6 +75,13 @@ const LAST_ERASER_WIDTH_STORAGE_KEY = "board.eraser.lastWidth.v1";
 const LAST_ERASER_MODE_STORAGE_KEY = "board.eraser.lastMode.v1";
 const LAST_BOARD_COLOR_STORAGE_KEY = "board.background.lastColor.v1";
 const LAST_TOOLBAR_LAYOUT_STORAGE_KEY = "board.toolbar.layout.v1";
+const SESSION_STORAGE_KEY = "board.session.state.v1";
+const SESSION_STORAGE_VERSION = 1;
+const SESSION_AUTOSAVE_DELAY_MS = 500;
+const SESSION_DB_NAME = "boardcanvas.session.db";
+const SESSION_DB_STORE = "session-files";
+const SESSION_DB_PDF_KEY = "last-pdf";
+const PDF_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const QUALITY_PRESETS = {
   normal: {
@@ -76,7 +100,8 @@ const QUALITY_PRESETS = {
   }
 };
 const MAX_QUEUE_POINTS = 320;
-const TOOLBAR_DOCK_THRESHOLD = 88;
+const TOOLBAR_DOCK_THRESHOLD = 48;
+const HISTORY_STACK_LIMIT = 120;
 
 let qualityLevel = detectLowSpecDevice() ? "low" : "normal";
 let quality = QUALITY_PRESETS[qualityLevel];
@@ -98,10 +123,13 @@ const pendingPoints = [];
 let pendingHead = 0;
 let frameRequested = false;
 const strokes = [];
+let boardStrokeSnapshot = [];
+const pdfPageStrokeSnapshots = new Map();
 let activeStroke = null;
 let strokeEraserActive = false;
 let strokeEraserPointerId = null;
 let strokeEraserLastPoint = null;
+let strokeEraserHistoryArmed = false;
 let toolbarDragPointerId = null;
 let toolbarDragOffsetX = 0;
 let toolbarDragOffsetY = 0;
@@ -116,6 +144,52 @@ let toolbarLayout = {
   floatX: 120,
   floatY: 120
 };
+let pdfDocument = null;
+let pdfPageNumber = 1;
+let pdfPageRasterCanvas = null;
+let pdfRenderTask = null;
+let pdfRenderToken = 0;
+let pdfRenderDebounceTimer = null;
+let pdfLoadingToken = 0;
+let pdfExportInProgress = false;
+let loadedPdfBytes = null;
+let sessionPdfBytesDirty = false;
+let loadedDocumentName = "";
+let isPdfWorkerConfigured = false;
+let sessionAutosaveTimer = null;
+let sessionRestoreInProgress = false;
+const strokeHistoryByContext = new Map();
+let overlayMode = false;
+let overlayTransitionInProgress = false;
+let overlayWindowSnapshot = null;
+let nativeFullscreenActive = false;
+let nativeWindowMaximized = false;
+const runtimePlatform = detectRuntimePlatform();
+
+function detectRuntimePlatform() {
+  const userAgent = String((window.navigator && window.navigator.userAgent) || "").toLowerCase();
+  const platform = String((window.navigator && window.navigator.platform) || "").toLowerCase();
+  const source = `${userAgent} ${platform}`;
+
+  if (source.includes("win")) {
+    return "windows";
+  }
+
+  if (source.includes("mac")) {
+    return "macos";
+  }
+
+  if (source.includes("linux")) {
+    return "linux";
+  }
+
+  return "unknown";
+}
+
+function isLikelyTauriProtocol() {
+  const protocol = String((window.location && window.location.protocol) || "").toLowerCase();
+  return protocol === "tauri:";
+}
 
 function getFullscreenElement() {
   return document.fullscreenElement
@@ -124,7 +198,13 @@ function getFullscreenElement() {
     || null;
 }
 
-function isFullscreenSupported() {
+function waitShortDelay(ms = 60) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isBrowserFullscreenSupported() {
   return Boolean(
     document.fullscreenEnabled
     || document.webkitFullscreenEnabled
@@ -132,9 +212,87 @@ function isFullscreenSupported() {
   );
 }
 
+function isFullscreenSupported() {
+  return isBrowserFullscreenSupported() || Boolean(getTauriAppWindow());
+}
+
+function isFullscreenActive() {
+  return Boolean(getFullscreenElement()) || nativeFullscreenActive || nativeWindowMaximized;
+}
+
+async function refreshNativeFullscreenState() {
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = false;
+    return nativeFullscreenActive;
+  }
+
+  const [nextFullscreenState, nextMaximizedState] = await Promise.all([
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized")
+  ]);
+
+  nativeFullscreenActive = nextFullscreenState === true;
+  nativeWindowMaximized = nextMaximizedState === true;
+
+  return nativeFullscreenActive;
+}
+
+async function requestNativeFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    return false;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    return true;
+  }
+
+  await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  return nativeFullscreenActive || nativeWindowMaximized;
+}
+
+async function requestNativeExitFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    return false;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await callWindowMethod(appWindowRef, "unmaximize");
+  await refreshNativeFullscreenState();
+  return !nativeFullscreenActive && !nativeWindowMaximized;
+}
+
+function syncFullscreenUiFromNativeWindow() {
+  refreshNativeFullscreenState()
+    .catch(() => null)
+    .finally(() => {
+      updateFullscreenButtons();
+    });
+}
+
+function bootstrapRuntimeBridgeSync() {
+  let attempts = 0;
+  const maxAttempts = 24;
+  const timerId = window.setInterval(() => {
+    attempts += 1;
+    updateFullscreenButtons();
+    updateOverlayModeButton();
+
+    if (isDesktopAppRuntime() || attempts >= maxAttempts) {
+      window.clearInterval(timerId);
+      syncFullscreenUiFromNativeWindow();
+      updateOverlayModeButton();
+    }
+  }, 250);
+}
+
 function updateFullscreenButtons() {
   const supported = isFullscreenSupported();
-  const active = Boolean(getFullscreenElement());
+  const active = isFullscreenActive();
 
   fullscreenToggleButton.disabled = !supported;
   fullscreenToggleButton.classList.toggle("is-fullscreen", supported && active);
@@ -152,61 +310,337 @@ function updateFullscreenButtons() {
   fullscreenToggleButton.title = label;
 }
 async function enterFullscreen() {
-  if (!isFullscreenSupported() || getFullscreenElement()) {
+  if (!isFullscreenSupported() || isFullscreenActive()) {
     return;
   }
 
-  const target = document.documentElement;
-  try {
-    if (typeof target.requestFullscreen === "function") {
-      await target.requestFullscreen();
-      return;
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    await requestNativeFullscreenLike(appWindowRef);
+    await refreshNativeFullscreenState();
+    updateFullscreenButtons();
+    if (!isFullscreenActive()) {
+      setDocumentStatus("Unable to enable fullscreen in desktop runtime.", "warning");
     }
-
-    if (typeof target.webkitRequestFullscreen === "function") {
-      target.webkitRequestFullscreen();
-      return;
-    }
-
-    if (typeof target.msRequestFullscreen === "function") {
-      target.msRequestFullscreen();
-    }
-  } catch (error) {
-    // Fullscreen request can fail if browser blocks it.
+    return;
   }
+
+  if (isBrowserFullscreenSupported()) {
+    const target = document.documentElement;
+    try {
+      if (typeof target.requestFullscreen === "function") {
+        await target.requestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof target.webkitRequestFullscreen === "function") {
+        target.webkitRequestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof target.msRequestFullscreen === "function") {
+        target.msRequestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+    } catch (error) {
+      // Browser fullscreen can fail in app webviews.
+    }
+  }
+  updateFullscreenButtons();
 }
 
 async function exitFullscreen() {
-  if (!getFullscreenElement()) {
+  if (!isFullscreenActive()) {
     return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    await requestNativeExitFullscreenLike(appWindowRef);
+    await refreshNativeFullscreenState();
+    updateFullscreenButtons();
+    return;
+  }
+
+  if (getFullscreenElement()) {
+    try {
+      if (typeof document.exitFullscreen === "function") {
+        await document.exitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof document.webkitExitFullscreen === "function") {
+        document.webkitExitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof document.msExitFullscreen === "function") {
+        document.msExitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+    } catch (error) {
+      // Ignore exit errors and try native fallback.
+    }
+  }
+  updateFullscreenButtons();
+}
+
+async function toggleFullscreen() {
+  if (isDesktopAppRuntime()) {
+    await refreshNativeFullscreenState();
+  }
+
+  if (isFullscreenActive()) {
+    await exitFullscreen();
+    return;
+  }
+
+  await enterFullscreen();
+}
+
+function getTauriWindowApi() {
+  if (!window.__TAURI__ || !window.__TAURI__.window) {
+    return null;
+  }
+
+  return window.__TAURI__.window;
+}
+
+function getTauriAppWindow() {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!tauriWindowApi || !tauriWindowApi.appWindow) {
+    return null;
+  }
+
+  return tauriWindowApi.appWindow;
+}
+
+function isDesktopAppRuntime() {
+  return Boolean(getTauriAppWindow());
+}
+
+function isWindowsDesktopRuntime() {
+  return isDesktopAppRuntime() && runtimePlatform === "windows";
+}
+
+async function callWindowMethod(targetWindow, methodName, ...args) {
+  if (!targetWindow || typeof targetWindow[methodName] !== "function") {
+    return null;
   }
 
   try {
-    if (typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
-      return;
-    }
-
-    if (typeof document.webkitExitFullscreen === "function") {
-      document.webkitExitFullscreen();
-      return;
-    }
-
-    if (typeof document.msExitFullscreen === "function") {
-      document.msExitFullscreen();
-    }
+    return await targetWindow[methodName](...args);
   } catch (error) {
-    // Ignore exit errors and keep UI in sync via fullscreenchange.
+    return null;
   }
 }
 
-function toggleFullscreen() {
-  if (getFullscreenElement()) {
-    exitFullscreen();
+async function captureOverlayWindowSnapshot(appWindowRef) {
+  const [position, size, decorated, alwaysOnTop, fullscreen, maximized] = await Promise.all([
+    callWindowMethod(appWindowRef, "outerPosition"),
+    callWindowMethod(appWindowRef, "outerSize"),
+    callWindowMethod(appWindowRef, "isDecorated"),
+    callWindowMethod(appWindowRef, "isAlwaysOnTop"),
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized")
+  ]);
+
+  return {
+    position: position && Number.isFinite(position.x) && Number.isFinite(position.y)
+      ? { x: Math.round(position.x), y: Math.round(position.y) }
+      : null,
+    size: size && Number.isFinite(size.width) && Number.isFinite(size.height)
+      ? { width: Math.max(200, Math.round(size.width)), height: Math.max(120, Math.round(size.height)) }
+      : null,
+    decorated: typeof decorated === "boolean" ? decorated : null,
+    alwaysOnTop: typeof alwaysOnTop === "boolean" ? alwaysOnTop : null,
+    fullscreen: typeof fullscreen === "boolean" ? fullscreen : null,
+    maximized: typeof maximized === "boolean" ? maximized : null
+  };
+}
+
+async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!appWindowRef || !snapshot) {
     return;
   }
 
-  enterFullscreen();
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+
+  if (typeof snapshot.decorated === "boolean") {
+    await callWindowMethod(appWindowRef, "setDecorations", snapshot.decorated);
+  } else {
+    await callWindowMethod(appWindowRef, "setDecorations", true);
+  }
+
+  if (typeof snapshot.alwaysOnTop === "boolean") {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", snapshot.alwaysOnTop);
+  } else {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", false);
+  }
+
+  if (snapshot.maximized === true) {
+    await callWindowMethod(appWindowRef, "maximize");
+  } else {
+    await callWindowMethod(appWindowRef, "unmaximize");
+
+    if (snapshot.size && tauriWindowApi && typeof tauriWindowApi.LogicalSize === "function") {
+      const nextSize = new tauriWindowApi.LogicalSize(snapshot.size.width, snapshot.size.height);
+      await callWindowMethod(appWindowRef, "setSize", nextSize);
+    }
+
+    if (snapshot.position && tauriWindowApi && typeof tauriWindowApi.LogicalPosition === "function") {
+      const nextPosition = new tauriWindowApi.LogicalPosition(snapshot.position.x, snapshot.position.y);
+      await callWindowMethod(appWindowRef, "setPosition", nextPosition);
+    }
+  }
+
+  if (snapshot.fullscreen === true) {
+    await callWindowMethod(appWindowRef, "setFullscreen", true);
+  }
+}
+
+function isOverlayModeSupported() {
+  return isWindowsDesktopRuntime();
+}
+
+function updateOverlayModeButton() {
+  if (!overlayModeToggleButton) {
+    return;
+  }
+
+  const overlaySupported = isOverlayModeSupported();
+  overlayModeToggleButton.hidden = !overlaySupported;
+
+  if (!overlaySupported) {
+    overlayMode = false;
+    app.classList.remove("overlay-mode");
+    document.body.classList.remove("overlay-mode");
+    document.documentElement.classList.remove("overlay-mode");
+    overlayModeToggleButton.classList.remove("is-active");
+    overlayModeToggleButton.setAttribute("aria-pressed", "false");
+    overlayModeToggleButton.disabled = true;
+    return;
+  }
+
+  overlayModeToggleButton.classList.toggle("is-active", overlayMode);
+  overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
+  overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
+  overlayModeToggleButton.title = overlayMode
+    ? "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC \uC885\uB8CC (F8)"
+    : "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC (F8)";
+}
+
+function applyOverlayModeUI(active) {
+  overlayMode = Boolean(active);
+  app.classList.toggle("overlay-mode", overlayMode);
+  document.body.classList.toggle("overlay-mode", overlayMode);
+  document.documentElement.classList.toggle("overlay-mode", overlayMode);
+  updateOverlayModeButton();
+  renderBoardBackground();
+}
+
+async function enterOverlayMode() {
+  if (overlayMode || overlayTransitionInProgress) {
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (!appWindowRef) {
+      setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      return;
+    }
+
+    if (!isOverlayModeSupported()) {
+      setDocumentStatus("Overlay mode is currently supported on Windows desktop. Linux support is planned.", "warning");
+      return;
+    }
+
+    overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
+    await callWindowMethod(appWindowRef, "setDecorations", false);
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
+    await callWindowMethod(appWindowRef, "unmaximize");
+    await requestNativeFullscreenLike(appWindowRef);
+    await callWindowMethod(appWindowRef, "setFocus");
+    await refreshNativeFullscreenState();
+    if (!nativeFullscreenActive && !nativeWindowMaximized) {
+      setDocumentStatus("Unable to switch window to fullscreen. Check Windows display permissions.", "error");
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      overlayWindowSnapshot = null;
+      applyOverlayModeUI(false);
+      return;
+    }
+    applyOverlayModeUI(true);
+    updateFullscreenButtons();
+    setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+  } catch (error) {
+    setDocumentStatus("Failed to enable overlay mode.", "error");
+  } finally {
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+  }
+}
+
+async function exitOverlayMode() {
+  if (!overlayMode || overlayTransitionInProgress) {
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      await refreshNativeFullscreenState();
+    }
+
+    applyOverlayModeUI(false);
+    updateFullscreenButtons();
+    setDocumentStatus("Board mode enabled.", "success");
+  } catch (error) {
+    setDocumentStatus("Failed to restore board mode.", "error");
+  } finally {
+    overlayWindowSnapshot = null;
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+  }
+}
+
+function toggleOverlayMode() {
+  if (!isOverlayModeSupported() || pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (overlayMode) {
+    exitOverlayMode();
+    return;
+  }
+
+  enterOverlayMode();
 }
 
 function isBoardColorPopupOpen() {
@@ -250,6 +684,561 @@ function setEraserToolPopupOpen(open) {
 
 function closeEraserToolPopup() {
   setEraserToolPopupOpen(false);
+}
+
+function isDocumentPopupOpen() {
+  return !documentPopup.classList.contains("is-hidden");
+}
+
+function setDocumentPopupOpen(open) {
+  documentPopup.classList.toggle("is-hidden", !open);
+  openDocumentPopupButton.setAttribute("aria-expanded", String(open));
+}
+
+function closeDocumentPopup() {
+  setDocumentPopupOpen(false);
+}
+
+function setDocumentStatus(message, tone = "normal") {
+  documentStatus.textContent = message;
+  documentStatus.classList.remove("is-success", "is-warning", "is-error");
+
+  if (tone === "success") {
+    documentStatus.classList.add("is-success");
+  } else if (tone === "warning") {
+    documentStatus.classList.add("is-warning");
+  } else if (tone === "error") {
+    documentStatus.classList.add("is-error");
+  }
+}
+
+function hasLoadedPdfDocument() {
+  return Boolean(pdfDocument && Number.isFinite(pdfDocument.numPages) && pdfDocument.numPages > 0);
+}
+
+function getStrokeHistoryContextKey() {
+  if (hasLoadedPdfDocument()) {
+    return `pdf:${Math.max(1, Math.round(Number(pdfPageNumber) || 1))}`;
+  }
+
+  return "board";
+}
+
+function getOrCreateStrokeHistoryEntry(contextKey = getStrokeHistoryContextKey()) {
+  let entry = strokeHistoryByContext.get(contextKey);
+  if (!entry) {
+    entry = {
+      undo: [],
+      redo: []
+    };
+    strokeHistoryByContext.set(contextKey, entry);
+  }
+
+  return entry;
+}
+
+function pushStrokeSnapshot(stack, snapshot) {
+  stack.push(snapshot);
+  if (stack.length > HISTORY_STACK_LIMIT) {
+    stack.shift();
+  }
+}
+
+function clearAllStrokeHistory() {
+  strokeHistoryByContext.clear();
+  updateUndoRedoUI();
+}
+
+function updateUndoRedoUI() {
+  const entry = strokeHistoryByContext.get(getStrokeHistoryContextKey());
+  const canUndo = Boolean(entry && entry.undo.length > 0);
+  const canRedo = Boolean(entry && entry.redo.length > 0);
+  const controlsLocked = pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress;
+
+  if (undoButton) {
+    undoButton.disabled = controlsLocked || !canUndo;
+  }
+  if (redoButton) {
+    redoButton.disabled = controlsLocked || !canRedo;
+  }
+}
+
+function updatePdfNavigationUI() {
+  const hasPdf = hasLoadedPdfDocument();
+  const controlsLocked = pdfExportInProgress || sessionRestoreInProgress;
+  const currentPage = hasPdf ? pdfPageNumber : 0;
+  const totalPages = hasPdf ? Number(pdfDocument.numPages) : 0;
+  const indicatorText = hasPdf
+    ? `${currentPage} / ${totalPages}`
+    : "- / -";
+
+  documentLoadButton.disabled = controlsLocked;
+  pdfPrevPageButton.disabled = !hasPdf || controlsLocked || currentPage <= 1;
+  pdfNextPageButton.disabled = !hasPdf || controlsLocked || currentPage >= totalPages;
+  if (exportAnnotatedPdfButton) {
+    exportAnnotatedPdfButton.disabled = !hasPdf || controlsLocked;
+  }
+  removeDocumentButton.disabled = !hasPdf || controlsLocked;
+  pdfPageIndicator.textContent = indicatorText;
+
+  if (toolbarPdfPageIndicator) {
+    toolbarPdfPageIndicator.textContent = indicatorText;
+    toolbarPdfPageIndicator.classList.toggle("is-empty", !hasPdf);
+  }
+
+  updateUndoRedoUI();
+  updateOverlayModeButton();
+}
+
+function configurePdfWorker() {
+  if (isPdfWorkerConfigured) {
+    return true;
+  }
+
+  if (!window.pdfjsLib || !window.pdfjsLib.GlobalWorkerOptions) {
+    setDocumentStatus("PDF engine is unavailable. Refresh and try again.", "error");
+    return false;
+  }
+
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
+  isPdfWorkerConfigured = true;
+  return true;
+}
+
+function normalizeFileExtension(fileName) {
+  if (typeof fileName !== "string") {
+    return "";
+  }
+
+  const lastDot = fileName.lastIndexOf(".");
+  if (lastDot < 0 || lastDot >= fileName.length - 1) {
+    return "";
+  }
+
+  return fileName.slice(lastDot + 1).trim().toLowerCase();
+}
+
+function isPdfFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "pdf" || file.type === "application/pdf";
+}
+
+function isPptFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "ppt"
+    || extension === "pptx"
+    || file.type === "application/vnd.ms-powerpoint"
+    || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function openSessionDatabase() {
+  if (!window.indexedDB) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    let request;
+    try {
+      request = window.indexedDB.open(SESSION_DB_NAME, 1);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(SESSION_DB_STORE)) {
+        database.createObjectStore(SESSION_DB_STORE);
+      }
+    };
+
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Failed to open session database."));
+    };
+  });
+}
+
+async function saveSessionPdfBytes(pdfBytes) {
+  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
+    return;
+  }
+
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF save aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to save PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.put(pdfBytes, SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function loadSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return null;
+    }
+
+    const value = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readonly");
+      transaction.onabort = () => reject(transaction.error || new Error("PDF read aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to read PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      const request = store.get(SESSION_DB_PDF_KEY);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("Failed to read PDF data."));
+    });
+
+    if (!value) {
+      return null;
+    }
+    if (value instanceof Uint8Array) {
+      return new Uint8Array(value);
+    }
+    if (value instanceof ArrayBuffer) {
+      return new Uint8Array(value);
+    }
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function clearSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF clear aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to clear PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.delete(SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+function serializeSessionSnapshot() {
+  saveCurrentStrokeState();
+
+  const boardStrokes = cloneStrokeCollection(boardStrokeSnapshot);
+  const pdfPages = Array.from(pdfPageStrokeSnapshots.entries())
+    .map(([pageNumber, pageStrokes]) => {
+      return [Math.max(1, Math.round(Number(pageNumber) || 1)), cloneStrokeCollection(pageStrokes)];
+    })
+    .filter(([, pageStrokes]) => pageStrokes.length > 0)
+    .sort((a, b) => a[0] - b[0]);
+
+  return {
+    version: SESSION_STORAGE_VERSION,
+    savedAt: Date.now(),
+    hasPdf: hasLoadedPdfDocument(),
+    loadedDocumentName,
+    pdfPageNumber: Math.max(1, Math.round(Number(pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPages
+  };
+}
+
+function scheduleSessionAutosave() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+
+  sessionAutosaveTimer = window.setTimeout(() => {
+    sessionAutosaveTimer = null;
+    persistSessionState();
+  }, SESSION_AUTOSAVE_DELAY_MS);
+}
+
+function parseSessionSnapshot(rawValue) {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+
+  if (Number(rawValue.version) !== SESSION_STORAGE_VERSION) {
+    return null;
+  }
+
+  const boardStrokes = normalizeStrokeCollection(rawValue.boardStrokes);
+  const pdfPageMap = new Map();
+
+  if (Array.isArray(rawValue.pdfPages)) {
+    for (const entry of rawValue.pdfPages) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        continue;
+      }
+
+      const pageNumber = Math.max(1, Math.round(Number(entry[0]) || 1));
+      const pageStrokes = normalizeStrokeCollection(entry[1]);
+      if (pageStrokes.length <= 0) {
+        continue;
+      }
+
+      pdfPageMap.set(pageNumber, pageStrokes);
+    }
+  }
+
+  return {
+    hasPdf: Boolean(rawValue.hasPdf),
+    loadedDocumentName: typeof rawValue.loadedDocumentName === "string"
+      ? rawValue.loadedDocumentName
+      : "",
+    pdfPageNumber: Math.max(1, Math.round(Number(rawValue.pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPageMap
+  };
+}
+
+async function persistSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  try {
+    const snapshot = serializeSessionSnapshot();
+    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+
+    if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
+      if (sessionPdfBytesDirty) {
+        await saveSessionPdfBytes(loadedPdfBytes);
+        sessionPdfBytesDirty = false;
+      }
+    } else {
+      await clearSessionPdfBytes();
+      sessionPdfBytesDirty = false;
+    }
+  } catch (error) {
+    // localStorage/IndexedDB can be unavailable; skip recovery persistence.
+  }
+}
+
+async function restoreSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  sessionRestoreInProgress = true;
+  updateUndoRedoUI();
+
+  try {
+    const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const snapshot = parseSessionSnapshot(rawSnapshot ? JSON.parse(rawSnapshot) : null);
+    if (!snapshot) {
+      return;
+    }
+
+    boardStrokeSnapshot = cloneStrokeCollection(snapshot.boardStrokes);
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+    restoreCurrentStrokeState();
+
+    if (!snapshot.hasPdf) {
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredPdfBytes = await loadSessionPdfBytes();
+    if (!(recoveredPdfBytes instanceof Uint8Array) || recoveredPdfBytes.length <= 0) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredFileName = snapshot.loadedDocumentName || "recovered.pdf";
+    const recoveredFile = new File([recoveredPdfBytes], recoveredFileName, { type: "application/pdf" });
+    await loadPdfFromFile(recoveredFile);
+    if (!hasLoadedPdfDocument()) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      return;
+    }
+
+    // Reload saved page-level annotations after document load resets snapshots.
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+
+    const targetPage = Math.min(
+      Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
+      snapshot.pdfPageNumber
+    );
+    await renderPdfPage(targetPage);
+    setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
+    clearAllStrokeHistory();
+    updateUndoRedoUI();
+  } catch (error) {
+    // Ignore recovery failures and continue with a clean runtime state.
+  } finally {
+    sessionRestoreInProgress = false;
+    updatePdfNavigationUI();
+  }
+}
+
+function getAnnotatedPdfFileName() {
+  const rawName = typeof loadedDocumentName === "string"
+    ? loadedDocumentName.trim()
+    : "";
+  const baseName = rawName
+    ? rawName.replace(/\.pdf$/i, "")
+    : "board";
+  const safeName = baseName
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .trim();
+  return `${safeName || "board"}-annotated.pdf`;
+}
+
+function downloadBlobFile(blob, fileName) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl);
+  }, 1000);
+}
+
+function canvasToJpegBytes(targetCanvas, quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    targetCanvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error("Could not encode JPEG image."));
+        return;
+      }
+
+      try {
+        const buffer = await blob.arrayBuffer();
+        resolve(new Uint8Array(buffer));
+      } catch (error) {
+        reject(error);
+      }
+    }, "image/jpeg", quality);
+  });
+}
+
+async function drawPdfPageToContext(pageNumber, targetContext, targetWidth, targetHeight) {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  const page = await pdfDocument.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const fitScale = Math.min(
+    Math.max(1, targetWidth) / baseViewport.width,
+    Math.max(1, targetHeight) / baseViewport.height
+  );
+  const viewport = page.getViewport({ scale: fitScale });
+
+  const rasterCanvas = document.createElement("canvas");
+  rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+  rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+  const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+  if (!rasterContext) {
+    throw new Error("Could not create export rendering context.");
+  }
+
+  rasterContext.imageSmoothingEnabled = true;
+  rasterContext.imageSmoothingQuality = "high";
+
+  const renderTask = page.render({
+    canvasContext: rasterContext,
+    viewport
+  });
+  await renderTask.promise;
+
+  const drawWidth = Math.max(1, Math.floor(rasterCanvas.width));
+  const drawHeight = Math.max(1, Math.floor(rasterCanvas.height));
+  const drawX = Math.floor((targetWidth - drawWidth) / 2);
+  const drawY = Math.floor((targetHeight - drawHeight) / 2);
+
+  targetContext.imageSmoothingEnabled = true;
+  targetContext.imageSmoothingQuality = "high";
+  targetContext.drawImage(rasterCanvas, drawX, drawY, drawWidth, drawHeight);
+}
+
+function clearPdfRenderDebounce() {
+  if (pdfRenderDebounceTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(pdfRenderDebounceTimer);
+  pdfRenderDebounceTimer = null;
+}
+
+function stopPdfRenderTask() {
+  if (!pdfRenderTask) {
+    return;
+  }
+
+  try {
+    pdfRenderTask.cancel();
+  } catch (error) {
+    // Ignore cancellation errors.
+  }
+
+  pdfRenderTask = null;
 }
 
 function getDefaultToolbarFloatPosition() {
@@ -864,6 +1853,7 @@ function applyBoardColor(color, persist = true) {
 
   boardColorInput.value = normalized;
   setBoardColor(normalized);
+  renderBoardBackground();
   updateBoardColorTriggerPreview(normalized);
   if (persist) {
     saveStoredColor(LAST_BOARD_COLOR_STORAGE_KEY, normalized);
@@ -1003,6 +1993,185 @@ function clonePoint(point) {
   return { x: point.x, y: point.y };
 }
 
+function cloneStroke(stroke) {
+  return {
+    ...stroke,
+    points: Array.isArray(stroke.points) ? stroke.points.map(clonePoint) : []
+  };
+}
+
+function cloneStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return [];
+  }
+
+  return collection
+    .filter((stroke) => stroke && Array.isArray(stroke.points) && stroke.points.length > 0)
+    .map(cloneStroke);
+}
+
+function normalizeStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length <= 0) {
+    return [];
+  }
+
+  const normalized = [];
+  for (const sourceStroke of collection) {
+    if (!sourceStroke || !Array.isArray(sourceStroke.points)) {
+      continue;
+    }
+
+    const points = [];
+    for (const sourcePoint of sourceStroke.points) {
+      const x = Number(sourcePoint && sourcePoint.x);
+      const y = Number(sourcePoint && sourcePoint.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+
+      points.push({ x, y });
+    }
+
+    if (points.length <= 0) {
+      continue;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+
+    normalized.push({
+      kind: sourceStroke.kind === "pixel-eraser" ? "pixel-eraser" : "pen",
+      color: normalizeHexColor(sourceStroke.color) || "#111111",
+      widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
+      points,
+      minX,
+      minY,
+      maxX,
+      maxY
+    });
+  }
+
+  return normalized;
+}
+
+function saveUndoSnapshotForCurrentContext() {
+  const entry = getOrCreateStrokeHistoryEntry();
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  entry.redo.length = 0;
+  updateUndoRedoUI();
+}
+
+function captureUndoForStrokeMutation() {
+  if (strokeEraserActive) {
+    if (!strokeEraserHistoryArmed) {
+      return;
+    }
+    strokeEraserHistoryArmed = false;
+  }
+
+  saveUndoSnapshotForCurrentContext();
+}
+
+function finalizeStrokeMutation() {
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+}
+
+function undoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.undo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.redo, cloneStrokeCollection(strokes));
+  const previousSnapshot = entry.undo.pop();
+  replaceVisibleStrokes(previousSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function redoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.redo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  const nextSnapshot = entry.redo.pop();
+  replaceVisibleStrokes(nextSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function replaceVisibleStrokes(collection) {
+  strokes.length = 0;
+  const nextStrokes = cloneStrokeCollection(collection);
+  if (nextStrokes.length > 0) {
+    strokes.push(...nextStrokes);
+  }
+  redrawAllStrokes();
+}
+
+function savePdfPageStrokeSnapshot(pageNumber) {
+  const numericPage = Math.round(Number(pageNumber));
+  if (!Number.isFinite(numericPage) || numericPage < 1) {
+    return;
+  }
+
+  const snapshot = cloneStrokeCollection(strokes);
+  if (snapshot.length === 0) {
+    pdfPageStrokeSnapshots.delete(numericPage);
+    return;
+  }
+
+  pdfPageStrokeSnapshots.set(numericPage, snapshot);
+}
+
+function saveCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    return;
+  }
+
+  boardStrokeSnapshot = cloneStrokeCollection(strokes);
+}
+
+function restoreCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    const numericPage = Math.round(Number(pdfPageNumber));
+    const snapshot = Number.isFinite(numericPage) && numericPage >= 1
+      ? (pdfPageStrokeSnapshots.get(numericPage) || [])
+      : [];
+    replaceVisibleStrokes(snapshot);
+    return;
+  }
+
+  replaceVisibleStrokes(boardStrokeSnapshot);
+}
+
 function createStrokeRecord(kind, startPoint) {
   const point = clonePoint(startPoint);
   const sourceWidth = kind === "pixel-eraser"
@@ -1031,22 +2200,24 @@ function appendPointToStroke(stroke, point) {
   stroke.maxY = Math.max(stroke.maxY, next.y);
 }
 
-function drawStrokePath(stroke) {
+function drawStrokePath(stroke, targetContext = ctx) {
   if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) {
     return;
   }
 
   const isPixelEraser = stroke.kind === "pixel-eraser";
-  ctx.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
-  ctx.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
-  ctx.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
-  ctx.lineWidth = Math.max(1, Number(stroke.widthPx));
+  targetContext.lineJoin = "round";
+  targetContext.lineCap = "round";
+  targetContext.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
+  targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.lineWidth = Math.max(1, Number(stroke.widthPx));
 
   if (stroke.points.length === 1) {
     const point = stroke.points[0];
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, ctx.lineWidth / 2, 0, Math.PI * 2);
-    ctx.fill();
+    targetContext.beginPath();
+    targetContext.arc(point.x, point.y, targetContext.lineWidth / 2, 0, Math.PI * 2);
+    targetContext.fill();
     return;
   }
 
@@ -1054,18 +2225,18 @@ function drawStrokePath(stroke) {
   let previous = points[0];
   let previousMidpoint = previous;
 
-  ctx.beginPath();
-  ctx.moveTo(previousMidpoint.x, previousMidpoint.y);
+  targetContext.beginPath();
+  targetContext.moveTo(previousMidpoint.x, previousMidpoint.y);
 
   for (let index = 1; index < points.length; index += 1) {
     const current = points[index];
     const midpoint = getMidpoint(previous, current);
-    ctx.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
+    targetContext.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
     previous = current;
     previousMidpoint = midpoint;
   }
 
-  ctx.stroke();
+  targetContext.stroke();
 }
 
 function redrawAllStrokes() {
@@ -1078,14 +2249,14 @@ function redrawAllStrokes() {
   }
 }
 
-function scaleStoredStrokes(scaleX, scaleY) {
-  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+function scaleStrokeCollection(collection, scaleX, scaleY) {
+  if (!Array.isArray(collection) || collection.length === 0) {
     return;
   }
 
   const widthScale = (scaleX + scaleY) / 2;
 
-  for (const stroke of strokes) {
+  for (const stroke of collection) {
     if (!stroke.points.length) {
       continue;
     }
@@ -1105,6 +2276,19 @@ function scaleStoredStrokes(scaleX, scaleY) {
     }
 
     stroke.widthPx = Math.max(1, stroke.widthPx * widthScale);
+  }
+}
+
+function scaleStoredStrokes(scaleX, scaleY) {
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+    return;
+  }
+
+  scaleStrokeCollection(strokes, scaleX, scaleY);
+  scaleStrokeCollection(boardStrokeSnapshot, scaleX, scaleY);
+
+  for (const snapshot of pdfPageStrokeSnapshots.values()) {
+    scaleStrokeCollection(snapshot, scaleX, scaleY);
   }
 }
 
@@ -1185,8 +2369,10 @@ function eraseTopStrokeAtPoint(point) {
     return false;
   }
 
+  captureUndoForStrokeMutation();
   strokes.splice(index, 1);
   redrawAllStrokes();
+  finalizeStrokeMutation();
   return true;
 }
 
@@ -1212,21 +2398,25 @@ function eraseStrokesAlongSegment(startPoint, endPoint) {
     return false;
   }
 
+  captureUndoForStrokeMutation();
   const sortedIndexes = Array.from(removedIndexes).sort((a, b) => b - a);
   for (const index of sortedIndexes) {
     strokes.splice(index, 1);
   }
 
   redrawAllStrokes();
+  finalizeStrokeMutation();
   return true;
 }
 
 function startStrokeErasing(event) {
   strokeEraserActive = true;
+  strokeEraserHistoryArmed = true;
   strokeEraserPointerId = event.pointerId;
   strokeEraserLastPoint = getCanvasPoint(event);
   eraseTopStrokeAtPoint(strokeEraserLastPoint);
   canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
 }
 
 function continueStrokeErasing(event) {
@@ -1245,12 +2435,15 @@ function stopStrokeErasing(event) {
   }
 
   strokeEraserActive = false;
+  strokeEraserHistoryArmed = false;
   strokeEraserPointerId = null;
   strokeEraserLastPoint = null;
 
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
+
+  updateUndoRedoUI();
 }
 
 function updateToolUI() {
@@ -1266,19 +2459,486 @@ function updateToolUI() {
   canvas.style.cursor = tool === "pen" ? "crosshair" : "cell";
 }
 
+function renderBoardBackground() {
+  if (backgroundCanvas.width <= 0 || backgroundCanvas.height <= 0) {
+    return;
+  }
+
+  backgroundCtx.setTransform(1, 0, 0, 1, 0, 0);
+  backgroundCtx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  if (overlayMode) {
+    return;
+  }
+
+  backgroundCtx.fillStyle = normalizeHexColor(boardColorInput.value) || "#ffffff";
+  backgroundCtx.fillRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+
+  if (!pdfPageRasterCanvas || pdfPageRasterCanvas.width <= 0 || pdfPageRasterCanvas.height <= 0) {
+    return;
+  }
+
+  const fitScale = Math.min(
+    backgroundCanvas.width / pdfPageRasterCanvas.width,
+    backgroundCanvas.height / pdfPageRasterCanvas.height
+  );
+  const drawWidth = Math.max(1, Math.floor(pdfPageRasterCanvas.width * fitScale));
+  const drawHeight = Math.max(1, Math.floor(pdfPageRasterCanvas.height * fitScale));
+  const drawX = Math.floor((backgroundCanvas.width - drawWidth) / 2);
+  const drawY = Math.floor((backgroundCanvas.height - drawHeight) / 2);
+
+  backgroundCtx.imageSmoothingEnabled = true;
+  backgroundCtx.imageSmoothingQuality = "high";
+  backgroundCtx.drawImage(
+    pdfPageRasterCanvas,
+    0,
+    0,
+    pdfPageRasterCanvas.width,
+    pdfPageRasterCanvas.height,
+    drawX,
+    drawY,
+    drawWidth,
+    drawHeight
+  );
+}
+
+async function releasePdfDocument(documentRef) {
+  if (!documentRef || typeof documentRef.destroy !== "function") {
+    return;
+  }
+
+  try {
+    await documentRef.destroy();
+  } catch (error) {
+    // Ignore destroy errors.
+  }
+}
+
+async function unloadPdfDocument(updateStatus = true) {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  saveCurrentStrokeState();
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+  pdfRenderToken += 1;
+  pdfLoadingToken += 1;
+
+  const previousDocument = pdfDocument;
+  pdfDocument = null;
+  pdfPageNumber = 1;
+  pdfPageRasterCanvas = null;
+  loadedDocumentName = "";
+  loadedPdfBytes = null;
+  sessionPdfBytesDirty = false;
+  pdfPageStrokeSnapshots.clear();
+
+  restoreCurrentStrokeState();
+  clearAllStrokeHistory();
+  renderBoardBackground();
+  updatePdfNavigationUI();
+  scheduleSessionAutosave();
+
+  if (updateStatus) {
+    setDocumentStatus("No document");
+  }
+
+  await releasePdfDocument(previousDocument);
+}
+
+async function renderPdfPage(pageNumber) {
+  if (!hasLoadedPdfDocument()) {
+    pdfPageRasterCanvas = null;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+
+  const clampedPage = Math.min(
+    Number(pdfDocument.numPages),
+    Math.max(1, Math.round(Number(pageNumber) || 1))
+  );
+  const pageChanged = clampedPage !== pdfPageNumber;
+  if (clampedPage !== pdfPageNumber) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    pdfPageNumber = clampedPage;
+    restoreCurrentStrokeState();
+  } else {
+    pdfPageNumber = clampedPage;
+  }
+  updatePdfNavigationUI();
+  if (pageChanged) {
+    scheduleSessionAutosave();
+  }
+
+  const token = ++pdfRenderToken;
+  const statusName = loadedDocumentName || "PDF";
+  setDocumentStatus(`${statusName}: rendering page...`);
+
+  try {
+    const page = await pdfDocument.getPage(clampedPage);
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    const baseViewport = page.getViewport({ scale: 1 });
+    const maxWidth = Math.max(1, backgroundCanvas.width);
+    const maxHeight = Math.max(1, backgroundCanvas.height);
+    const fitScale = Math.min(maxWidth / baseViewport.width, maxHeight / baseViewport.height);
+    const viewport = page.getViewport({ scale: fitScale });
+
+    const rasterCanvas = document.createElement("canvas");
+    rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+    rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+    const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+    if (!rasterContext) {
+      setDocumentStatus("Could not create a PDF rendering context.", "error");
+      return;
+    }
+    rasterContext.imageSmoothingEnabled = true;
+    rasterContext.imageSmoothingQuality = "high";
+
+    pdfRenderTask = page.render({
+      canvasContext: rasterContext,
+      viewport
+    });
+    await pdfRenderTask.promise;
+
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    pdfPageRasterCanvas = rasterCanvas;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
+  } catch (error) {
+    if (error && error.name === "RenderingCancelledException") {
+      return;
+    }
+
+    setDocumentStatus("Failed to render PDF page.", "error");
+  } finally {
+    if (token === pdfRenderToken) {
+      pdfRenderTask = null;
+    }
+  }
+}
+
+async function exportAnnotatedPdf() {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  if (!hasLoadedPdfDocument()) {
+    setDocumentStatus("Load a PDF first.", "warning");
+    return;
+  }
+
+  if (!window.PDFLib || !window.PDFLib.PDFDocument) {
+    setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
+    return;
+  }
+
+  saveCurrentStrokeState();
+  pdfExportInProgress = true;
+  updatePdfNavigationUI();
+
+  const statusName = loadedDocumentName || "PDF";
+  const totalPages = Math.max(1, Number(pdfDocument.numPages) || 1);
+  const outputFileName = getAnnotatedPdfFileName();
+
+  try {
+    const exportWidth = Math.max(1, Math.floor(backgroundCanvas.width));
+    const exportHeight = Math.max(1, Math.floor(backgroundCanvas.height));
+    const boardColor = normalizeHexColor(boardColorInput.value) || "#ffffff";
+    const outputPdf = await window.PDFLib.PDFDocument.create();
+
+    const mergedCanvas = document.createElement("canvas");
+    mergedCanvas.width = exportWidth;
+    mergedCanvas.height = exportHeight;
+    const mergedContext = mergedCanvas.getContext("2d", { alpha: false });
+    if (!mergedContext) {
+      throw new Error("Could not create output context.");
+    }
+
+    const annotationCanvas = document.createElement("canvas");
+    annotationCanvas.width = exportWidth;
+    annotationCanvas.height = exportHeight;
+    const annotationContext = annotationCanvas.getContext("2d", { alpha: true });
+    if (!annotationContext) {
+      throw new Error("Could not create annotation context.");
+    }
+
+    for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+      setDocumentStatus(`${statusName}: exporting ${pageNumber}/${totalPages}...`);
+
+      mergedContext.setTransform(1, 0, 0, 1, 0, 0);
+      mergedContext.globalCompositeOperation = "source-over";
+      mergedContext.clearRect(0, 0, exportWidth, exportHeight);
+      mergedContext.fillStyle = boardColor;
+      mergedContext.fillRect(0, 0, exportWidth, exportHeight);
+
+      await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
+
+      annotationContext.setTransform(1, 0, 0, 1, 0, 0);
+      annotationContext.globalCompositeOperation = "source-over";
+      annotationContext.clearRect(0, 0, exportWidth, exportHeight);
+      annotationContext.lineJoin = "round";
+      annotationContext.lineCap = "round";
+
+      const pageStrokes = pdfPageStrokeSnapshots.get(pageNumber) || [];
+      for (const stroke of pageStrokes) {
+        drawStrokePath(stroke, annotationContext);
+      }
+
+      annotationContext.globalCompositeOperation = "source-over";
+      mergedContext.drawImage(annotationCanvas, 0, 0);
+
+      const pageImageBytes = await canvasToJpegBytes(mergedCanvas);
+      const embeddedImage = await outputPdf.embedJpg(pageImageBytes);
+      const outputPage = outputPdf.addPage([exportWidth, exportHeight]);
+      outputPage.drawImage(embeddedImage, {
+        x: 0,
+        y: 0,
+        width: exportWidth,
+        height: exportHeight
+      });
+    }
+
+    const outputBytes = await outputPdf.save();
+    const outputBlob = new Blob([outputBytes], { type: "application/pdf" });
+    downloadBlobFile(outputBlob, outputFileName);
+    setDocumentStatus(`${outputFileName} saved.`, "success");
+  } catch (error) {
+    setDocumentStatus("Failed to save annotated PDF.", "error");
+  } finally {
+    pdfExportInProgress = false;
+    updatePdfNavigationUI();
+  }
+}
+
+function schedulePdfPageRerender() {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  pdfRenderDebounceTimer = window.setTimeout(() => {
+    pdfRenderDebounceTimer = null;
+    renderPdfPage(pdfPageNumber);
+  }, 120);
+}
+
+async function loadPdfFromFile(file) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    return;
+  }
+
+  if (!configurePdfWorker()) {
+    return;
+  }
+
+  const token = ++pdfLoadingToken;
+  const fileName = file.name || "PDF";
+  setDocumentStatus(`${fileName}: loading...`);
+
+  try {
+    const source = await file.arrayBuffer();
+    if (token !== pdfLoadingToken) {
+      return;
+    }
+
+    let nextDocument = null;
+    let usedCompatibilityMode = false;
+    const sourceBytes = new Uint8Array(source);
+    let lastLoadError = null;
+
+    const loadAttempts = [
+      {},
+      { disableWorker: true },
+      { disableWorker: true, useWorkerFetch: false, isEvalSupported: false }
+    ];
+
+    for (let index = 0; index < loadAttempts.length; index += 1) {
+      try {
+        // pdf.js may detach transferred buffers, so each attempt gets a fresh copy.
+        const loadingTask = window.pdfjsLib.getDocument({
+          ...loadAttempts[index],
+          data: sourceBytes.slice()
+        });
+        nextDocument = await loadingTask.promise;
+        usedCompatibilityMode = index > 0;
+        break;
+      } catch (attemptError) {
+        lastLoadError = attemptError;
+      }
+    }
+
+    if (!nextDocument) {
+      throw lastLoadError || new Error("PDF load failed.");
+    }
+
+    if (token !== pdfLoadingToken) {
+      await releasePdfDocument(nextDocument);
+      return;
+    }
+
+    saveCurrentStrokeState();
+    const previousDocument = pdfDocument;
+    clearPdfRenderDebounce();
+    stopPdfRenderTask();
+
+    pdfPageStrokeSnapshots.clear();
+    pdfDocument = nextDocument;
+    pdfPageNumber = 1;
+    pdfPageRasterCanvas = null;
+    loadedDocumentName = fileName;
+    loadedPdfBytes = sourceBytes.slice();
+    sessionPdfBytesDirty = true;
+    restoreCurrentStrokeState();
+
+    await renderPdfPage(1);
+    if (usedCompatibilityMode) {
+      setDocumentStatus(`${fileName}: loaded (compatibility mode).`, "warning");
+    }
+    if (pdfPageRasterCanvas) {
+      closeDocumentPopup();
+    }
+    await releasePdfDocument(previousDocument);
+    clearAllStrokeHistory();
+    scheduleSessionAutosave();
+  } catch (error) {
+    if (token !== pdfLoadingToken) {
+      return;
+    }
+
+    const reason = error && typeof error.message === "string"
+      ? error.message.trim()
+      : "";
+    if (reason && /password/i.test(reason)) {
+      setDocumentStatus("Password-protected PDF is not supported.", "warning");
+    } else {
+      const detail = reason ? ` (${reason.slice(0, 80)})` : "";
+      setDocumentStatus(`Unable to open this PDF file. Try another file.${detail}`, "error");
+    }
+  } finally {
+    updatePdfNavigationUI();
+  }
+}
+
+async function handleDocumentInputChange(event) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    event.target.value = "";
+    return;
+  }
+
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) {
+    return;
+  }
+
+  if (isPdfFile(file)) {
+    await loadPdfFromFile(file);
+    return;
+  }
+
+  if (isPptFile(file)) {
+    setDocumentStatus("PPT/PPTX cannot be rendered directly. Convert to PDF and load again.", "warning");
+    return;
+  }
+
+  setDocumentStatus("Unsupported file type. Choose PDF or PPT/PPTX.", "error");
+}
+
+function goToPreviousPdfPage() {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber - 1);
+}
+
+function goToNextPdfPage() {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber + 1);
+}
+
+function requestDocumentFileSelection() {
+  if (pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (!configurePdfWorker()) {
+    return;
+  }
+
+  documentInput.value = "";
+
+  try {
+    documentInput.click();
+    return;
+  } catch (error) {
+    // Fallback for runtimes that block synthetic click.
+  }
+
+  if (typeof documentInput.showPicker === "function") {
+    try {
+      documentInput.showPicker();
+      return;
+    } catch (error) {
+      // ignore and surface unified error below.
+    }
+  }
+
+  setDocumentStatus("Unable to open file picker. Try again.", "error");
+}
+
+function isEditableEventTarget(target) {
+  if (!target) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = String(target.tagName || "").toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select";
+}
+
 function setCanvasSize() {
   const rect = canvas.getBoundingClientRect();
   const previousWidth = canvas.width;
   const previousHeight = canvas.height;
+  const previousBackgroundWidth = backgroundCanvas.width;
+  const previousBackgroundHeight = backgroundCanvas.height;
 
   pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
   const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
   const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
 
-  if (nextWidth === previousWidth && nextHeight === previousHeight) {
+  if (
+    nextWidth === previousWidth
+    && nextHeight === previousHeight
+    && nextWidth === previousBackgroundWidth
+    && nextHeight === previousBackgroundHeight
+  ) {
     return;
   }
 
+  backgroundCanvas.width = nextWidth;
+  backgroundCanvas.height = nextHeight;
   canvas.width = nextWidth;
   canvas.height = nextHeight;
 
@@ -1287,10 +2947,14 @@ function setCanvasSize() {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  if (previousWidth > 0 && previousHeight > 0 && strokes.length > 0) {
+  if (previousWidth > 0 && previousHeight > 0) {
     scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
     redrawAllStrokes();
+    scheduleSessionAutosave();
   }
+
+  renderBoardBackground();
+  schedulePdfPageRerender();
 }
 
 function getCanvasPoint(event) {
@@ -1502,6 +3166,7 @@ function startDrawing(event) {
 
   applyCurrentBrush();
   canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
 }
 
 function draw(event) {
@@ -1531,7 +3196,9 @@ function stopDrawing(event) {
   }
 
   if (activeStroke && activeStroke.points.length > 0) {
+    saveUndoSnapshotForCurrentContext();
     strokes.push(activeStroke);
+    finalizeStrokeMutation();
   }
 
   drawing = false;
@@ -1551,6 +3218,8 @@ function stopDrawing(event) {
     setCanvasSize();
     pendingQualityResize = false;
   }
+
+  updateUndoRedoUI();
 }
 
 function handlePointerDown(event) {
@@ -1584,12 +3253,19 @@ function handlePointerEnd(event) {
 }
 
 function clearBoard() {
+  if (strokes.length <= 0) {
+    return;
+  }
+
+  saveUndoSnapshotForCurrentContext();
   strokes.length = 0;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  finalizeStrokeMutation();
 }
 
 function setBoardColor(color) {
-  canvas.style.backgroundColor = color;
+  canvas.style.backgroundColor = "transparent";
+  backgroundCanvas.style.backgroundColor = color;
 }
 
 penToolButton.addEventListener("click", () => {
@@ -1624,11 +3300,61 @@ strokeEraserModeButton.addEventListener("click", () => {
   updateToolUI();
 });
 
+if (undoButton) {
+  undoButton.addEventListener("click", () => {
+    undoStrokeAction();
+  });
+}
+
+if (redoButton) {
+  redoButton.addEventListener("click", () => {
+    redoStrokeAction();
+  });
+}
+
 clearButton.addEventListener("click", clearBoard);
 fullscreenToggleButton.addEventListener("click", toggleFullscreen);
+if (overlayModeToggleButton) {
+  overlayModeToggleButton.addEventListener("click", () => {
+    toggleOverlayMode();
+  });
+}
+openDocumentPopupButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = !isDocumentPopupOpen();
+  setDocumentPopupOpen(open);
+
+  if (open) {
+    closeBoardColorPopup();
+    closeEraserToolPopup();
+    closePresetHelp();
+  }
+});
+
+documentLoadButton.addEventListener("click", requestDocumentFileSelection);
+pdfPrevPageButton.addEventListener("click", goToPreviousPdfPage);
+pdfNextPageButton.addEventListener("click", goToNextPdfPage);
+if (exportAnnotatedPdfButton) {
+  exportAnnotatedPdfButton.addEventListener("click", () => {
+    exportAnnotatedPdf();
+  });
+}
+removeDocumentButton.addEventListener("click", () => {
+  unloadPdfDocument(true);
+});
+
+documentInput.addEventListener("change", handleDocumentInputChange);
 openBoardColorPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   setBoardColorPopupOpen(!isBoardColorPopupOpen());
+});
+
+documentPopup.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+});
+
+documentPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
 });
 
 boardColorPopup.addEventListener("click", (event) => {
@@ -1724,7 +3450,13 @@ canvas.addEventListener("pointerleave", (event) => {
   }
 });
 
-window.addEventListener("resize", handleViewportResize);
+window.addEventListener("resize", () => {
+  handleViewportResize();
+  syncFullscreenUiFromNativeWindow();
+});
+window.addEventListener("focus", () => {
+  syncFullscreenUiFromNativeWindow();
+});
 document.addEventListener("fullscreenchange", () => {
   updateFullscreenButtons();
   handleViewportResize();
@@ -1738,6 +3470,9 @@ document.addEventListener("MSFullscreenChange", () => {
   handleViewportResize();
 });
 document.addEventListener("pointerdown", (event) => {
+  if (isDocumentPopupOpen() && !documentEditor.contains(event.target)) {
+    closeDocumentPopup();
+  }
   if (isBoardColorPopupOpen() && !boardColorEditor.contains(event.target)) {
     closeBoardColorPopup();
   }
@@ -1749,7 +3484,52 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  const editableTarget = isEditableEventTarget(event.target);
+  const hasMeta = event.ctrlKey || event.metaKey;
+
+  if (!editableTarget && hasMeta && !event.altKey && !event.repeat) {
+    const key = String(event.key || "").toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redoStrokeAction();
+      } else {
+        undoStrokeAction();
+      }
+      return;
+    }
+
+    if (key === "y") {
+      event.preventDefault();
+      redoStrokeAction();
+      return;
+    }
+  }
+
+  if (!editableTarget && event.key === "F8" && isOverlayModeSupported()) {
+    event.preventDefault();
+    toggleOverlayMode();
+    return;
+  }
+
+  if (!editableTarget && hasLoadedPdfDocument()) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      goToPreviousPdfPage();
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      goToNextPdfPage();
+      return;
+    }
+  }
+
   if (event.key === "Escape") {
+    if (isDocumentPopupOpen()) {
+      closeDocumentPopup();
+    }
     if (isBoardColorPopupOpen()) {
       closeBoardColorPopup();
     }
@@ -1766,9 +3546,41 @@ initToolbarLayout();
 setCanvasSize();
 initPresets();
 initLastUsedSettings();
+app.dataset.runtimePlatform = runtimePlatform;
+closeDocumentPopup();
 closeBoardColorPopup();
 closeEraserToolPopup();
 closePresetHelp();
+setDocumentStatus("No document");
+updatePdfNavigationUI();
 updateFullscreenButtons();
+syncFullscreenUiFromNativeWindow();
 updateToolUI();
+updateUndoRedoUI();
+updateOverlayModeButton();
+bootstrapRuntimeBridgeSync();
+if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
+  setDocumentStatus("Desktop bridge not detected in this build. Rebuild Tauri app and run latest exe.", "warning");
+}
+restoreSessionState();
+
+window.addEventListener("beforeunload", () => {
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
 

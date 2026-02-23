@@ -7,6 +7,7 @@
   --toolbar-padding-y: 10px;
   --toolbar-border-size: 1px;
   --toolbar-action-icon-size: 18px;
+  --toolbar-dock-preview-size: 48px;
 }
 
 * {
@@ -120,9 +121,13 @@ body {
 
 .app.toolbar-placement-floating .toolbar > #toolbarDragHandle,
 .app.toolbar-placement-floating .toolbar > .tool-cluster,
+.app.toolbar-placement-floating .toolbar > #undoButton,
+.app.toolbar-placement-floating .toolbar > #redoButton,
 .app.toolbar-placement-floating .toolbar > #clearButton,
 .app.toolbar-placement-floating .toolbar > #fullscreenToggle,
-.app.toolbar-placement-floating .toolbar > .preset-group {
+.app.toolbar-placement-floating .toolbar > #overlayModeToggle,
+.app.toolbar-placement-floating .toolbar > .preset-group,
+.app.toolbar-placement-floating .toolbar > .toolbar-pdf-page-indicator {
   display: inline-flex;
 }
 
@@ -253,21 +258,21 @@ body {
   top: 12px;
   left: 12px;
   right: 12px;
-  height: 64px;
+  height: var(--toolbar-dock-preview-size);
 }
 
 .app.toolbar-is-dragging.toolbar-dock-preview-bottom::after {
   bottom: 12px;
   left: 12px;
   right: 12px;
-  height: 64px;
+  height: var(--toolbar-dock-preview-size);
 }
 
 .app.toolbar-is-dragging.toolbar-dock-preview-left::after {
   top: 12px;
   bottom: 12px;
   left: 12px;
-  width: var(--toolbar-side-width);
+  width: var(--toolbar-dock-preview-size);
   height: auto;
 }
 
@@ -275,7 +280,7 @@ body {
   top: 12px;
   bottom: 12px;
   right: 12px;
-  width: var(--toolbar-side-width);
+  width: var(--toolbar-dock-preview-size);
   height: auto;
 }
 
@@ -364,8 +369,12 @@ body {
 
 #penTool,
 #eraserTool,
+#undoButton,
+#redoButton,
 #clearButton,
 #fullscreenToggle,
+#overlayModeToggle,
+#openDocumentPopup,
 #toolbarDragHandle {
   width: var(--toolbar-control-size);
   height: var(--toolbar-control-size);
@@ -376,16 +385,24 @@ body {
 
 #penTool svg,
 #eraserTool svg,
+#undoButton svg,
+#redoButton svg,
 #clearButton svg,
-#fullscreenToggle svg {
+#fullscreenToggle svg,
+#overlayModeToggle svg,
+#openDocumentPopup svg {
   width: var(--toolbar-action-icon-size);
   height: var(--toolbar-action-icon-size);
 }
 
 #penTool svg path,
 #eraserTool svg path,
+#undoButton svg path,
+#redoButton svg path,
 #clearButton svg path,
-#fullscreenToggle svg path {
+#fullscreenToggle svg path,
+#overlayModeToggle svg path,
+#openDocumentPopup svg path {
   stroke-width: 2;
 }
 
@@ -513,6 +530,7 @@ body {
 
 .app.toolbar-placement-right .eraser-tool-popover,
 .app.toolbar-placement-right .board-color-popover,
+.app.toolbar-placement-right .document-popover,
 .app.toolbar-placement-right .preset-help-popover {
   left: auto;
   right: 0;
@@ -664,6 +682,106 @@ body {
   position: relative;
 }
 
+.document-editor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.document-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 230px;
+  border: var(--toolbar-border-size) solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-popover.is-hidden {
+  display: none;
+}
+
+.document-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+}
+
+.document-action-button {
+  width: 100%;
+  border: 1px solid #b7b7b7;
+  background: #ffffff;
+  color: #2d2d2d;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.document-action-button:hover {
+  border-color: #8e8e8e;
+}
+
+.document-action-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.document-remove-button {
+  background: #fafafa;
+}
+
+.document-page-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pdf-page-indicator {
+  min-width: 64px;
+  text-align: center;
+  font-size: 12px;
+  color: #4a4a4a;
+  font-variant-numeric: tabular-nums;
+}
+
+.document-status {
+  margin: 0;
+  min-height: 32px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #555555;
+}
+
+.document-status.is-success {
+  color: #2f5c2f;
+}
+
+.document-status.is-warning {
+  color: #8a5200;
+}
+
+.document-status.is-error {
+  color: #b3261e;
+}
+
 .board-color-trigger {
   border: 0;
   background: transparent;
@@ -742,22 +860,72 @@ body {
   margin-left: 0;
 }
 
+.toolbar-pdf-page-indicator {
+  margin-left: auto;
+  min-width: 62px;
+  border: 1px solid #c2c2c2;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.15;
+  color: #4a4a4a;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar-pdf-page-indicator.is-empty {
+  opacity: 0.62;
+}
+
+.app.toolbar-placement-left .toolbar-pdf-page-indicator,
+.app.toolbar-placement-right .toolbar-pdf-page-indicator,
+.app.toolbar-placement-floating .toolbar-pdf-page-indicator {
+  margin-left: 0;
+  margin-top: auto;
+  min-width: 42px;
+  padding: 1px 6px;
+  font-size: 10px;
+  order: 999;
+}
+
 .board-wrapper {
+  position: relative;
   padding: 0;
   margin: 0;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
 }
 
+#boardBackground,
 #board {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   border: 0;
   border-radius: 0;
-  background: #ffffff;
+}
+
+#boardBackground {
+  z-index: 0;
+  pointer-events: none;
+}
+
+#board {
+  z-index: 1;
+  background: transparent;
   touch-action: none;
   cursor: crosshair;
+}
+
+html.overlay-mode,
+body.overlay-mode,
+.app.overlay-mode {
+  background: transparent;
 }
 
 @media (max-width: 800px) {

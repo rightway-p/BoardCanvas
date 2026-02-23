@@ -1,0 +1,22 @@
+[package]
+name = "boardcanvas"
+version = "0.1.0"
+description = "BoardCanvas desktop app"
+authors = ["BoardCanvas"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.70"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "1.6", features = ["window-all"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+

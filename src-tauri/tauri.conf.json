@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/1",
+  "build": {
+    "beforeBuildCommand": "npm run web:build",
+    "beforeDevCommand": "",
+    "devPath": "../index.html",
+    "distDir": "../dist",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "BoardCanvas",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "title": "BoardCanvas",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "transparent": true
+      }
+    ],
+    "allowlist": {
+      "all": false,
+      "window": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "active": false,
+      "identifier": "com.rightway.boardcanvas"
+    },
+    "security": {
+      "csp": null
+    }
+  }
+}
