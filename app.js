@@ -198,6 +198,12 @@ function getFullscreenElement() {
     || null;
 }
 
+function waitShortDelay(ms = 60) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function isBrowserFullscreenSupported() {
   return Boolean(
     document.fullscreenEnabled
@@ -302,17 +308,26 @@ async function enterFullscreen() {
     try {
       if (typeof target.requestFullscreen === "function") {
         await target.requestFullscreen();
-        return;
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
       }
 
       if (typeof target.webkitRequestFullscreen === "function") {
         target.webkitRequestFullscreen();
-        return;
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
       }
 
       if (typeof target.msRequestFullscreen === "function") {
         target.msRequestFullscreen();
-        return;
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
       }
     } catch (error) {
       // Browser fullscreen can fail in app webviews.
@@ -337,17 +352,26 @@ async function exitFullscreen() {
     try {
       if (typeof document.exitFullscreen === "function") {
         await document.exitFullscreen();
-        return;
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
       }
 
       if (typeof document.webkitExitFullscreen === "function") {
         document.webkitExitFullscreen();
-        return;
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
       }
 
       if (typeof document.msExitFullscreen === "function") {
         document.msExitFullscreen();
-        return;
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
       }
     } catch (error) {
       // Ignore exit errors and try native fallback.
