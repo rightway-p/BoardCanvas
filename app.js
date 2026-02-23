@@ -233,13 +233,8 @@ async function refreshNativeFullscreenState() {
     callWindowMethod(appWindowRef, "isMaximized")
   ]);
 
-  if (typeof nextFullscreenState === "boolean") {
-    nativeFullscreenActive = nextFullscreenState;
-  }
-
-  if (typeof nextMaximizedState === "boolean") {
-    nativeWindowMaximized = nextMaximizedState;
-  }
+  nativeFullscreenActive = nextFullscreenState === true;
+  nativeWindowMaximized = nextMaximizedState === true;
 
   return nativeFullscreenActive;
 }
@@ -2760,21 +2755,29 @@ async function loadPdfFromFile(file) {
     }
 
     let nextDocument = null;
-    let usedWorkerFallback = false;
+    let usedCompatibilityMode = false;
+    const binaryData = new Uint8Array(source);
+    let lastLoadError = null;
 
-    try {
-      const loadingTask = window.pdfjsLib.getDocument({
-        data: source
-      });
-      nextDocument = await loadingTask.promise;
-    } catch (workerError) {
-      // Some runtimes fail to initialize PDF worker; retry without worker.
-      const fallbackTask = window.pdfjsLib.getDocument({
-        data: source,
-        disableWorker: true
-      });
-      nextDocument = await fallbackTask.promise;
-      usedWorkerFallback = true;
+    const loadAttempts = [
+      { data: binaryData },
+      { data: binaryData, disableWorker: true },
+      { data: binaryData, disableWorker: true, useWorkerFetch: false, isEvalSupported: false }
+    ];
+
+    for (let index = 0; index < loadAttempts.length; index += 1) {
+      try {
+        const loadingTask = window.pdfjsLib.getDocument(loadAttempts[index]);
+        nextDocument = await loadingTask.promise;
+        usedCompatibilityMode = index > 0;
+        break;
+      } catch (attemptError) {
+        lastLoadError = attemptError;
+      }
+    }
+
+    if (!nextDocument) {
+      throw lastLoadError || new Error("PDF load failed.");
     }
 
     if (token !== pdfLoadingToken) {
@@ -2797,7 +2800,7 @@ async function loadPdfFromFile(file) {
     restoreCurrentStrokeState();
 
     await renderPdfPage(1);
-    if (usedWorkerFallback) {
+    if (usedCompatibilityMode) {
       setDocumentStatus(`${fileName}: loaded (compatibility mode).`, "warning");
     }
     if (pdfPageRasterCanvas) {
@@ -2817,7 +2820,8 @@ async function loadPdfFromFile(file) {
     if (reason && /password/i.test(reason)) {
       setDocumentStatus("Password-protected PDF is not supported.", "warning");
     } else {
-      setDocumentStatus("Unable to open this PDF file. Try another file.", "error");
+      const detail = reason ? ` (${reason.slice(0, 80)})` : "";
+      setDocumentStatus(`Unable to open this PDF file. Try another file.${detail}`, "error");
     }
   } finally {
     updatePdfNavigationUI();
@@ -2868,6 +2872,10 @@ function goToNextPdfPage() {
 
 function requestDocumentFileSelection() {
   if (pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (!configurePdfWorker()) {
     return;
   }
 
