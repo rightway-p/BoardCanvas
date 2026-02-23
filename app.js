@@ -2759,10 +2759,24 @@ async function loadPdfFromFile(file) {
       return;
     }
 
-    const loadingTask = window.pdfjsLib.getDocument({
-      data: source
-    });
-    const nextDocument = await loadingTask.promise;
+    let nextDocument = null;
+    let usedWorkerFallback = false;
+
+    try {
+      const loadingTask = window.pdfjsLib.getDocument({
+        data: source
+      });
+      nextDocument = await loadingTask.promise;
+    } catch (workerError) {
+      // Some runtimes fail to initialize PDF worker; retry without worker.
+      const fallbackTask = window.pdfjsLib.getDocument({
+        data: source,
+        disableWorker: true
+      });
+      nextDocument = await fallbackTask.promise;
+      usedWorkerFallback = true;
+    }
+
     if (token !== pdfLoadingToken) {
       await releasePdfDocument(nextDocument);
       return;
@@ -2783,6 +2797,9 @@ async function loadPdfFromFile(file) {
     restoreCurrentStrokeState();
 
     await renderPdfPage(1);
+    if (usedWorkerFallback) {
+      setDocumentStatus(`${fileName}: loaded (compatibility mode).`, "warning");
+    }
     if (pdfPageRasterCanvas) {
       closeDocumentPopup();
     }
@@ -2794,7 +2811,14 @@ async function loadPdfFromFile(file) {
       return;
     }
 
-    setDocumentStatus("Unable to open this PDF file. Try another file.", "error");
+    const reason = error && typeof error.message === "string"
+      ? error.message.trim()
+      : "";
+    if (reason && /password/i.test(reason)) {
+      setDocumentStatus("Password-protected PDF is not supported.", "warning");
+    } else {
+      setDocumentStatus("Unable to open this PDF file. Try another file.", "error");
+    }
   } finally {
     updatePdfNavigationUI();
   }
