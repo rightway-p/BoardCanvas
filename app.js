@@ -4,6 +4,7 @@ const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const app = document.querySelector(".app");
 const toolbar = document.querySelector(".toolbar");
+const boardWrapper = document.querySelector(".board-wrapper");
 
 const penToolButton = document.getElementById("penTool");
 const overlayMouseModeToggleButton = document.getElementById("overlayMouseModeToggle");
@@ -170,6 +171,7 @@ let overlayMouseUiBypassActive = false;
 let overlayMouseNativeIgnoreState = false;
 let overlayMouseForwardingAvailable = null;
 let overlayMouseNativeQueue = Promise.resolve();
+let overlaySurfaceStyleSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
@@ -967,12 +969,8 @@ async function setOverlayNativeIgnoreState(nextIgnore) {
     queueRuntimeLog("overlay.mousemode.forward-unavailable");
   }
 
-  const fallbackResult = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true);
-  if (fallbackResult === null) {
-    return false;
-  }
-  overlayMouseNativeIgnoreState = true;
-  return true;
+  // Do not enable non-forwarding ignore mode because it can trap input.
+  return false;
 }
 
 function queueOverlayNativeIgnoreState(nextIgnore) {
@@ -998,7 +996,18 @@ function syncOverlayMouseBypassWithPointerEvent(event) {
 
   overlayMouseUiBypassActive = wantsToolbarInteraction;
   updateOverlayMouseModeButton();
-  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
+  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction).then((success) => {
+    if (success || wantsToolbarInteraction) {
+      return;
+    }
+
+    // If forwarding is unavailable, disable mouse passthrough mode to avoid lock-in.
+    applyOverlayMouseModeUI(false);
+    setDocumentStatus("Mouse mode requires forwarding support in this desktop build.", "warning");
+    queueRuntimeLog("overlay.mousemode.auto-disabled", {
+      reason: "forwarding-unavailable"
+    });
+  });
 }
 
 function applyOverlayMouseModeUI(active) {
@@ -1021,12 +1030,16 @@ async function setOverlayMousePassthrough(active, options = {}) {
   }
 
   if (!overlayMode || !isOverlayModeSupported()) {
+    overlayMouseUiBypassActive = false;
+    void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
     return false;
   }
 
   const appWindowRef = getTauriAppWindow();
   if (!appWindowRef) {
+    overlayMouseUiBypassActive = false;
+    void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
     return false;
   }
@@ -1038,6 +1051,32 @@ async function setOverlayMousePassthrough(active, options = {}) {
   });
 
   try {
+    if (nextActive && overlayMouseForwardingAvailable !== true) {
+      const probeEnable = await setOverlayNativeIgnoreState(true);
+      if (!probeEnable) {
+        if (announce) {
+          setDocumentStatus("Mouse mode requires forwarding support in this desktop build.", "warning");
+        }
+        queueRuntimeLog("overlay.mousemode.unsupported", {
+          active: nextActive,
+          reason: "forwarding-unavailable"
+        });
+        return false;
+      }
+
+      const probeDisable = await setOverlayNativeIgnoreState(false);
+      if (!probeDisable) {
+        if (announce) {
+          setDocumentStatus("Mouse mode setup failed. Try again.", "warning");
+        }
+        queueRuntimeLog("overlay.mousemode.unsupported", {
+          active: nextActive,
+          reason: "probe-disable-failed"
+        });
+        return false;
+      }
+    }
+
     overlayMouseUiBypassActive = nextActive;
     const desiredIgnoreState = false;
     const result = await queueOverlayNativeIgnoreState(desiredIgnoreState);
@@ -1143,6 +1182,44 @@ function applyOverlayModeUI(active) {
   overlayMode = nextActive;
   if (!overlayMode && overlayMousePassthrough) {
     applyOverlayMouseModeUI(false);
+  }
+  if (overlayMode) {
+    if (!overlaySurfaceStyleSnapshot) {
+      overlaySurfaceStyleSnapshot = {
+        htmlBackgroundColor: document.documentElement.style.backgroundColor || "",
+        bodyBackgroundColor: document.body.style.backgroundColor || "",
+        appBackgroundColor: app && app.style ? app.style.backgroundColor || "" : "",
+        wrapperBackgroundColor: boardWrapper && boardWrapper.style ? boardWrapper.style.backgroundColor || "" : "",
+        boardBackgroundColor: backgroundCanvas.style.backgroundColor || "",
+        boardOpacity: backgroundCanvas.style.opacity || "",
+        drawCanvasBackgroundColor: canvas.style.backgroundColor || ""
+      };
+    }
+
+    document.documentElement.style.backgroundColor = "transparent";
+    document.body.style.backgroundColor = "transparent";
+    if (app && app.style) {
+      app.style.backgroundColor = "transparent";
+    }
+    if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.backgroundColor = "transparent";
+    }
+    backgroundCanvas.style.backgroundColor = "transparent";
+    backgroundCanvas.style.opacity = "0";
+    canvas.style.backgroundColor = "transparent";
+  } else if (overlaySurfaceStyleSnapshot) {
+    document.documentElement.style.backgroundColor = overlaySurfaceStyleSnapshot.htmlBackgroundColor;
+    document.body.style.backgroundColor = overlaySurfaceStyleSnapshot.bodyBackgroundColor;
+    if (app && app.style) {
+      app.style.backgroundColor = overlaySurfaceStyleSnapshot.appBackgroundColor;
+    }
+    if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.backgroundColor = overlaySurfaceStyleSnapshot.wrapperBackgroundColor;
+    }
+    backgroundCanvas.style.backgroundColor = overlaySurfaceStyleSnapshot.boardBackgroundColor;
+    backgroundCanvas.style.opacity = overlaySurfaceStyleSnapshot.boardOpacity;
+    canvas.style.backgroundColor = overlaySurfaceStyleSnapshot.drawCanvasBackgroundColor;
+    overlaySurfaceStyleSnapshot = null;
   }
   app.classList.toggle("overlay-mode", overlayMode);
   document.body.classList.toggle("overlay-mode", overlayMode);
