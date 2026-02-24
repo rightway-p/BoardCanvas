@@ -181,6 +181,7 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 40;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 16;
+const RUNTIME_BUILD_TAG = "3baed5a-overlay-fix-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -4579,7 +4580,8 @@ void primeRuntimeLogPath();
 queueRuntimeLog("runtime.start", {
   runtimePlatform,
   protocol: String((window.location && window.location.protocol) || ""),
-  tauriDetected: Boolean(window.__TAURI__)
+  tauriDetected: Boolean(window.__TAURI__),
+  buildTag: RUNTIME_BUILD_TAG
 });
 
 initToolbarLayout();
