@@ -181,7 +181,7 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 40;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 16;
-const RUNTIME_BUILD_TAG = "0ae438a-overlay-fix-2";
+const RUNTIME_BUILD_TAG = "mousehit-nativebg-errorlog-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -281,7 +281,8 @@ function getTauriInvoke() {
   return null;
 }
 
-async function invokeDesktopCommand(command, args = {}) {
+async function invokeDesktopCommand(command, args = {}, options = {}) {
+  const { logError = false } = options;
   const invoke = getTauriInvoke();
   if (!invoke) {
     return null;
@@ -290,6 +291,13 @@ async function invokeDesktopCommand(command, args = {}) {
   try {
     return await invoke(command, args);
   } catch (error) {
+    if (logError) {
+      queueRuntimeLog("desktop.command.error", {
+        command,
+        args: sanitizeRuntimeLogDetails(args),
+        error: toRuntimeLogError(error)
+      });
+    }
     return null;
   }
 }
@@ -298,6 +306,8 @@ async function setDesktopWebviewBackgroundAlpha(alpha) {
   const normalizedAlpha = Math.max(0, Math.min(255, Number(alpha) || 0));
   const result = await invokeDesktopCommand("set_webview_background_alpha", {
     alpha: normalizedAlpha
+  }, {
+    logError: true
   });
   if (result === null) {
     queueRuntimeLog("overlay.webview.background-alpha.unavailable", {
@@ -1087,14 +1097,50 @@ async function readWindowCursorPositionCss() {
   if (scaledOutsideDistance <= rawOutsideDistance) {
     return {
       x: scaledX,
-      y: scaledY
+      y: scaledY,
+      rawX,
+      rawY,
+      scaleFactor
     };
   }
 
   return {
     x: rawX,
-    y: rawY
+    y: rawY,
+    rawX,
+    rawY,
+    scaleFactor
   };
+}
+
+function isToolbarHitByCursorPosition(cursorPosition) {
+  if (!cursorPosition) {
+    return false;
+  }
+
+  const cssHit = isToolbarHitByPoint(cursorPosition.x, cursorPosition.y);
+  if (cssHit) {
+    return true;
+  }
+
+  const scaleFactor = Number(cursorPosition.scaleFactor);
+  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  const scaledPadding = OVERLAY_MOUSE_HIT_PADDING_PX * scaleFactor;
+  const left = (rect.left * scaleFactor) - scaledPadding;
+  const right = (rect.right * scaleFactor) + scaledPadding;
+  const top = (rect.top * scaleFactor) - scaledPadding;
+  const bottom = (rect.bottom * scaleFactor) + scaledPadding;
+  const rawX = Number(cursorPosition.rawX);
+  const rawY = Number(cursorPosition.rawY);
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+    return false;
+  }
+
+  return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom;
 }
 
 function stopOverlayMouseTracker() {
@@ -1136,12 +1182,15 @@ async function pollOverlayMouseTracker() {
       return;
     }
 
-    const wantsToolbarInteraction = isToolbarHitByPoint(cursorPosition.x, cursorPosition.y);
+    const wantsToolbarInteraction = isToolbarHitByCursorPosition(cursorPosition);
 
     if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
       queueRuntimeLog("overlay.mousemode.hit-state", {
         x: Math.round(cursorPosition.x),
         y: Math.round(cursorPosition.y),
+        rawX: Number.isFinite(cursorPosition.rawX) ? Math.round(cursorPosition.rawX) : null,
+        rawY: Number.isFinite(cursorPosition.rawY) ? Math.round(cursorPosition.rawY) : null,
+        scaleFactor: Number.isFinite(cursorPosition.scaleFactor) ? Number(cursorPosition.scaleFactor) : null,
         wantsToolbarInteraction
       });
       overlayMouseUiBypassActive = wantsToolbarInteraction;
