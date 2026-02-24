@@ -181,7 +181,8 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
-const RUNTIME_BUILD_TAG = "overlay-host-surface-1";
+const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 220;
+const RUNTIME_BUILD_TAG = "overlay-mouse-recovery-zone-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -1024,6 +1025,38 @@ function isToolbarHitByPoint(clientX, clientY) {
     && clientY <= (rect.bottom + OVERLAY_MOUSE_HIT_PADDING_PX);
 }
 
+function isToolbarRecoveryZoneHit(clientX, clientY) {
+  if (!toolbar || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  const placement = (toolbarLayout && typeof toolbarLayout.placement === "string")
+    ? toolbarLayout.placement
+    : "right";
+
+  if (placement === "right") {
+    return clientX >= (rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  if (placement === "left") {
+    return clientX <= (rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  if (placement === "top") {
+    return clientY <= (rect.bottom + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  if (placement === "bottom") {
+    return clientY >= (rect.top - OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  return clientX >= (rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientX <= (rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientY >= (rect.top - OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientY <= (rect.bottom + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+}
+
 function isOverlayUiEventTarget(target) {
   if (!toolbar || !target || !(target instanceof Element)) {
     return false;
@@ -1206,7 +1239,10 @@ async function pollOverlayMouseTracker() {
       return;
     }
 
-    const wantsToolbarInteraction = isToolbarHitByCursorPosition(cursorPosition);
+    const baseToolbarHit = isToolbarHitByCursorPosition(cursorPosition);
+    const needsRecoveryZone = overlayMouseForwardOptionAvailable === false;
+    const wantsToolbarInteraction = baseToolbarHit
+      || (needsRecoveryZone && isToolbarRecoveryZoneHit(cursorPosition.x, cursorPosition.y));
 
     if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
       queueRuntimeLog("overlay.mousemode.hit-state", {
@@ -1215,6 +1251,8 @@ async function pollOverlayMouseTracker() {
         rawX: Number.isFinite(cursorPosition.rawX) ? Math.round(cursorPosition.rawX) : null,
         rawY: Number.isFinite(cursorPosition.rawY) ? Math.round(cursorPosition.rawY) : null,
         scaleFactor: Number.isFinite(cursorPosition.scaleFactor) ? Number(cursorPosition.scaleFactor) : null,
+        baseToolbarHit,
+        recoveryZone: needsRecoveryZone,
         wantsToolbarInteraction
       });
       overlayMouseUiBypassActive = wantsToolbarInteraction;
