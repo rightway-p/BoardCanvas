@@ -17,7 +17,7 @@ serde_json = "1.0"
 tauri = { version = "1.6", features = ["window-all"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
 webview2-com = "0.19.1"
 windows = "0.39.0"
 

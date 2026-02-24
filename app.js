@@ -181,7 +181,7 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
-const RUNTIME_BUILD_TAG = "overlay-alpha-readback-1";
+const RUNTIME_BUILD_TAG = "overlay-host-surface-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -320,6 +320,25 @@ async function setDesktopWebviewBackgroundAlpha(alpha) {
   queueRuntimeLog("overlay.webview.background-alpha.applied", {
     requestedAlpha: normalizedAlpha,
     returnedAlpha: Number(result)
+  });
+  return true;
+}
+
+async function setDesktopOverlaySurface(enabled) {
+  const result = await invokeDesktopCommand("set_window_overlay_surface", {
+    enabled: Boolean(enabled)
+  }, {
+    logError: true
+  });
+  if (result === null) {
+    queueRuntimeLog("overlay.host-surface.unavailable", {
+      enabled: Boolean(enabled)
+    });
+    return false;
+  }
+
+  queueRuntimeLog("overlay.host-surface.applied", {
+    enabled: Boolean(enabled)
   });
   return true;
 }
@@ -1485,6 +1504,7 @@ function applyOverlayModeUI(active) {
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
+      void setDesktopOverlaySurface(true);
       void setDesktopWebviewBackgroundAlpha(0);
     }
   } else if (overlaySurfaceStyleSnapshot) {
@@ -1513,6 +1533,7 @@ function applyOverlayModeUI(active) {
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
       void setDesktopWebviewBackgroundAlpha(255);
+      void setDesktopOverlaySurface(false);
     }
   }
   app.classList.toggle("overlay-mode", overlayMode);

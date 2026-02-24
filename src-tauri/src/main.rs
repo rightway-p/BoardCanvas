@@ -187,6 +187,64 @@ fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<u8, 
   }
 }
 
+#[tauri::command]
+fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<(), String> {
+  #[cfg(target_os = "windows")]
+  {
+    use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+      GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
+      WS_EX_LAYERED,
+    };
+
+    let hwnd = window
+      .hwnd()
+      .map_err(|error| format!("window handle unavailable: {error}"))?;
+    let hwnd_sys = hwnd.0 as isize;
+
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd_sys, GWL_EXSTYLE) } as usize;
+    let next_style = if enabled {
+      ex_style | (WS_EX_LAYERED as usize)
+    } else {
+      ex_style | (WS_EX_LAYERED as usize)
+    };
+    let _ = unsafe { SetWindowLongPtrW(hwnd_sys, GWL_EXSTYLE, next_style as isize) };
+
+    let margins = if enabled {
+      MARGINS {
+        cxLeftWidth: -1,
+        cxRightWidth: -1,
+        cyTopHeight: -1,
+        cyBottomHeight: -1,
+      }
+    } else {
+      MARGINS {
+        cxLeftWidth: 0,
+        cxRightWidth: 0,
+        cyTopHeight: 0,
+        cyBottomHeight: 0,
+      }
+    };
+    let frame_result = unsafe { DwmExtendFrameIntoClientArea(hwnd_sys, &margins) };
+    if frame_result != 0 {
+      return Err(format!("DwmExtendFrameIntoClientArea failed: {frame_result}"));
+    }
+
+    let layer_result = unsafe { SetLayeredWindowAttributes(hwnd_sys, 0, 255, LWA_ALPHA) };
+    if layer_result == 0 {
+      return Err("SetLayeredWindowAttributes failed".to_string());
+    }
+
+    return Ok(());
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    let _ = (window, enabled);
+    Err("Window overlay surface command is only supported on Windows.".to_string())
+  }
+}
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
@@ -194,7 +252,8 @@ fn main() {
       append_runtime_log,
       get_global_cursor_position,
       get_window_cursor_position,
-      set_webview_background_alpha
+      set_webview_background_alpha,
+      set_window_overlay_surface
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
