@@ -5,6 +5,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct CursorPosition {
+  x: i32,
+  y: i32,
+}
+
 fn runtime_log_path() -> PathBuf {
   let mut path = std::env::temp_dir();
   path.push("boardcanvas-runtime.log");
@@ -36,11 +44,37 @@ fn append_runtime_log(message: String) -> Result<(), String> {
   Ok(())
 }
 
+#[tauri::command]
+fn get_global_cursor_position() -> Result<CursorPosition, String> {
+  #[cfg(target_os = "windows")]
+  {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT { x: 0, y: 0 };
+    let success = unsafe { GetCursorPos(&mut point) };
+    if success == 0 {
+      return Err("GetCursorPos failed".to_string());
+    }
+
+    return Ok(CursorPosition {
+      x: point.x,
+      y: point.y,
+    });
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    Err("Global cursor query is only supported on Windows.".to_string())
+  }
+}
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
       get_runtime_log_path,
-      append_runtime_log
+      append_runtime_log,
+      get_global_cursor_position
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

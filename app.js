@@ -169,12 +169,16 @@ let overlayMousePassthrough = false;
 let overlayMouseTransitionInProgress = false;
 let overlayMouseUiBypassActive = false;
 let overlayMouseNativeIgnoreState = false;
-let overlayMouseForwardingAvailable = null;
 let overlayMouseNativeQueue = Promise.resolve();
+let overlayMouseTrackerTimer = null;
+let overlayMousePollInFlight = false;
+let overlayMousePollFailureCount = 0;
 let overlaySurfaceStyleSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
+const OVERLAY_MOUSE_POLL_INTERVAL_MS = 80;
+const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -272,6 +276,19 @@ function getTauriInvoke() {
   }
 
   return null;
+}
+
+async function invokeDesktopCommand(command, args = {}) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return null;
+  }
+
+  try {
+    return await invoke(command, args);
+  } catch (error) {
+    return null;
+  }
 }
 
 function queueRuntimeLog(message, details = null) {
@@ -961,24 +978,12 @@ async function setOverlayNativeIgnoreState(nextIgnore) {
     return true;
   }
 
-  if (overlayMouseForwardingAvailable !== false) {
-    const forwardedResult = await callWindowMethod(
-      appWindowRef,
-      "setIgnoreCursorEvents",
-      true,
-      { forward: true }
-    );
-    if (forwardedResult !== null) {
-      overlayMouseForwardingAvailable = true;
-      overlayMouseNativeIgnoreState = true;
-      return true;
-    }
-    overlayMouseForwardingAvailable = false;
-    queueRuntimeLog("overlay.mousemode.forward-unavailable");
+  const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true);
+  if (result === null) {
+    return false;
   }
-
-  // Do not enable non-forwarding ignore mode because it can trap input.
-  return false;
+  overlayMouseNativeIgnoreState = true;
+  return true;
 }
 
 function queueOverlayNativeIgnoreState(nextIgnore) {
@@ -987,6 +992,110 @@ function queueOverlayNativeIgnoreState(nextIgnore) {
     .catch(() => null)
     .then(() => setOverlayNativeIgnoreState(desiredIgnore));
   return overlayMouseNativeQueue;
+}
+
+async function readGlobalCursorPosition() {
+  const point = await invokeDesktopCommand("get_global_cursor_position");
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return null;
+  }
+
+  return {
+    x: Number(point.x),
+    y: Number(point.y)
+  };
+}
+
+function stopOverlayMouseTracker() {
+  if (overlayMouseTrackerTimer !== null) {
+    window.clearInterval(overlayMouseTrackerTimer);
+    overlayMouseTrackerTimer = null;
+  }
+  overlayMousePollInFlight = false;
+  overlayMousePollFailureCount = 0;
+}
+
+async function pollOverlayMouseTracker() {
+  if (overlayMousePollInFlight) {
+    return;
+  }
+
+  if (!overlayMode || !overlayMousePassthrough || overlayTransitionInProgress || overlayMouseTransitionInProgress) {
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef || !toolbar) {
+    return;
+  }
+
+  overlayMousePollInFlight = true;
+
+  try {
+    const [cursorPosition, windowOuterPosition, windowScaleFactor] = await Promise.all([
+      readGlobalCursorPosition(),
+      callWindowMethod(appWindowRef, "outerPosition"),
+      callWindowMethod(appWindowRef, "scaleFactor")
+    ]);
+
+    if (!cursorPosition || !windowOuterPosition) {
+      overlayMousePollFailureCount += 1;
+      if (overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
+        await setOverlayMousePassthrough(false, {
+          announce: true,
+          restoreFocus: false
+        });
+      }
+      return;
+    }
+
+    const scale = Number.isFinite(windowScaleFactor) && windowScaleFactor > 0
+      ? Number(windowScaleFactor)
+      : (Number(window.devicePixelRatio) || 1);
+    const rect = toolbar.getBoundingClientRect();
+    const toolbarLeft = windowOuterPosition.x + (rect.left * scale);
+    const toolbarTop = windowOuterPosition.y + (rect.top * scale);
+    const toolbarRight = toolbarLeft + (rect.width * scale);
+    const toolbarBottom = toolbarTop + (rect.height * scale);
+
+    const wantsToolbarInteraction = cursorPosition.x >= toolbarLeft
+      && cursorPosition.x <= toolbarRight
+      && cursorPosition.y >= toolbarTop
+      && cursorPosition.y <= toolbarBottom;
+
+    if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
+      overlayMouseUiBypassActive = wantsToolbarInteraction;
+      updateOverlayMouseModeButton();
+    }
+
+    const success = await queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
+    if (!success) {
+      overlayMousePollFailureCount += 1;
+      if (overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
+        await setOverlayMousePassthrough(false, {
+          announce: true,
+          restoreFocus: false
+        });
+      }
+      return;
+    }
+
+    overlayMousePollFailureCount = 0;
+  } finally {
+    overlayMousePollInFlight = false;
+  }
+}
+
+function startOverlayMouseTracker() {
+  if (overlayMouseTrackerTimer !== null) {
+    return;
+  }
+
+  overlayMousePollFailureCount = 0;
+  overlayMouseTrackerTimer = window.setInterval(() => {
+    void pollOverlayMouseTracker();
+  }, OVERLAY_MOUSE_POLL_INTERVAL_MS);
+  void pollOverlayMouseTracker();
 }
 
 function syncOverlayMouseBypassWithPointerEvent(event) {
@@ -1004,18 +1113,7 @@ function syncOverlayMouseBypassWithPointerEvent(event) {
 
   overlayMouseUiBypassActive = wantsToolbarInteraction;
   updateOverlayMouseModeButton();
-  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction).then((success) => {
-    if (success || wantsToolbarInteraction) {
-      return;
-    }
-
-    // If forwarding is unavailable, disable mouse passthrough mode to avoid lock-in.
-    applyOverlayMouseModeUI(false);
-    setDocumentStatus("Mouse mode requires forwarding support in this desktop build.", "warning");
-    queueRuntimeLog("overlay.mousemode.auto-disabled", {
-      reason: "forwarding-unavailable"
-    });
-  });
+  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
 }
 
 function applyOverlayMouseModeUI(active) {
@@ -1039,6 +1137,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
 
   if (!overlayMode || !isOverlayModeSupported()) {
     overlayMouseUiBypassActive = false;
+    stopOverlayMouseTracker();
     void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
     return false;
@@ -1047,6 +1146,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
   const appWindowRef = getTauriAppWindow();
   if (!appWindowRef) {
     overlayMouseUiBypassActive = false;
+    stopOverlayMouseTracker();
     void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
     return false;
@@ -1059,27 +1159,16 @@ async function setOverlayMousePassthrough(active, options = {}) {
   });
 
   try {
-    if (nextActive && overlayMouseForwardingAvailable !== true) {
-      const probeEnable = await setOverlayNativeIgnoreState(true);
-      if (!probeEnable) {
+    if (nextActive) {
+      const cursorProbe = await readGlobalCursorPosition();
+      if (!cursorProbe) {
+        stopOverlayMouseTracker();
         if (announce) {
-          setDocumentStatus("Mouse mode requires forwarding support in this desktop build.", "warning");
+          setDocumentStatus("Mouse mode requires desktop cursor tracking support.", "warning");
         }
         queueRuntimeLog("overlay.mousemode.unsupported", {
           active: nextActive,
-          reason: "forwarding-unavailable"
-        });
-        return false;
-      }
-
-      const probeDisable = await setOverlayNativeIgnoreState(false);
-      if (!probeDisable) {
-        if (announce) {
-          setDocumentStatus("Mouse mode setup failed. Try again.", "warning");
-        }
-        queueRuntimeLog("overlay.mousemode.unsupported", {
-          active: nextActive,
-          reason: "probe-disable-failed"
+          reason: "cursor-tracking-unavailable"
         });
         return false;
       }
@@ -1089,6 +1178,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
     const desiredIgnoreState = false;
     const result = await queueOverlayNativeIgnoreState(desiredIgnoreState);
     if (!result) {
+      stopOverlayMouseTracker();
       if (announce) {
         setDocumentStatus("Mouse mode is unavailable in this desktop build.", "warning");
       }
@@ -1099,6 +1189,11 @@ async function setOverlayMousePassthrough(active, options = {}) {
     }
 
     applyOverlayMouseModeUI(nextActive);
+    if (nextActive) {
+      startOverlayMouseTracker();
+    } else {
+      stopOverlayMouseTracker();
+    }
     if (!nextActive && restoreFocus) {
       await callWindowMethod(appWindowRef, "setFocus");
     }
@@ -1113,6 +1208,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
     });
     return true;
   } catch (error) {
+    stopOverlayMouseTracker();
     if (announce) {
       setDocumentStatus("Failed to toggle mouse mode.", "error");
     }
@@ -1153,6 +1249,8 @@ function updateOverlayModeButton() {
     overlayMousePassthrough = false;
     overlayMouseTransitionInProgress = false;
     overlayMouseUiBypassActive = false;
+    overlayMouseNativeIgnoreState = false;
+    stopOverlayMouseTracker();
     app.classList.remove("overlay-mode");
     app.classList.remove("overlay-mouse-mode");
     document.body.classList.remove("overlay-mode");
@@ -1191,43 +1289,90 @@ function applyOverlayModeUI(active) {
   if (!overlayMode && overlayMousePassthrough) {
     applyOverlayMouseModeUI(false);
   }
+  if (!overlayMode) {
+    stopOverlayMouseTracker();
+    overlayMouseUiBypassActive = false;
+    void queueOverlayNativeIgnoreState(false);
+  }
   if (overlayMode) {
     if (!overlaySurfaceStyleSnapshot) {
       overlaySurfaceStyleSnapshot = {
+        htmlBackground: document.documentElement.style.background || "",
         htmlBackgroundColor: document.documentElement.style.backgroundColor || "",
+        bodyBackground: document.body.style.background || "",
         bodyBackgroundColor: document.body.style.backgroundColor || "",
+        appBackground: app && app.style ? app.style.background || "" : "",
         appBackgroundColor: app && app.style ? app.style.backgroundColor || "" : "",
+        wrapperBackground: boardWrapper && boardWrapper.style ? boardWrapper.style.background || "" : "",
         wrapperBackgroundColor: boardWrapper && boardWrapper.style ? boardWrapper.style.backgroundColor || "" : "",
+        boardBackground: backgroundCanvas.style.background || "",
         boardBackgroundColor: backgroundCanvas.style.backgroundColor || "",
         boardOpacity: backgroundCanvas.style.opacity || "",
+        drawCanvasBackground: canvas.style.background || "",
         drawCanvasBackgroundColor: canvas.style.backgroundColor || ""
       };
     }
 
+    document.documentElement.style.background = "transparent";
     document.documentElement.style.backgroundColor = "transparent";
+    document.documentElement.style.backgroundImage = "none";
+    document.body.style.background = "transparent";
     document.body.style.backgroundColor = "transparent";
+    document.body.style.backgroundImage = "none";
     if (app && app.style) {
+      app.style.background = "transparent";
       app.style.backgroundColor = "transparent";
+      app.style.backgroundImage = "none";
     }
     if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.background = "transparent";
       boardWrapper.style.backgroundColor = "transparent";
+      boardWrapper.style.backgroundImage = "none";
     }
+    backgroundCanvas.style.background = "transparent";
     backgroundCanvas.style.backgroundColor = "transparent";
     backgroundCanvas.style.opacity = "0";
+    canvas.style.background = "transparent";
     canvas.style.backgroundColor = "transparent";
+
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      void callWindowMethod(appWindowRef, "setBackgroundColor", {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0
+      });
+    }
   } else if (overlaySurfaceStyleSnapshot) {
+    document.documentElement.style.background = overlaySurfaceStyleSnapshot.htmlBackground;
     document.documentElement.style.backgroundColor = overlaySurfaceStyleSnapshot.htmlBackgroundColor;
+    document.body.style.background = overlaySurfaceStyleSnapshot.bodyBackground;
     document.body.style.backgroundColor = overlaySurfaceStyleSnapshot.bodyBackgroundColor;
     if (app && app.style) {
+      app.style.background = overlaySurfaceStyleSnapshot.appBackground;
       app.style.backgroundColor = overlaySurfaceStyleSnapshot.appBackgroundColor;
     }
     if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.background = overlaySurfaceStyleSnapshot.wrapperBackground;
       boardWrapper.style.backgroundColor = overlaySurfaceStyleSnapshot.wrapperBackgroundColor;
     }
+    backgroundCanvas.style.background = overlaySurfaceStyleSnapshot.boardBackground;
     backgroundCanvas.style.backgroundColor = overlaySurfaceStyleSnapshot.boardBackgroundColor;
     backgroundCanvas.style.opacity = overlaySurfaceStyleSnapshot.boardOpacity;
+    canvas.style.background = overlaySurfaceStyleSnapshot.drawCanvasBackground;
     canvas.style.backgroundColor = overlaySurfaceStyleSnapshot.drawCanvasBackgroundColor;
     overlaySurfaceStyleSnapshot = null;
+
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      void callWindowMethod(appWindowRef, "setBackgroundColor", {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0
+      });
+    }
   }
   app.classList.toggle("overlay-mode", overlayMode);
   document.body.classList.toggle("overlay-mode", overlayMode);
