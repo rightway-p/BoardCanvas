@@ -868,8 +868,7 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
 }
 
 function isOverlayModeSupported() {
-  return isWindowsDesktopRuntime()
-    || (runtimePlatform === "windows" && isLikelyTauriProtocol());
+  return isDesktopAppRuntime() && runtimePlatform === "windows";
 }
 
 function updateOverlayModeButton() {
