@@ -120,13 +120,69 @@ fn get_window_cursor_position(window: tauri::Window) -> Result<WindowCursorPosit
   }
 }
 
+#[tauri::command]
+fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<(), String> {
+  #[cfg(target_os = "windows")]
+  {
+    use std::sync::{Arc, Mutex};
+
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+      COREWEBVIEW2_COLOR, ICoreWebView2Controller2,
+    };
+    use windows::core::Interface;
+
+    let command_result: Arc<Mutex<Result<(), String>>> = Arc::new(Mutex::new(Ok(())));
+    let command_result_ref = Arc::clone(&command_result);
+
+    window
+      .with_webview(move |webview| {
+        let update_result = (|| -> Result<(), String> {
+          let controller = webview.controller();
+          let controller2: ICoreWebView2Controller2 = controller
+            .cast()
+            .map_err(|error| format!("controller cast failed: {error}"))?;
+
+          unsafe {
+            controller2
+              .SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                R: 0,
+                G: 0,
+                B: 0,
+                A: alpha,
+              })
+              .map_err(|error| format!("SetDefaultBackgroundColor failed: {error}"))?;
+          }
+
+          Ok(())
+        })();
+
+        if let Ok(mut guard) = command_result_ref.lock() {
+          *guard = update_result;
+        }
+      })
+      .map_err(|error| format!("with_webview failed: {error}"))?;
+
+    return command_result
+      .lock()
+      .map_err(|_| "webview background command lock poisoned".to_string())?
+      .clone();
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    let _ = (window, alpha);
+    Err("Webview background alpha command is only supported on Windows.".to_string())
+  }
+}
+
 fn main() {
   tauri::Builder::default()
     .invoke_handler(tauri::generate_handler![
       get_runtime_log_path,
       append_runtime_log,
       get_global_cursor_position,
-      get_window_cursor_position
+      get_window_cursor_position,
+      set_webview_background_alpha
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

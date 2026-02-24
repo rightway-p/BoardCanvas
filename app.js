@@ -294,6 +294,21 @@ async function invokeDesktopCommand(command, args = {}) {
   }
 }
 
+async function setDesktopWebviewBackgroundAlpha(alpha) {
+  const normalizedAlpha = Math.max(0, Math.min(255, Number(alpha) || 0));
+  const result = await invokeDesktopCommand("set_webview_background_alpha", {
+    alpha: normalizedAlpha
+  });
+  if (result === null) {
+    queueRuntimeLog("overlay.webview.background-alpha.unavailable", {
+      alpha: normalizedAlpha
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function queueRuntimeLog(message, details = null) {
   const invoke = getTauriInvoke();
   if (!invoke) {
@@ -1413,12 +1428,7 @@ function applyOverlayModeUI(active) {
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
-      void callWindowMethod(appWindowRef, "setBackgroundColor", {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0
-      });
+      void setDesktopWebviewBackgroundAlpha(0);
     }
   } else if (overlaySurfaceStyleSnapshot) {
     document.documentElement.style.background = overlaySurfaceStyleSnapshot.htmlBackground;
@@ -1445,12 +1455,7 @@ function applyOverlayModeUI(active) {
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
-      void callWindowMethod(appWindowRef, "setBackgroundColor", {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0
-      });
+      void setDesktopWebviewBackgroundAlpha(255);
     }
   }
   app.classList.toggle("overlay-mode", overlayMode);
