@@ -589,9 +589,10 @@ function bootstrapRuntimeBridgeSync() {
 
 function updateFullscreenButtons() {
   const supported = isFullscreenSupported();
-  const active = isFullscreenActive();
+  const active = isFullscreenActive() || overlayMode;
+  const lockedByOverlay = overlayMode || overlayTransitionInProgress;
 
-  fullscreenToggleButton.disabled = !supported;
+  fullscreenToggleButton.disabled = !supported || lockedByOverlay;
   fullscreenToggleButton.classList.toggle("is-fullscreen", supported && active);
 
   if (!supported) {
@@ -734,6 +735,15 @@ async function exitFullscreen() {
 }
 
 async function toggleFullscreen() {
+  if (overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("fullscreen.toggle.skipped", {
+      reason: "overlay-active",
+      overlayMode,
+      overlayTransitionInProgress
+    });
+    return;
+  }
+
   if (isDesktopAppRuntime()) {
     await refreshNativeFullscreenState();
   }
