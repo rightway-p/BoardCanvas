@@ -162,6 +162,7 @@ const strokeHistoryByContext = new Map();
 let overlayMode = false;
 let overlayTransitionInProgress = false;
 let overlayWindowSnapshot = null;
+let boardColorBeforeOverlay = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
@@ -899,10 +900,24 @@ function updateOverlayModeButton() {
 }
 
 function applyOverlayModeUI(active) {
-  overlayMode = Boolean(active);
+  const nextActive = Boolean(active);
+  if (nextActive) {
+    boardColorBeforeOverlay = normalizeHexColor(boardColorInput.value) || boardColorBeforeOverlay || "#ffffff";
+  }
+
+  overlayMode = nextActive;
   app.classList.toggle("overlay-mode", overlayMode);
   document.body.classList.toggle("overlay-mode", overlayMode);
   document.documentElement.classList.toggle("overlay-mode", overlayMode);
+  if (overlayMode) {
+    setBoardColor("transparent");
+  } else {
+    const restoredColor = normalizeHexColor(boardColorInput.value)
+      || boardColorBeforeOverlay
+      || "#ffffff";
+    setBoardColor(restoredColor);
+    boardColorBeforeOverlay = null;
+  }
   updateOverlayModeButton();
   renderBoardBackground();
 }
@@ -3705,7 +3720,12 @@ function clearBoard() {
 
 function setBoardColor(color) {
   canvas.style.backgroundColor = "transparent";
-  backgroundCanvas.style.backgroundColor = color;
+  const normalized = normalizeHexColor(color);
+  if (overlayMode) {
+    backgroundCanvas.style.backgroundColor = "transparent";
+    return;
+  }
+  backgroundCanvas.style.backgroundColor = normalized || color || "transparent";
 }
 
 penToolButton.addEventListener("click", () => {
