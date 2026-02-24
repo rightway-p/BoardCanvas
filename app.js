@@ -166,6 +166,10 @@ let overlayWindowSnapshot = null;
 let boardColorBeforeOverlay = null;
 let overlayMousePassthrough = false;
 let overlayMouseTransitionInProgress = false;
+let overlayMouseUiBypassActive = false;
+let overlayMouseNativeIgnoreState = false;
+let overlayMouseForwardingAvailable = null;
+let overlayMouseNativeQueue = Promise.resolve();
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
@@ -907,6 +911,96 @@ function updateOverlayMouseModeButton() {
     : "마우스 모드 (F7)";
 }
 
+function isToolbarHitByPoint(clientX, clientY) {
+  if (!toolbar || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  return clientX >= rect.left
+    && clientX <= rect.right
+    && clientY >= rect.top
+    && clientY <= rect.bottom;
+}
+
+function isOverlayUiEventTarget(target) {
+  if (!toolbar || !target || !(target instanceof Element)) {
+    return false;
+  }
+
+  return toolbar.contains(target);
+}
+
+async function setOverlayNativeIgnoreState(nextIgnore) {
+  const desiredIgnore = Boolean(nextIgnore);
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    return false;
+  }
+
+  if (overlayMouseNativeIgnoreState === desiredIgnore) {
+    return true;
+  }
+
+  if (!desiredIgnore) {
+    const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", false);
+    if (result === null) {
+      return false;
+    }
+    overlayMouseNativeIgnoreState = false;
+    return true;
+  }
+
+  if (overlayMouseForwardingAvailable !== false) {
+    const forwardedResult = await callWindowMethod(
+      appWindowRef,
+      "setIgnoreCursorEvents",
+      true,
+      { forward: true }
+    );
+    if (forwardedResult !== null) {
+      overlayMouseForwardingAvailable = true;
+      overlayMouseNativeIgnoreState = true;
+      return true;
+    }
+    overlayMouseForwardingAvailable = false;
+    queueRuntimeLog("overlay.mousemode.forward-unavailable");
+  }
+
+  const fallbackResult = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true);
+  if (fallbackResult === null) {
+    return false;
+  }
+  overlayMouseNativeIgnoreState = true;
+  return true;
+}
+
+function queueOverlayNativeIgnoreState(nextIgnore) {
+  const desiredIgnore = Boolean(nextIgnore);
+  overlayMouseNativeQueue = overlayMouseNativeQueue
+    .catch(() => null)
+    .then(() => setOverlayNativeIgnoreState(desiredIgnore));
+  return overlayMouseNativeQueue;
+}
+
+function syncOverlayMouseBypassWithPointerEvent(event) {
+  if (!overlayMode || !overlayMousePassthrough || overlayTransitionInProgress || overlayMouseTransitionInProgress) {
+    return;
+  }
+
+  const clientX = Number(event && event.clientX);
+  const clientY = Number(event && event.clientY);
+  const wantsToolbarInteraction = isOverlayUiEventTarget(event && event.target)
+    || isToolbarHitByPoint(clientX, clientY);
+  if (wantsToolbarInteraction === overlayMouseUiBypassActive) {
+    return;
+  }
+
+  overlayMouseUiBypassActive = wantsToolbarInteraction;
+  updateOverlayMouseModeButton();
+  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
+}
+
 function applyOverlayMouseModeUI(active) {
   const nextActive = Boolean(active) && overlayMode;
   overlayMousePassthrough = nextActive;
@@ -944,8 +1038,10 @@ async function setOverlayMousePassthrough(active, options = {}) {
   });
 
   try {
-    const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", nextActive);
-    if (result === null) {
+    overlayMouseUiBypassActive = nextActive;
+    const desiredIgnoreState = false;
+    const result = await queueOverlayNativeIgnoreState(desiredIgnoreState);
+    if (!result) {
       if (announce) {
         setDocumentStatus("Mouse mode is unavailable in this desktop build.", "warning");
       }
@@ -961,7 +1057,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
     }
     if (announce) {
       const message = nextActive
-        ? "Mouse mode enabled. Interact with apps underneath (Alt+Tab back, then F7 to draw again)."
+        ? "Mouse mode enabled. Move cursor off toolbar to click through."
         : "Mouse mode disabled.";
       setDocumentStatus(message, "success");
     }
@@ -1009,6 +1105,7 @@ function updateOverlayModeButton() {
     overlayMode = false;
     overlayMousePassthrough = false;
     overlayMouseTransitionInProgress = false;
+    overlayMouseUiBypassActive = false;
     app.classList.remove("overlay-mode");
     app.classList.remove("overlay-mouse-mode");
     document.body.classList.remove("overlay-mode");
@@ -1020,6 +1117,7 @@ function updateOverlayModeButton() {
       overlayModeToggleButton.setAttribute("aria-pressed", "false");
       overlayModeToggleButton.disabled = true;
     }
+    void queueOverlayNativeIgnoreState(false);
     updateOverlayMouseModeButton();
     updateToolUI();
     return;
@@ -4065,6 +4163,9 @@ canvas.addEventListener("pointerleave", (event) => {
     stopStrokeErasing(event);
   }
 });
+document.addEventListener("mousemove", (event) => {
+  syncOverlayMouseBypassWithPointerEvent(event);
+}, { passive: true });
 
 window.addEventListener("resize", () => {
   handleViewportResize();
@@ -4086,6 +4187,7 @@ document.addEventListener("MSFullscreenChange", () => {
   handleViewportResize();
 });
 document.addEventListener("pointerdown", (event) => {
+  syncOverlayMouseBypassWithPointerEvent(event);
   if (isDocumentPopupOpen() && !documentEditor.contains(event.target)) {
     closeDocumentPopup();
   }
