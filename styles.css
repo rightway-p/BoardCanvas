@@ -924,8 +924,15 @@ body {
 
 html.overlay-mode,
 body.overlay-mode,
-.app.overlay-mode {
-  background: transparent;
+.app.overlay-mode,
+.app.overlay-mode .board-wrapper,
+.app.overlay-mode #boardBackground,
+.app.overlay-mode #board {
+  background: transparent !important;
+}
+
+.app.overlay-mode #boardBackground {
+  opacity: 0;
 }
 
 @media (max-width: 800px) {
