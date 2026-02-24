@@ -351,7 +351,17 @@ function detectRuntimePlatform() {
 
 function isLikelyTauriProtocol() {
   const protocol = String((window.location && window.location.protocol) || "").toLowerCase();
-  return protocol === "tauri:";
+  if (protocol === "tauri:" || protocol === "asset:" || protocol === "app:") {
+    return true;
+  }
+
+  const hostname = String((window.location && window.location.hostname) || "").toLowerCase();
+  if (protocol === "https:" && (hostname === "tauri.localhost" || hostname.endsWith(".tauri.localhost"))) {
+    return true;
+  }
+
+  // Some desktop builds expose the app bridge under https origin.
+  return isDesktopAppRuntime();
 }
 
 function getFullscreenElement() {
