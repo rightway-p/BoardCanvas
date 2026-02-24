@@ -899,8 +899,16 @@ function updateOverlayMouseModeButton() {
     return;
   }
 
+  const visible = overlayMode && isOverlayModeSupported();
+  overlayMouseModeToggleButton.hidden = !visible;
+  if (!visible) {
+    overlayMouseModeToggleButton.classList.remove("is-active");
+    overlayMouseModeToggleButton.setAttribute("aria-pressed", "false");
+    overlayMouseModeToggleButton.disabled = true;
+    return;
+  }
+
   const supported = isOverlayMouseModeSupported();
-  overlayMouseModeToggleButton.hidden = !supported;
   overlayMouseModeToggleButton.classList.toggle("is-active", supported && overlayMousePassthrough);
   overlayMouseModeToggleButton.setAttribute("aria-pressed", String(supported && overlayMousePassthrough));
   overlayMouseModeToggleButton.disabled = !supported
