@@ -191,7 +191,9 @@ fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<u8, 
 fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
-    use windows_sys::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+    use windows_sys::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
       GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
       WS_EX_LAYERED,
@@ -200,7 +202,7 @@ fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<()
     let hwnd = window
       .hwnd()
       .map_err(|error| format!("window handle unavailable: {error}"))?;
-    let hwnd_sys = hwnd.0 as isize;
+    let hwnd_sys: HWND = hwnd.0 as HWND;
 
     let ex_style = unsafe { GetWindowLongPtrW(hwnd_sys, GWL_EXSTYLE) } as usize;
     let next_style = if enabled {
