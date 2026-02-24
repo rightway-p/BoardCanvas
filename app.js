@@ -225,7 +225,7 @@ async function refreshNativeFullscreenState() {
   if (!appWindowRef) {
     nativeFullscreenActive = false;
     nativeWindowMaximized = false;
-    return nativeFullscreenActive;
+    return false;
   }
 
   const [nextFullscreenState, nextMaximizedState] = await Promise.all([
@@ -233,10 +233,15 @@ async function refreshNativeFullscreenState() {
     callWindowMethod(appWindowRef, "isMaximized")
   ]);
 
-  nativeFullscreenActive = nextFullscreenState === true;
-  nativeWindowMaximized = nextMaximizedState === true;
+  if (typeof nextFullscreenState === "boolean") {
+    nativeFullscreenActive = nextFullscreenState;
+  }
 
-  return nativeFullscreenActive;
+  if (typeof nextMaximizedState === "boolean") {
+    nativeWindowMaximized = nextMaximizedState;
+  }
+
+  return nativeFullscreenActive || nativeWindowMaximized;
 }
 
 async function requestNativeFullscreenLike(appWindowRef) {
@@ -244,15 +249,29 @@ async function requestNativeFullscreenLike(appWindowRef) {
     return false;
   }
 
-  await callWindowMethod(appWindowRef, "setFullscreen", true);
+  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
   await refreshNativeFullscreenState();
   if (nativeFullscreenActive || nativeWindowMaximized) {
     return true;
   }
+  if (setFullscreenResult !== null) {
+    nativeFullscreenActive = true;
+    nativeWindowMaximized = false;
+    return true;
+  }
 
-  await callWindowMethod(appWindowRef, "maximize");
+  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
   await refreshNativeFullscreenState();
-  return nativeFullscreenActive || nativeWindowMaximized;
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    return true;
+  }
+  if (maximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = true;
+    return true;
+  }
+
+  return false;
 }
 
 async function requestNativeExitFullscreenLike(appWindowRef) {
@@ -260,10 +279,20 @@ async function requestNativeExitFullscreenLike(appWindowRef) {
     return false;
   }
 
-  await callWindowMethod(appWindowRef, "setFullscreen", false);
-  await callWindowMethod(appWindowRef, "unmaximize");
+  const exitFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", false);
+  const unmaximizeResult = await callWindowMethod(appWindowRef, "unmaximize");
   await refreshNativeFullscreenState();
-  return !nativeFullscreenActive && !nativeWindowMaximized;
+  if (!nativeFullscreenActive && !nativeWindowMaximized) {
+    return true;
+  }
+
+  if (exitFullscreenResult !== null || unmaximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = false;
+    return true;
+  }
+
+  return false;
 }
 
 function syncFullscreenUiFromNativeWindow() {
@@ -316,10 +345,9 @@ async function enterFullscreen() {
 
   const appWindowRef = getTauriAppWindow();
   if (appWindowRef) {
-    await requestNativeFullscreenLike(appWindowRef);
-    await refreshNativeFullscreenState();
+    const entered = await requestNativeFullscreenLike(appWindowRef);
     updateFullscreenButtons();
-    if (!isFullscreenActive()) {
+    if (!entered) {
       setDocumentStatus("Unable to enable fullscreen in desktop runtime.", "warning");
     }
     return;
@@ -366,7 +394,6 @@ async function exitFullscreen() {
   const appWindowRef = getTauriAppWindow();
   if (appWindowRef) {
     await requestNativeExitFullscreenLike(appWindowRef);
-    await refreshNativeFullscreenState();
     updateFullscreenButtons();
     return;
   }
@@ -519,7 +546,8 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
 }
 
 function isOverlayModeSupported() {
-  return isWindowsDesktopRuntime();
+  return isWindowsDesktopRuntime()
+    || (runtimePlatform === "windows" && isLikelyTauriProtocol());
 }
 
 function updateOverlayModeButton() {
@@ -568,7 +596,7 @@ async function enterOverlayMode() {
 
   try {
     const appWindowRef = getTauriAppWindow();
-    if (!appWindowRef) {
+    if (!isLikelyTauriProtocol()) {
       setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
       return;
     }
@@ -578,14 +606,21 @@ async function enterOverlayMode() {
       return;
     }
 
+    if (!appWindowRef) {
+      await enterFullscreen();
+      applyOverlayModeUI(true);
+      updateFullscreenButtons();
+      setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+      return;
+    }
+
     overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
     await callWindowMethod(appWindowRef, "setDecorations", false);
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
     await callWindowMethod(appWindowRef, "unmaximize");
-    await requestNativeFullscreenLike(appWindowRef);
+    const entered = await requestNativeFullscreenLike(appWindowRef);
     await callWindowMethod(appWindowRef, "setFocus");
-    await refreshNativeFullscreenState();
-    if (!nativeFullscreenActive && !nativeWindowMaximized) {
+    if (!entered) {
       setDocumentStatus("Unable to switch window to fullscreen. Check Windows display permissions.", "error");
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       overlayWindowSnapshot = null;
@@ -616,6 +651,8 @@ async function exitOverlayMode() {
     if (appWindowRef) {
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       await refreshNativeFullscreenState();
+    } else {
+      await exitFullscreen();
     }
 
     applyOverlayModeUI(false);
@@ -776,7 +813,7 @@ function updatePdfNavigationUI() {
   pdfPrevPageButton.disabled = !hasPdf || controlsLocked || currentPage <= 1;
   pdfNextPageButton.disabled = !hasPdf || controlsLocked || currentPage >= totalPages;
   if (exportAnnotatedPdfButton) {
-    exportAnnotatedPdfButton.disabled = !hasPdf || controlsLocked;
+    exportAnnotatedPdfButton.disabled = controlsLocked;
   }
   removeDocumentButton.disabled = !hasPdf || controlsLocked;
   pdfPageIndicator.textContent = indicatorText;
@@ -2634,11 +2671,6 @@ async function exportAnnotatedPdf() {
     return;
   }
 
-  if (!hasLoadedPdfDocument()) {
-    setDocumentStatus("Load a PDF first.", "warning");
-    return;
-  }
-
   if (!window.PDFLib || !window.PDFLib.PDFDocument) {
     setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
     return;
@@ -2648,8 +2680,9 @@ async function exportAnnotatedPdf() {
   pdfExportInProgress = true;
   updatePdfNavigationUI();
 
-  const statusName = loadedDocumentName || "PDF";
-  const totalPages = Math.max(1, Number(pdfDocument.numPages) || 1);
+  const hasPdf = hasLoadedPdfDocument();
+  const statusName = hasPdf ? (loadedDocumentName || "PDF") : "Board";
+  const totalPages = hasPdf ? Math.max(1, Number(pdfDocument.numPages) || 1) : 1;
   const outputFileName = getAnnotatedPdfFileName();
 
   try {
@@ -2683,7 +2716,9 @@ async function exportAnnotatedPdf() {
       mergedContext.fillStyle = boardColor;
       mergedContext.fillRect(0, 0, exportWidth, exportHeight);
 
-      await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
+      if (hasPdf) {
+        await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
+      }
 
       annotationContext.setTransform(1, 0, 0, 1, 0, 0);
       annotationContext.globalCompositeOperation = "source-over";
@@ -2691,7 +2726,9 @@ async function exportAnnotatedPdf() {
       annotationContext.lineJoin = "round";
       annotationContext.lineCap = "round";
 
-      const pageStrokes = pdfPageStrokeSnapshots.get(pageNumber) || [];
+      const pageStrokes = hasPdf
+        ? (pdfPageStrokeSnapshots.get(pageNumber) || [])
+        : boardStrokeSnapshot;
       for (const stroke of pageStrokes) {
         drawStrokePath(stroke, annotationContext);
       }
@@ -3560,7 +3597,7 @@ updateUndoRedoUI();
 updateOverlayModeButton();
 bootstrapRuntimeBridgeSync();
 if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
-  setDocumentStatus("Desktop bridge not detected in this build. Rebuild Tauri app and run latest exe.", "warning");
+  setDocumentStatus("Desktop bridge not detected. Running in compatibility mode.", "warning");
 }
 restoreSessionState();
 
