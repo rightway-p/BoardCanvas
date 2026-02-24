@@ -6,6 +6,7 @@ const app = document.querySelector(".app");
 const toolbar = document.querySelector(".toolbar");
 
 const penToolButton = document.getElementById("penTool");
+const overlayMouseModeToggleButton = document.getElementById("overlayMouseModeToggle");
 const eraserToolButton = document.getElementById("eraserTool");
 const pixelEraserModeButton = document.getElementById("pixelEraserMode");
 const strokeEraserModeButton = document.getElementById("strokeEraserMode");
@@ -163,6 +164,8 @@ let overlayMode = false;
 let overlayTransitionInProgress = false;
 let overlayWindowSnapshot = null;
 let boardColorBeforeOverlay = null;
+let overlayMousePassthrough = false;
+let overlayMouseTransitionInProgress = false;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
@@ -871,31 +874,156 @@ function isOverlayModeSupported() {
   return isDesktopAppRuntime() && runtimePlatform === "windows";
 }
 
-function updateOverlayModeButton() {
-  if (!overlayModeToggleButton) {
+function isOverlayMouseModeSupported() {
+  return isOverlayModeSupported() && overlayMode && isDesktopAppRuntime();
+}
+
+function updateOverlayMouseModeButton() {
+  if (!overlayMouseModeToggleButton) {
     return;
   }
 
+  const supported = isOverlayMouseModeSupported();
+  overlayMouseModeToggleButton.hidden = !supported;
+  overlayMouseModeToggleButton.classList.toggle("is-active", supported && overlayMousePassthrough);
+  overlayMouseModeToggleButton.setAttribute("aria-pressed", String(supported && overlayMousePassthrough));
+  overlayMouseModeToggleButton.disabled = !supported
+    || overlayTransitionInProgress
+    || overlayMouseTransitionInProgress
+    || pdfExportInProgress
+    || sessionRestoreInProgress;
+  overlayMouseModeToggleButton.title = overlayMousePassthrough
+    ? "마우스 모드 종료 (F7)"
+    : "마우스 모드 (F7)";
+}
+
+function applyOverlayMouseModeUI(active) {
+  const nextActive = Boolean(active) && overlayMode;
+  overlayMousePassthrough = nextActive;
+  app.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  document.body.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  document.documentElement.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  updateOverlayMouseModeButton();
+  updateToolUI();
+}
+
+async function setOverlayMousePassthrough(active, options = {}) {
+  const { announce = true, restoreFocus = false } = options;
+  const nextActive = Boolean(active);
+
+  if (nextActive === overlayMousePassthrough && !overlayMouseTransitionInProgress) {
+    updateOverlayMouseModeButton();
+    return true;
+  }
+
+  if (!overlayMode || !isOverlayModeSupported()) {
+    applyOverlayMouseModeUI(false);
+    return false;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    applyOverlayMouseModeUI(false);
+    return false;
+  }
+
+  overlayMouseTransitionInProgress = true;
+  updateOverlayMouseModeButton();
+  queueRuntimeLog("overlay.mousemode.start", {
+    active: nextActive
+  });
+
+  try {
+    const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", nextActive);
+    if (result === null) {
+      if (announce) {
+        setDocumentStatus("Mouse mode is unavailable in this desktop build.", "warning");
+      }
+      queueRuntimeLog("overlay.mousemode.unsupported", {
+        active: nextActive
+      });
+      return false;
+    }
+
+    applyOverlayMouseModeUI(nextActive);
+    if (!nextActive && restoreFocus) {
+      await callWindowMethod(appWindowRef, "setFocus");
+    }
+    if (announce) {
+      const message = nextActive
+        ? "Mouse mode enabled. Interact with apps underneath (Alt+Tab back, then F7 to draw again)."
+        : "Mouse mode disabled.";
+      setDocumentStatus(message, "success");
+    }
+    queueRuntimeLog("overlay.mousemode.success", {
+      active: nextActive
+    });
+    return true;
+  } catch (error) {
+    if (announce) {
+      setDocumentStatus("Failed to toggle mouse mode.", "error");
+    }
+    queueRuntimeLog("overlay.mousemode.error", {
+      active: nextActive,
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  } finally {
+    overlayMouseTransitionInProgress = false;
+    updateOverlayMouseModeButton();
+  }
+}
+
+function toggleOverlayMouseMode() {
+  if (!isOverlayMouseModeSupported()) {
+    return;
+  }
+
+  if (overlayTransitionInProgress || overlayMouseTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  void setOverlayMousePassthrough(!overlayMousePassthrough, {
+    announce: true,
+    restoreFocus: overlayMousePassthrough
+  });
+}
+
+function updateOverlayModeButton() {
   const overlaySupported = isOverlayModeSupported();
-  overlayModeToggleButton.hidden = !overlaySupported;
+  if (overlayModeToggleButton) {
+    overlayModeToggleButton.hidden = !overlaySupported;
+  }
 
   if (!overlaySupported) {
     overlayMode = false;
+    overlayMousePassthrough = false;
+    overlayMouseTransitionInProgress = false;
     app.classList.remove("overlay-mode");
+    app.classList.remove("overlay-mouse-mode");
     document.body.classList.remove("overlay-mode");
+    document.body.classList.remove("overlay-mouse-mode");
     document.documentElement.classList.remove("overlay-mode");
-    overlayModeToggleButton.classList.remove("is-active");
-    overlayModeToggleButton.setAttribute("aria-pressed", "false");
-    overlayModeToggleButton.disabled = true;
+    document.documentElement.classList.remove("overlay-mouse-mode");
+    if (overlayModeToggleButton) {
+      overlayModeToggleButton.classList.remove("is-active");
+      overlayModeToggleButton.setAttribute("aria-pressed", "false");
+      overlayModeToggleButton.disabled = true;
+    }
+    updateOverlayMouseModeButton();
+    updateToolUI();
     return;
   }
 
-  overlayModeToggleButton.classList.toggle("is-active", overlayMode);
-  overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
-  overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
-  overlayModeToggleButton.title = overlayMode
-    ? "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC \uC885\uB8CC (F8)"
-    : "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC (F8)";
+  if (overlayModeToggleButton) {
+    overlayModeToggleButton.classList.toggle("is-active", overlayMode);
+    overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
+    overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
+    overlayModeToggleButton.title = overlayMode
+      ? "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC \uC885\uB8CC (F8)"
+      : "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC (F8)";
+  }
+  updateOverlayMouseModeButton();
 }
 
 function applyOverlayModeUI(active) {
@@ -905,6 +1033,9 @@ function applyOverlayModeUI(active) {
   }
 
   overlayMode = nextActive;
+  if (!overlayMode && overlayMousePassthrough) {
+    applyOverlayMouseModeUI(false);
+  }
   app.classList.toggle("overlay-mode", overlayMode);
   document.body.classList.toggle("overlay-mode", overlayMode);
   document.documentElement.classList.toggle("overlay-mode", overlayMode);
@@ -1026,6 +1157,12 @@ async function exitOverlayMode() {
   try {
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
+      if (overlayMousePassthrough) {
+        await setOverlayMousePassthrough(false, {
+          announce: false,
+          restoreFocus: false
+        });
+      }
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       await refreshNativeFullscreenState();
     } else {
@@ -2885,6 +3022,11 @@ function updateToolUI() {
     ? "Pen"
     : (tool === "eraser" ? "Eraser" : "StrokeEraser");
   modeLabel.textContent = `Mode: ${modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
+  if (overlayMousePassthrough) {
+    canvas.style.cursor = "default";
+    return;
+  }
+
   canvas.style.cursor = tool === "pen" ? "crosshair" : "cell";
 }
 
@@ -3778,6 +3920,11 @@ if (overlayModeToggleButton) {
     toggleOverlayMode();
   });
 }
+if (overlayMouseModeToggleButton) {
+  overlayMouseModeToggleButton.addEventListener("click", () => {
+    toggleOverlayMouseMode();
+  });
+}
 openDocumentPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   const open = !isDocumentPopupOpen();
@@ -3968,6 +4115,12 @@ document.addEventListener("keydown", (event) => {
   if (!editableTarget && event.key === "F8" && isOverlayModeSupported()) {
     event.preventDefault();
     toggleOverlayMode();
+    return;
+  }
+
+  if (!editableTarget && event.key === "F7" && isOverlayMouseModeSupported()) {
+    event.preventDefault();
+    toggleOverlayMouseMode();
     return;
   }
 
