@@ -73,12 +73,14 @@ fn get_global_cursor_position() -> Result<CursorPosition, String> {
 fn get_window_cursor_position(window: tauri::Window) -> Result<CursorPosition, String> {
   #[cfg(target_os = "windows")]
   {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, ScreenToClient};
+    use windows_sys::Win32::Foundation::{HWND, POINT};
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let hwnd = window
       .hwnd()
       .map_err(|error| format!("window handle unavailable: {error}"))?;
+    let hwnd_sys: HWND = hwnd.0 as HWND;
 
     let mut point = POINT { x: 0, y: 0 };
     let success = unsafe { GetCursorPos(&mut point) };
@@ -86,7 +88,7 @@ fn get_window_cursor_position(window: tauri::Window) -> Result<CursorPosition, S
       return Err("GetCursorPos failed".to_string());
     }
 
-    let converted = unsafe { ScreenToClient(hwnd.0 as isize, &mut point) };
+    let converted = unsafe { ScreenToClient(hwnd_sys, &mut point) };
     if converted == 0 {
       return Err("ScreenToClient failed".to_string());
     }
