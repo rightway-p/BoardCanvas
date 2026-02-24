@@ -178,10 +178,10 @@ let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 let overlayMouseForwardOptionAvailable = null;
 const runtimePlatform = detectRuntimePlatform();
-const OVERLAY_MOUSE_POLL_INTERVAL_MS = 40;
+const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
-const OVERLAY_MOUSE_HIT_PADDING_PX = 16;
-const RUNTIME_BUILD_TAG = "mousehit-nativebg-errorlog-1";
+const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
+const RUNTIME_BUILD_TAG = "overlay-maximize-mousehit-boost-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -585,31 +585,9 @@ async function requestNativeOverlayLike(appWindowRef) {
   await callWindowMethod(appWindowRef, "setFullscreen", false);
   await callWindowMethod(appWindowRef, "unmaximize");
 
-  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
-  await refreshNativeFullscreenState();
-  if (nativeFullscreenActive || nativeWindowMaximized) {
-    queueRuntimeLog("overlay.native.enter.success", {
-      step: "setFullscreen-state",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-
-  if (setFullscreenResult !== null) {
-    nativeFullscreenActive = true;
-    nativeWindowMaximized = false;
-    queueRuntimeLog("overlay.native.enter.success", {
-      step: "setFullscreen-result",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-
   const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
   await refreshNativeFullscreenState();
-  if (nativeWindowMaximized || nativeFullscreenActive) {
+  if (nativeFullscreenActive || nativeWindowMaximized) {
     queueRuntimeLog("overlay.native.enter.success", {
       step: "maximize-state",
       nativeFullscreenActive,
@@ -623,6 +601,28 @@ async function requestNativeOverlayLike(appWindowRef) {
     nativeWindowMaximized = true;
     queueRuntimeLog("overlay.native.enter.success", {
       step: "maximize-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeWindowMaximized || nativeFullscreenActive) {
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (setFullscreenResult !== null) {
+    nativeFullscreenActive = true;
+    nativeWindowMaximized = false;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-result",
       nativeFullscreenActive,
       nativeWindowMaximized
     });
@@ -1229,6 +1229,9 @@ function startOverlayMouseTracker() {
 
 function syncOverlayMouseBypassWithPointerEvent(event) {
   if (!overlayMode || !overlayMousePassthrough || overlayTransitionInProgress || overlayMouseTransitionInProgress) {
+    return;
+  }
+  if (overlayMouseForwardOptionAvailable === false) {
     return;
   }
 
