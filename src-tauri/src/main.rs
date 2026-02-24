@@ -13,6 +13,13 @@ struct CursorPosition {
   y: i32,
 }
 
+#[derive(Serialize)]
+struct WindowCursorPosition {
+  x: i32,
+  y: i32,
+  scale_factor: f64,
+}
+
 fn runtime_log_path() -> PathBuf {
   let mut path = std::env::temp_dir();
   path.push("boardcanvas-runtime.log");
@@ -70,7 +77,7 @@ fn get_global_cursor_position() -> Result<CursorPosition, String> {
 }
 
 #[tauri::command]
-fn get_window_cursor_position(window: tauri::Window) -> Result<CursorPosition, String> {
+fn get_window_cursor_position(window: tauri::Window) -> Result<WindowCursorPosition, String> {
   #[cfg(target_os = "windows")]
   {
     use windows_sys::Win32::Foundation::{HWND, POINT};
@@ -93,9 +100,16 @@ fn get_window_cursor_position(window: tauri::Window) -> Result<CursorPosition, S
       return Err("ScreenToClient failed".to_string());
     }
 
-    return Ok(CursorPosition {
+    let scale_factor = window
+      .scale_factor()
+      .ok()
+      .filter(|value| value.is_finite() && *value > 0.0)
+      .unwrap_or(1.0);
+
+    return Ok(WindowCursorPosition {
       x: point.x,
       y: point.y,
+      scale_factor,
     });
   }
 

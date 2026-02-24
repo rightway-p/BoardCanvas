@@ -176,9 +176,11 @@ let overlayMousePollFailureCount = 0;
 let overlaySurfaceStyleSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
+let overlayMouseForwardOptionAvailable = null;
 const runtimePlatform = detectRuntimePlatform();
-const OVERLAY_MOUSE_POLL_INTERVAL_MS = 80;
+const OVERLAY_MOUSE_POLL_INTERVAL_MS = 40;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
+const OVERLAY_MOUSE_HIT_PADDING_PX = 16;
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -966,10 +968,10 @@ function isToolbarHitByPoint(clientX, clientY) {
   }
 
   const rect = toolbar.getBoundingClientRect();
-  return clientX >= rect.left
-    && clientX <= rect.right
-    && clientY >= rect.top
-    && clientY <= rect.bottom;
+  return clientX >= (rect.left - OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientX <= (rect.right + OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientY >= (rect.top - OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientY <= (rect.bottom + OVERLAY_MOUSE_HIT_PADDING_PX);
 }
 
 function isOverlayUiEventTarget(target) {
@@ -998,6 +1000,18 @@ async function setOverlayNativeIgnoreState(nextIgnore) {
     }
     overlayMouseNativeIgnoreState = false;
     return true;
+  }
+
+  if (overlayMouseForwardOptionAvailable !== false) {
+    const forwardResult = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true, { forward: true });
+    if (forwardResult !== null) {
+      overlayMouseForwardOptionAvailable = true;
+      overlayMouseNativeIgnoreState = true;
+      return true;
+    }
+
+    overlayMouseForwardOptionAvailable = false;
+    queueRuntimeLog("overlay.mousemode.forward-unavailable");
   }
 
   const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true);
@@ -1034,10 +1048,36 @@ async function readWindowCursorPositionCss() {
     return null;
   }
 
-  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const rawX = Number(point.x);
+  const rawY = Number(point.y);
+  const runtimeScaleFactor = Number(point.scaleFactor ?? point.scale_factor);
+  const browserScaleFactor = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const scaleFactor = Number.isFinite(runtimeScaleFactor) && runtimeScaleFactor > 0
+    ? runtimeScaleFactor
+    : browserScaleFactor;
+  const scaledX = rawX / scaleFactor;
+  const scaledY = rawY / scaleFactor;
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || Number(document.documentElement.clientWidth) || 1);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || Number(document.documentElement.clientHeight) || 1);
+  const rawOutsideDistance = Math.max(0, -rawX)
+    + Math.max(0, -rawY)
+    + Math.max(0, rawX - viewportWidth)
+    + Math.max(0, rawY - viewportHeight);
+  const scaledOutsideDistance = Math.max(0, -scaledX)
+    + Math.max(0, -scaledY)
+    + Math.max(0, scaledX - viewportWidth)
+    + Math.max(0, scaledY - viewportHeight);
+
+  if (scaledOutsideDistance <= rawOutsideDistance) {
+    return {
+      x: scaledX,
+      y: scaledY
+    };
+  }
+
   return {
-    x: Number(point.x) / dpr,
-    y: Number(point.y) / dpr
+    x: rawX,
+    y: rawY
   };
 }
 
@@ -1080,13 +1120,14 @@ async function pollOverlayMouseTracker() {
       return;
     }
 
-    const rect = toolbar.getBoundingClientRect();
-    const wantsToolbarInteraction = cursorPosition.x >= rect.left
-      && cursorPosition.x <= rect.right
-      && cursorPosition.y >= rect.top
-      && cursorPosition.y <= rect.bottom;
+    const wantsToolbarInteraction = isToolbarHitByPoint(cursorPosition.x, cursorPosition.y);
 
     if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
+      queueRuntimeLog("overlay.mousemode.hit-state", {
+        x: Math.round(cursorPosition.x),
+        y: Math.round(cursorPosition.y),
+        wantsToolbarInteraction
+      });
       overlayMouseUiBypassActive = wantsToolbarInteraction;
       updateOverlayMouseModeButton();
     }
@@ -1160,6 +1201,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
 
   if (!overlayMode || !isOverlayModeSupported()) {
     overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
     stopOverlayMouseTracker();
     void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
@@ -1169,6 +1211,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
   const appWindowRef = getTauriAppWindow();
   if (!appWindowRef) {
     overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
     stopOverlayMouseTracker();
     void queueOverlayNativeIgnoreState(false);
     applyOverlayMouseModeUI(false);
@@ -1273,6 +1316,7 @@ function updateOverlayModeButton() {
     overlayMouseTransitionInProgress = false;
     overlayMouseUiBypassActive = false;
     overlayMouseNativeIgnoreState = false;
+    overlayMouseForwardOptionAvailable = null;
     stopOverlayMouseTracker();
     app.classList.remove("overlay-mode");
     app.classList.remove("overlay-mouse-mode");
@@ -1315,6 +1359,7 @@ function applyOverlayModeUI(active) {
   if (!overlayMode) {
     stopOverlayMouseTracker();
     overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
     void queueOverlayNativeIgnoreState(false);
   }
   if (overlayMode) {
@@ -1330,6 +1375,7 @@ function applyOverlayModeUI(active) {
         wrapperBackgroundColor: boardWrapper && boardWrapper.style ? boardWrapper.style.backgroundColor || "" : "",
         boardBackground: backgroundCanvas.style.background || "",
         boardBackgroundColor: backgroundCanvas.style.backgroundColor || "",
+        boardDisplay: backgroundCanvas.style.display || "",
         boardOpacity: backgroundCanvas.style.opacity || "",
         drawCanvasBackground: canvas.style.background || "",
         drawCanvasBackgroundColor: canvas.style.backgroundColor || ""
@@ -1357,6 +1403,7 @@ function applyOverlayModeUI(active) {
     }
     backgroundCanvas.style.background = "transparent";
     backgroundCanvas.style.backgroundColor = "transparent";
+    backgroundCanvas.style.display = "none";
     backgroundCanvas.style.opacity = "0";
     backgroundCanvas.style.visibility = "hidden";
     canvas.style.background = "transparent";
@@ -1387,6 +1434,7 @@ function applyOverlayModeUI(active) {
     }
     backgroundCanvas.style.background = overlaySurfaceStyleSnapshot.boardBackground;
     backgroundCanvas.style.backgroundColor = overlaySurfaceStyleSnapshot.boardBackgroundColor;
+    backgroundCanvas.style.display = overlaySurfaceStyleSnapshot.boardDisplay;
     backgroundCanvas.style.opacity = overlaySurfaceStyleSnapshot.boardOpacity;
     backgroundCanvas.style.visibility = "";
     canvas.style.background = overlaySurfaceStyleSnapshot.drawCanvasBackground;
