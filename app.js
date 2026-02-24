@@ -556,10 +556,32 @@ async function requestNativeOverlayLike(appWindowRef) {
   });
   await callWindowMethod(appWindowRef, "setFullscreen", false);
   await callWindowMethod(appWindowRef, "unmaximize");
+
+  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (setFullscreenResult !== null) {
+    nativeFullscreenActive = true;
+    nativeWindowMaximized = false;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
   const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
   await refreshNativeFullscreenState();
   if (nativeWindowMaximized || nativeFullscreenActive) {
-    nativeFullscreenActive = false;
     queueRuntimeLog("overlay.native.enter.success", {
       step: "maximize-state",
       nativeFullscreenActive,
@@ -1006,6 +1028,19 @@ async function readGlobalCursorPosition() {
   };
 }
 
+async function readWindowCursorPositionCss() {
+  const point = await invokeDesktopCommand("get_window_cursor_position");
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return null;
+  }
+
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  return {
+    x: Number(point.x) / dpr,
+    y: Number(point.y) / dpr
+  };
+}
+
 function stopOverlayMouseTracker() {
   if (overlayMouseTrackerTimer !== null) {
     window.clearInterval(overlayMouseTrackerTimer);
@@ -1032,13 +1067,9 @@ async function pollOverlayMouseTracker() {
   overlayMousePollInFlight = true;
 
   try {
-    const [cursorPosition, windowOuterPosition, windowScaleFactor] = await Promise.all([
-      readGlobalCursorPosition(),
-      callWindowMethod(appWindowRef, "outerPosition"),
-      callWindowMethod(appWindowRef, "scaleFactor")
-    ]);
+    const cursorPosition = await readWindowCursorPositionCss();
 
-    if (!cursorPosition || !windowOuterPosition) {
+    if (!cursorPosition) {
       overlayMousePollFailureCount += 1;
       if (overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
         await setOverlayMousePassthrough(false, {
@@ -1049,19 +1080,11 @@ async function pollOverlayMouseTracker() {
       return;
     }
 
-    const scale = Number.isFinite(windowScaleFactor) && windowScaleFactor > 0
-      ? Number(windowScaleFactor)
-      : (Number(window.devicePixelRatio) || 1);
     const rect = toolbar.getBoundingClientRect();
-    const toolbarLeft = windowOuterPosition.x + (rect.left * scale);
-    const toolbarTop = windowOuterPosition.y + (rect.top * scale);
-    const toolbarRight = toolbarLeft + (rect.width * scale);
-    const toolbarBottom = toolbarTop + (rect.height * scale);
-
-    const wantsToolbarInteraction = cursorPosition.x >= toolbarLeft
-      && cursorPosition.x <= toolbarRight
-      && cursorPosition.y >= toolbarTop
-      && cursorPosition.y <= toolbarBottom;
+    const wantsToolbarInteraction = cursorPosition.x >= rect.left
+      && cursorPosition.x <= rect.right
+      && cursorPosition.y >= rect.top
+      && cursorPosition.y <= rect.bottom;
 
     if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
       overlayMouseUiBypassActive = wantsToolbarInteraction;
@@ -1160,7 +1183,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
 
   try {
     if (nextActive) {
-      const cursorProbe = await readGlobalCursorPosition();
+      const cursorProbe = await readWindowCursorPositionCss();
       if (!cursorProbe) {
         stopOverlayMouseTracker();
         if (announce) {
@@ -1313,6 +1336,9 @@ function applyOverlayModeUI(active) {
       };
     }
 
+    app.style.setProperty("--overlay-surface-color", "transparent");
+    document.documentElement.style.setProperty("--overlay-surface-color", "transparent");
+    document.body.style.setProperty("--overlay-surface-color", "transparent");
     document.documentElement.style.background = "transparent";
     document.documentElement.style.backgroundColor = "transparent";
     document.documentElement.style.backgroundImage = "none";
@@ -1332,8 +1358,10 @@ function applyOverlayModeUI(active) {
     backgroundCanvas.style.background = "transparent";
     backgroundCanvas.style.backgroundColor = "transparent";
     backgroundCanvas.style.opacity = "0";
+    backgroundCanvas.style.visibility = "hidden";
     canvas.style.background = "transparent";
     canvas.style.backgroundColor = "transparent";
+    canvas.style.backdropFilter = "none";
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
@@ -1360,8 +1388,10 @@ function applyOverlayModeUI(active) {
     backgroundCanvas.style.background = overlaySurfaceStyleSnapshot.boardBackground;
     backgroundCanvas.style.backgroundColor = overlaySurfaceStyleSnapshot.boardBackgroundColor;
     backgroundCanvas.style.opacity = overlaySurfaceStyleSnapshot.boardOpacity;
+    backgroundCanvas.style.visibility = "";
     canvas.style.background = overlaySurfaceStyleSnapshot.drawCanvasBackground;
     canvas.style.backgroundColor = overlaySurfaceStyleSnapshot.drawCanvasBackgroundColor;
+    canvas.style.backdropFilter = "";
     overlaySurfaceStyleSnapshot = null;
 
     const appWindowRef = getTauriAppWindow();

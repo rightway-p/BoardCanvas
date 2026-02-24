@@ -935,8 +935,19 @@ body.overlay-mode,
   background: transparent !important;
 }
 
+.app.overlay-mode {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+.app.overlay-mode .board-wrapper {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
 .app.overlay-mode #boardBackground {
   opacity: 0;
+  visibility: hidden;
 }
 
 @media (max-width: 800px) {
