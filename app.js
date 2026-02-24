@@ -165,6 +165,169 @@ let overlayWindowSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 const runtimePlatform = detectRuntimePlatform();
+const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
+const missingNativeWindowMethods = new Set();
+let runtimeLogPathCache = "";
+let runtimeLogPathRequested = false;
+let runtimeLogQueue = Promise.resolve();
+
+function trimRuntimeLogValue(value, limit = MAX_RUNTIME_LOG_VALUE_LENGTH) {
+  const text = String(value ?? "");
+  if (text.length <= limit) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function toRuntimeLogError(error) {
+  if (!error) {
+    return null;
+  }
+
+  if (typeof error === "string") {
+    return trimRuntimeLogValue(error);
+  }
+
+  if (error instanceof Error) {
+    const detail = {
+      name: trimRuntimeLogValue(error.name || "Error", 64),
+      message: trimRuntimeLogValue(error.message || "")
+    };
+    if (error.stack) {
+      detail.stack = trimRuntimeLogValue(String(error.stack), 500);
+    }
+    return detail;
+  }
+
+  return sanitizeRuntimeLogDetails(error, 0);
+}
+
+function sanitizeRuntimeLogDetails(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (depth > 2) {
+    return trimRuntimeLogValue(value);
+  }
+
+  const valueType = typeof value;
+  if (valueType === "string") {
+    return trimRuntimeLogValue(value);
+  }
+  if (valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (valueType === "bigint") {
+    return trimRuntimeLogValue(`${value}n`);
+  }
+
+  if (valueType === "function") {
+    return "[function]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((entry) => sanitizeRuntimeLogDetails(entry, depth + 1));
+  }
+
+  if (value instanceof Error) {
+    return toRuntimeLogError(value);
+  }
+
+  if (valueType === "object") {
+    const normalized = {};
+    const keys = Object.keys(value).slice(0, 16);
+    for (const key of keys) {
+      normalized[key] = sanitizeRuntimeLogDetails(value[key], depth + 1);
+    }
+    return normalized;
+  }
+
+  return trimRuntimeLogValue(value);
+}
+
+function getTauriInvoke() {
+  const tauriApi = window.__TAURI__;
+  if (!tauriApi) {
+    return null;
+  }
+
+  if (typeof tauriApi.invoke === "function") {
+    return tauriApi.invoke.bind(tauriApi);
+  }
+
+  if (tauriApi.tauri && typeof tauriApi.tauri.invoke === "function") {
+    return tauriApi.tauri.invoke.bind(tauriApi.tauri);
+  }
+
+  return null;
+}
+
+function queueRuntimeLog(message, details = null) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return;
+  }
+
+  const payload = {
+    time: new Date().toISOString(),
+    message: trimRuntimeLogValue(message || ""),
+    details: details ? sanitizeRuntimeLogDetails(details) : null
+  };
+  const serialized = JSON.stringify(payload);
+
+  runtimeLogQueue = runtimeLogQueue
+    .catch(() => null)
+    .then(() => invoke("append_runtime_log", { message: serialized }))
+    .catch(() => null);
+}
+
+async function primeRuntimeLogPath() {
+  if (runtimeLogPathRequested) {
+    return runtimeLogPathCache;
+  }
+
+  runtimeLogPathRequested = true;
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return runtimeLogPathCache;
+  }
+
+  try {
+    const path = await invoke("get_runtime_log_path");
+    runtimeLogPathCache = typeof path === "string" ? path : "";
+    queueRuntimeLog("runtime.bootstrap", {
+      platform: runtimePlatform,
+      protocol: String((window.location && window.location.protocol) || ""),
+      logPath: runtimeLogPathCache || null
+    });
+  } catch (error) {
+    queueRuntimeLog("runtime.logpath.failed", {
+      error: toRuntimeLogError(error)
+    });
+  }
+
+  return runtimeLogPathCache;
+}
+
+function setupRuntimeErrorLogging() {
+  window.addEventListener("error", (event) => {
+    queueRuntimeLog("window.error", {
+      message: trimRuntimeLogValue(event.message || ""),
+      filename: trimRuntimeLogValue(event.filename || "", 140),
+      line: Number.isFinite(event.lineno) ? event.lineno : null,
+      column: Number.isFinite(event.colno) ? event.colno : null,
+      error: toRuntimeLogError(event.error)
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    queueRuntimeLog("window.unhandledrejection", {
+      reason: toRuntimeLogError(event.reason)
+    });
+  });
+}
 
 function detectRuntimePlatform() {
   const userAgent = String((window.navigator && window.navigator.userAgent) || "").toLowerCase();
@@ -246,75 +409,143 @@ async function refreshNativeFullscreenState() {
 
 async function requestNativeFullscreenLike(appWindowRef) {
   if (!appWindowRef) {
+    queueRuntimeLog("fullscreen.native.enter.skipped", { reason: "window-unavailable" });
     return false;
   }
 
+  queueRuntimeLog("fullscreen.native.enter.start", {
+    overlayMode,
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
   await refreshNativeFullscreenState();
   if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "setFullscreen-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
   if (setFullscreenResult !== null) {
     nativeFullscreenActive = true;
     nativeWindowMaximized = false;
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "setFullscreen-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
   const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
   await refreshNativeFullscreenState();
   if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "maximize-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
   if (maximizeResult !== null) {
     nativeFullscreenActive = false;
     nativeWindowMaximized = true;
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "maximize-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
+  queueRuntimeLog("fullscreen.native.enter.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   return false;
 }
 
 async function requestNativeExitFullscreenLike(appWindowRef) {
   if (!appWindowRef) {
+    queueRuntimeLog("fullscreen.native.exit.skipped", { reason: "window-unavailable" });
     return false;
   }
 
+  queueRuntimeLog("fullscreen.native.exit.start", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   const exitFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", false);
   const unmaximizeResult = await callWindowMethod(appWindowRef, "unmaximize");
   await refreshNativeFullscreenState();
   if (!nativeFullscreenActive && !nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.exit.success", {
+      step: "state-cleared",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
   if (exitFullscreenResult !== null || unmaximizeResult !== null) {
     nativeFullscreenActive = false;
     nativeWindowMaximized = false;
+    queueRuntimeLog("fullscreen.native.exit.success", {
+      step: "method-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
+  queueRuntimeLog("fullscreen.native.exit.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   return false;
 }
 
 async function requestNativeOverlayLike(appWindowRef) {
   if (!appWindowRef) {
+    queueRuntimeLog("overlay.native.enter.skipped", { reason: "window-unavailable" });
     return false;
   }
 
+  queueRuntimeLog("overlay.native.enter.start", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   await callWindowMethod(appWindowRef, "setFullscreen", false);
   await callWindowMethod(appWindowRef, "unmaximize");
   const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
   await refreshNativeFullscreenState();
   if (nativeWindowMaximized || nativeFullscreenActive) {
     nativeFullscreenActive = false;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
   if (maximizeResult !== null) {
     nativeFullscreenActive = false;
     nativeWindowMaximized = true;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return true;
   }
 
+  queueRuntimeLog("overlay.native.enter.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
   return false;
 }
 
@@ -363,15 +594,29 @@ function updateFullscreenButtons() {
 }
 async function enterFullscreen() {
   if (!isFullscreenSupported() || isFullscreenActive()) {
+    queueRuntimeLog("fullscreen.enter.skipped", {
+      supported: isFullscreenSupported(),
+      active: isFullscreenActive()
+    });
     return;
   }
 
   const appWindowRef = getTauriAppWindow();
   if (appWindowRef) {
+    queueRuntimeLog("fullscreen.enter.desktop.start", { overlayMode });
     const entered = await requestNativeFullscreenLike(appWindowRef);
     updateFullscreenButtons();
     if (!entered) {
       setDocumentStatus("Unable to enable fullscreen in desktop runtime.", "warning");
+      queueRuntimeLog("fullscreen.enter.desktop.failed", {
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
+    } else {
+      queueRuntimeLog("fullscreen.enter.desktop.success", {
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
     }
     return;
   }
@@ -404,20 +649,35 @@ async function enterFullscreen() {
       }
     } catch (error) {
       // Browser fullscreen can fail in app webviews.
+      queueRuntimeLog("fullscreen.enter.browser.error", {
+        error: toRuntimeLogError(error)
+      });
     }
   }
   updateFullscreenButtons();
+  queueRuntimeLog("fullscreen.enter.browser.done", {
+    active: Boolean(getFullscreenElement())
+  });
 }
 
 async function exitFullscreen() {
   if (!isFullscreenActive()) {
+    queueRuntimeLog("fullscreen.exit.skipped", { reason: "not-active" });
     return;
   }
 
   const appWindowRef = getTauriAppWindow();
   if (appWindowRef) {
+    queueRuntimeLog("fullscreen.exit.desktop.start", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     await requestNativeExitFullscreenLike(appWindowRef);
     updateFullscreenButtons();
+    queueRuntimeLog("fullscreen.exit.desktop.done", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
     return;
   }
 
@@ -448,9 +708,15 @@ async function exitFullscreen() {
       }
     } catch (error) {
       // Ignore exit errors and try native fallback.
+      queueRuntimeLog("fullscreen.exit.browser.error", {
+        error: toRuntimeLogError(error)
+      });
     }
   }
   updateFullscreenButtons();
+  queueRuntimeLog("fullscreen.exit.browser.done", {
+    active: Boolean(getFullscreenElement())
+  });
 }
 
 async function toggleFullscreen() {
@@ -493,12 +759,21 @@ function isWindowsDesktopRuntime() {
 
 async function callWindowMethod(targetWindow, methodName, ...args) {
   if (!targetWindow || typeof targetWindow[methodName] !== "function") {
+    if (!missingNativeWindowMethods.has(methodName)) {
+      missingNativeWindowMethods.add(methodName);
+      queueRuntimeLog("window.method.missing", { method: methodName });
+    }
     return null;
   }
 
   try {
     return await targetWindow[methodName](...args);
   } catch (error) {
+    queueRuntimeLog("window.method.error", {
+      method: methodName,
+      args: sanitizeRuntimeLogDetails(args),
+      error: toRuntimeLogError(error)
+    });
     return null;
   }
 }
@@ -530,9 +805,16 @@ async function captureOverlayWindowSnapshot(appWindowRef) {
 async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
   const tauriWindowApi = getTauriWindowApi();
   if (!appWindowRef || !snapshot) {
+    queueRuntimeLog("overlay.snapshot.restore.skipped", {
+      hasWindow: Boolean(appWindowRef),
+      hasSnapshot: Boolean(snapshot)
+    });
     return;
   }
 
+  queueRuntimeLog("overlay.snapshot.restore.start", {
+    snapshot: sanitizeRuntimeLogDetails(snapshot)
+  });
   await callWindowMethod(appWindowRef, "setFullscreen", false);
 
   if (typeof snapshot.decorated === "boolean") {
@@ -566,6 +848,12 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
   if (snapshot.fullscreen === true) {
     await callWindowMethod(appWindowRef, "setFullscreen", true);
   }
+
+  await refreshNativeFullscreenState();
+  queueRuntimeLog("overlay.snapshot.restore.done", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
 }
 
 function isOverlayModeSupported() {
@@ -611,21 +899,37 @@ function applyOverlayModeUI(active) {
 
 async function enterOverlayMode() {
   if (overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("overlay.enter.skipped", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
     return;
   }
 
   overlayTransitionInProgress = true;
   updateOverlayModeButton();
+  queueRuntimeLog("overlay.enter.start", {
+    runtimePlatform,
+    protocol: String((window.location && window.location.protocol) || ""),
+    isLikelyTauri: isLikelyTauriProtocol(),
+    desktopRuntime: isDesktopAppRuntime()
+  });
 
   try {
     const appWindowRef = getTauriAppWindow();
     if (!isLikelyTauriProtocol()) {
       setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      queueRuntimeLog("overlay.enter.blocked", { reason: "not-tauri-protocol" });
       return;
     }
 
     if (!isOverlayModeSupported()) {
       setDocumentStatus("Overlay mode is currently supported on Windows desktop. Linux support is planned.", "warning");
+      queueRuntimeLog("overlay.enter.blocked", {
+        reason: "unsupported-runtime",
+        runtimePlatform,
+        desktopRuntime: isDesktopAppRuntime()
+      });
       return;
     }
 
@@ -634,16 +938,25 @@ async function enterOverlayMode() {
       applyOverlayModeUI(true);
       updateFullscreenButtons();
       setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+      queueRuntimeLog("overlay.enter.browser-fallback");
       return;
     }
 
     overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
+    queueRuntimeLog("overlay.snapshot.captured", {
+      snapshot: sanitizeRuntimeLogDetails(overlayWindowSnapshot)
+    });
     await callWindowMethod(appWindowRef, "setDecorations", false);
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
     const entered = await requestNativeOverlayLike(appWindowRef);
     await callWindowMethod(appWindowRef, "setFocus");
     if (!entered) {
       setDocumentStatus("Unable to switch window to overlay mode.", "error");
+      queueRuntimeLog("overlay.enter.failed", {
+        reason: "native-request-failed",
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       overlayWindowSnapshot = null;
       applyOverlayModeUI(false);
@@ -652,21 +965,39 @@ async function enterOverlayMode() {
     applyOverlayModeUI(true);
     updateFullscreenButtons();
     setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+    queueRuntimeLog("overlay.enter.success", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
   } catch (error) {
     setDocumentStatus("Failed to enable overlay mode.", "error");
+    queueRuntimeLog("overlay.enter.error", {
+      error: toRuntimeLogError(error)
+    });
   } finally {
     overlayTransitionInProgress = false;
     updateOverlayModeButton();
+    queueRuntimeLog("overlay.enter.final", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
   }
 }
 
 async function exitOverlayMode() {
   if (!overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("overlay.exit.skipped", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
     return;
   }
 
   overlayTransitionInProgress = true;
   updateOverlayModeButton();
+  queueRuntimeLog("overlay.exit.start", {
+    hasSnapshot: Boolean(overlayWindowSnapshot)
+  });
 
   try {
     const appWindowRef = getTauriAppWindow();
@@ -680,12 +1011,23 @@ async function exitOverlayMode() {
     applyOverlayModeUI(false);
     updateFullscreenButtons();
     setDocumentStatus("Board mode enabled.", "success");
+    queueRuntimeLog("overlay.exit.success", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
   } catch (error) {
     setDocumentStatus("Failed to restore board mode.", "error");
+    queueRuntimeLog("overlay.exit.error", {
+      error: toRuntimeLogError(error)
+    });
   } finally {
     overlayWindowSnapshot = null;
     overlayTransitionInProgress = false;
     updateOverlayModeButton();
+    queueRuntimeLog("overlay.exit.final", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
   }
 }
 
@@ -768,6 +1110,10 @@ function setDocumentStatus(message, tone = "normal") {
     documentStatus.classList.add("is-warning");
   } else if (tone === "error") {
     documentStatus.classList.add("is-error");
+  }
+
+  if (tone === "warning" || tone === "error") {
+    queueRuntimeLog("status", { tone, message });
   }
 }
 
@@ -2806,10 +3152,17 @@ async function loadPdfFromFile(file) {
   const token = ++pdfLoadingToken;
   const fileName = file.name || "PDF";
   setDocumentStatus(`${fileName}: loading...`);
+  queueRuntimeLog("pdf.load.start", {
+    fileName,
+    fileSize: Number.isFinite(file.size) ? file.size : null,
+    fileType: trimRuntimeLogValue(file.type || "", 120),
+    token
+  });
 
   try {
     const source = await file.arrayBuffer();
     if (token !== pdfLoadingToken) {
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-before-open" });
       return;
     }
 
@@ -2836,6 +3189,12 @@ async function loadPdfFromFile(file) {
         break;
       } catch (attemptError) {
         lastLoadError = attemptError;
+        queueRuntimeLog("pdf.load.attempt.failed", {
+          fileName,
+          attempt: index + 1,
+          options: sanitizeRuntimeLogDetails(loadAttempts[index]),
+          error: toRuntimeLogError(attemptError)
+        });
       }
     }
 
@@ -2845,6 +3204,7 @@ async function loadPdfFromFile(file) {
 
     if (token !== pdfLoadingToken) {
       await releasePdfDocument(nextDocument);
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-after-open" });
       return;
     }
 
@@ -2863,6 +3223,11 @@ async function loadPdfFromFile(file) {
     restoreCurrentStrokeState();
 
     await renderPdfPage(1);
+    queueRuntimeLog("pdf.load.success", {
+      fileName,
+      pages: Number.isFinite(nextDocument.numPages) ? nextDocument.numPages : null,
+      compatibilityMode: usedCompatibilityMode
+    });
     if (usedCompatibilityMode) {
       setDocumentStatus(`${fileName}: loaded (compatibility mode).`, "warning");
     }
@@ -2874,6 +3239,7 @@ async function loadPdfFromFile(file) {
     scheduleSessionAutosave();
   } catch (error) {
     if (token !== pdfLoadingToken) {
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-on-error" });
       return;
     }
 
@@ -2886,6 +3252,11 @@ async function loadPdfFromFile(file) {
       const detail = reason ? ` (${reason.slice(0, 80)})` : "";
       setDocumentStatus(`Unable to open this PDF file. Try another file.${detail}`, "error");
     }
+    queueRuntimeLog("pdf.load.failed", {
+      fileName,
+      error: toRuntimeLogError(error),
+      reason: trimRuntimeLogValue(reason || "")
+    });
   } finally {
     updatePdfNavigationUI();
   }
@@ -3601,6 +3972,14 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+setupRuntimeErrorLogging();
+void primeRuntimeLogPath();
+queueRuntimeLog("runtime.start", {
+  runtimePlatform,
+  protocol: String((window.location && window.location.protocol) || ""),
+  tauriDetected: Boolean(window.__TAURI__)
+});
+
 initToolbarLayout();
 setCanvasSize();
 initPresets();
@@ -3621,6 +4000,10 @@ bootstrapRuntimeBridgeSync();
 if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
   setDocumentStatus("Desktop bridge not detected. Running in compatibility mode.", "warning");
 }
+queueRuntimeLog("runtime.ui.ready", {
+  desktopRuntime: isDesktopAppRuntime(),
+  overlaySupported: isOverlayModeSupported()
+});
 restoreSessionState();
 
 window.addEventListener("beforeunload", () => {
