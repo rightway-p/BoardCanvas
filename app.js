@@ -295,6 +295,29 @@ async function requestNativeExitFullscreenLike(appWindowRef) {
   return false;
 }
 
+async function requestNativeOverlayLike(appWindowRef) {
+  if (!appWindowRef) {
+    return false;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await callWindowMethod(appWindowRef, "unmaximize");
+  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  if (nativeWindowMaximized || nativeFullscreenActive) {
+    nativeFullscreenActive = false;
+    return true;
+  }
+
+  if (maximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = true;
+    return true;
+  }
+
+  return false;
+}
+
 function syncFullscreenUiFromNativeWindow() {
   refreshNativeFullscreenState()
     .catch(() => null)
@@ -617,11 +640,10 @@ async function enterOverlayMode() {
     overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
     await callWindowMethod(appWindowRef, "setDecorations", false);
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
-    await callWindowMethod(appWindowRef, "unmaximize");
-    const entered = await requestNativeFullscreenLike(appWindowRef);
+    const entered = await requestNativeOverlayLike(appWindowRef);
     await callWindowMethod(appWindowRef, "setFocus");
     if (!entered) {
-      setDocumentStatus("Unable to switch window to fullscreen. Check Windows display permissions.", "error");
+      setDocumentStatus("Unable to switch window to overlay mode.", "error");
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       overlayWindowSnapshot = null;
       applyOverlayModeUI(false);
