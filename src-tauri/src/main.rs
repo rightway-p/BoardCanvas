@@ -121,7 +121,7 @@ fn get_window_cursor_position(window: tauri::Window) -> Result<WindowCursorPosit
 }
 
 #[tauri::command]
-fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<(), String> {
+fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<u8, String> {
   #[cfg(target_os = "windows")]
   {
     use std::sync::{Arc, Mutex};
@@ -131,12 +131,12 @@ fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<(), 
     };
     use windows::core::Interface;
 
-    let command_result: Arc<Mutex<Result<(), String>>> = Arc::new(Mutex::new(Ok(())));
+    let command_result: Arc<Mutex<Result<u8, String>>> = Arc::new(Mutex::new(Ok(255)));
     let command_result_ref = Arc::clone(&command_result);
 
     window
       .with_webview(move |webview| {
-        let update_result = (|| -> Result<(), String> {
+        let update_result = (|| -> Result<u8, String> {
           let controller = webview.controller();
           let controller2: ICoreWebView2Controller2 = controller
             .cast()
@@ -153,7 +153,19 @@ fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<(), 
               .map_err(|error| format!("SetDefaultBackgroundColor failed: {error}"))?;
           }
 
-          Ok(())
+          let mut applied = COREWEBVIEW2_COLOR {
+            R: 0,
+            G: 0,
+            B: 0,
+            A: 0,
+          };
+          unsafe {
+            controller2
+              .DefaultBackgroundColor(&mut applied)
+              .map_err(|error| format!("DefaultBackgroundColor read failed: {error}"))?;
+          }
+
+          Ok(applied.A)
         })();
 
         if let Ok(mut guard) = command_result_ref.lock() {

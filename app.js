@@ -181,7 +181,7 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
-const RUNTIME_BUILD_TAG = "overlay-maximize-mousehit-boost-1";
+const RUNTIME_BUILD_TAG = "overlay-alpha-readback-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -309,13 +309,18 @@ async function setDesktopWebviewBackgroundAlpha(alpha) {
   }, {
     logError: true
   });
-  if (result === null) {
+  if (!Number.isFinite(result)) {
     queueRuntimeLog("overlay.webview.background-alpha.unavailable", {
-      alpha: normalizedAlpha
+      requestedAlpha: normalizedAlpha,
+      returnedAlpha: result ?? null
     });
     return false;
   }
 
+  queueRuntimeLog("overlay.webview.background-alpha.applied", {
+    requestedAlpha: normalizedAlpha,
+    returnedAlpha: Number(result)
+  });
   return true;
 }
 
