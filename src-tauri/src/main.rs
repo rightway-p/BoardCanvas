@@ -188,7 +188,7 @@ fn set_webview_background_alpha(window: tauri::Window, alpha: u8) -> Result<u8, 
 }
 
 #[tauri::command]
-fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<(), String> {
+fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<bool, String> {
   #[cfg(target_os = "windows")]
   {
     use windows_sys::Win32::Foundation::HWND;
@@ -237,7 +237,7 @@ fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<()
       return Err("SetLayeredWindowAttributes failed".to_string());
     }
 
-    return Ok(());
+    return Ok(true);
   }
 
   #[cfg(not(target_os = "windows"))]

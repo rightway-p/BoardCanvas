@@ -173,6 +173,7 @@ let overlayMouseNativeQueue = Promise.resolve();
 let overlayMouseTrackerTimer = null;
 let overlayMousePollInFlight = false;
 let overlayMousePollFailureCount = 0;
+let overlayMouseToolbarRecoveryUntil = 0;
 let overlaySurfaceStyleSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
@@ -182,7 +183,7 @@ const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
 const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 220;
-const RUNTIME_BUILD_TAG = "overlay-mouse-recovery-zone-1";
+const RUNTIME_BUILD_TAG = "overlay-host-surface-returnfix-1";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -331,9 +332,10 @@ async function setDesktopOverlaySurface(enabled) {
   }, {
     logError: true
   });
-  if (result === null) {
+  if (result !== true) {
     queueRuntimeLog("overlay.host-surface.unavailable", {
-      enabled: Boolean(enabled)
+      enabled: Boolean(enabled),
+      result: result ?? null
     });
     return false;
   }
@@ -1207,6 +1209,7 @@ function stopOverlayMouseTracker() {
   }
   overlayMousePollInFlight = false;
   overlayMousePollFailureCount = 0;
+  overlayMouseToolbarRecoveryUntil = 0;
 }
 
 async function pollOverlayMouseTracker() {
@@ -1241,8 +1244,14 @@ async function pollOverlayMouseTracker() {
 
     const baseToolbarHit = isToolbarHitByCursorPosition(cursorPosition);
     const needsRecoveryZone = overlayMouseForwardOptionAvailable === false;
-    const wantsToolbarInteraction = baseToolbarHit
+    let wantsToolbarInteraction = baseToolbarHit
       || (needsRecoveryZone && isToolbarRecoveryZoneHit(cursorPosition.x, cursorPosition.y));
+    const now = Date.now();
+    if (wantsToolbarInteraction) {
+      overlayMouseToolbarRecoveryUntil = now + 320;
+    } else if (overlayMouseToolbarRecoveryUntil > now) {
+      wantsToolbarInteraction = true;
+    }
 
     if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
       queueRuntimeLog("overlay.mousemode.hit-state", {
