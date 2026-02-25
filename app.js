@@ -182,8 +182,9 @@ const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
-const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 220;
-const RUNTIME_BUILD_TAG = "overlay-host-surface-returnfix-1";
+const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 420;
+const OVERLAY_MOUSE_RECOVERY_HOLD_MS = 900;
+const RUNTIME_BUILD_TAG = "overlay-host-mouselane-2";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
@@ -1038,11 +1039,19 @@ function isToolbarRecoveryZoneHit(clientX, clientY) {
     : "right";
 
   if (placement === "right") {
-    return clientX >= (rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+    const laneStart = Math.min(
+      rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX,
+      window.innerWidth - OVERLAY_MOUSE_RECOVERY_ZONE_PX
+    );
+    return clientX >= laneStart;
   }
 
   if (placement === "left") {
-    return clientX <= (rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+    const laneEnd = Math.max(
+      rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX,
+      OVERLAY_MOUSE_RECOVERY_ZONE_PX
+    );
+    return clientX <= laneEnd;
   }
 
   if (placement === "top") {
@@ -1248,7 +1257,7 @@ async function pollOverlayMouseTracker() {
       || (needsRecoveryZone && isToolbarRecoveryZoneHit(cursorPosition.x, cursorPosition.y));
     const now = Date.now();
     if (wantsToolbarInteraction) {
-      overlayMouseToolbarRecoveryUntil = now + 320;
+      overlayMouseToolbarRecoveryUntil = now + OVERLAY_MOUSE_RECOVERY_HOLD_MS;
     } else if (overlayMouseToolbarRecoveryUntil > now) {
       wantsToolbarInteraction = true;
     }

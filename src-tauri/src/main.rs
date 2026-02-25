@@ -195,8 +195,7 @@ fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<bo
     use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
     use windows_sys::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-      GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
-      WS_EX_LAYERED,
+      GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_LAYERED,
     };
 
     let hwnd = window
@@ -230,11 +229,6 @@ fn set_window_overlay_surface(window: tauri::Window, enabled: bool) -> Result<bo
     let frame_result = unsafe { DwmExtendFrameIntoClientArea(hwnd_sys, &margins) };
     if frame_result != 0 {
       return Err(format!("DwmExtendFrameIntoClientArea failed: {frame_result}"));
-    }
-
-    let layer_result = unsafe { SetLayeredWindowAttributes(hwnd_sys, 0, 255, LWA_ALPHA) };
-    if layer_result == 0 {
-      return Err("SetLayeredWindowAttributes failed".to_string());
     }
 
     return Ok(true);
