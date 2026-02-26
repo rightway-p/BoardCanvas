@@ -323,6 +323,14 @@ async function invokeDesktopCommand(command, args = {}, options = {}) {
 }
 
 async function setDesktopWebviewBackgroundAlpha(alpha) {
+  if (!isDesktopAppRuntime()) {
+    return false;
+  }
+  if (runtimePlatform !== "windows") {
+    // Linux/macOS runtime: no WebView alpha command needed in current path.
+    return true;
+  }
+
   const normalizedAlpha = Math.max(0, Math.min(255, Number(alpha) || 0));
   const result = await invokeDesktopCommand("set_webview_background_alpha", {
     alpha: normalizedAlpha
@@ -345,6 +353,14 @@ async function setDesktopWebviewBackgroundAlpha(alpha) {
 }
 
 async function setDesktopOverlaySurface(enabled) {
+  if (!isDesktopAppRuntime()) {
+    return false;
+  }
+  if (runtimePlatform !== "windows") {
+    // Linux/macOS runtime: no host-surface command needed in current path.
+    return true;
+  }
+
   const result = await invokeDesktopCommand("set_window_overlay_surface", {
     enabled: Boolean(enabled)
   }, {
@@ -365,6 +381,14 @@ async function setDesktopOverlaySurface(enabled) {
 }
 
 async function setDesktopWindowClickThrough(enabled) {
+  if (!isDesktopAppRuntime() || runtimePlatform !== "windows") {
+    queueRuntimeLog("overlay.clickthrough.unsupported-runtime", {
+      enabled: Boolean(enabled),
+      runtimePlatform
+    });
+    return false;
+  }
+
   const result = await invokeDesktopCommand("set_window_click_through", {
     enabled: Boolean(enabled)
   }, {
@@ -1241,11 +1265,12 @@ async function hideOverlayHostWindowBehindToolbar(appWindowRef) {
 }
 
 function isOverlayModeSupported() {
-  return isDesktopAppRuntime() && runtimePlatform === "windows";
+  return isDesktopAppRuntime() && (runtimePlatform === "windows" || runtimePlatform === "linux");
 }
 
 function isOverlayMouseModeSupported() {
-  return isOverlayModeSupported() && overlayMode && isDesktopAppRuntime();
+  // Mouse pass-through mode depends on native click-through support.
+  return isOverlayModeSupported() && overlayMode && runtimePlatform === "windows";
 }
 
 function updateOverlayMouseModeButton() {
@@ -1253,7 +1278,7 @@ function updateOverlayMouseModeButton() {
     return;
   }
 
-  const visible = overlayMode && isOverlayModeSupported();
+  const visible = overlayMode && isOverlayMouseModeSupported();
   overlayMouseModeToggleButton.hidden = !visible;
   if (!visible) {
     overlayMouseModeToggleButton.classList.remove("is-active");
@@ -1926,7 +1951,7 @@ async function enterOverlayMode() {
     }
 
     if (!isOverlayModeSupported()) {
-      setDocumentStatus("Overlay mode is currently supported on Windows desktop. Linux support is planned.", "warning");
+      setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
       queueRuntimeLog("overlay.enter.blocked", {
         reason: "unsupported-runtime",
         runtimePlatform,
