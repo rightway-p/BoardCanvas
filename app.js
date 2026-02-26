@@ -83,7 +83,18 @@ const SESSION_AUTOSAVE_DELAY_MS = 500;
 const SESSION_DB_NAME = "boardcanvas.session.db";
 const SESSION_DB_STORE = "session-files";
 const SESSION_DB_PDF_KEY = "last-pdf";
-const PDF_WORKER_SRC = "./vendor/pdf.worker.min.js";
+const PDF_JS_SOURCES = [
+  "./vendor/pdf.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+];
+const PDF_LIB_SOURCES = [
+  "./vendor/pdf-lib.min.js",
+  "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"
+];
+const PDF_WORKER_SOURCES = [
+  "./vendor/pdf.worker.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
+];
 
 const QUALITY_PRESETS = {
   normal: {
@@ -195,6 +206,7 @@ let runtimeLogPathCache = "";
 let runtimeLogPathRequested = false;
 let runtimeLogQueue = Promise.resolve();
 let overlayWindowListenerUnsubscribe = null;
+const externalScriptLoadPromises = new Map();
 
 function trimRuntimeLogValue(value, limit = MAX_RUNTIME_LOG_VALUE_LENGTH) {
   const text = String(value ?? "");
@@ -2217,17 +2229,99 @@ function updatePdfNavigationUI() {
   updateOverlayModeButton();
 }
 
-function configurePdfWorker() {
+function getPreferredPdfWorkerSource() {
+  // Desktop builds package local worker. Web builds should prefer CDN fallback.
+  if (isDesktopAppRuntime()) {
+    return PDF_WORKER_SOURCES[0];
+  }
+  return PDF_WORKER_SOURCES[1] || PDF_WORKER_SOURCES[0];
+}
+
+function loadExternalScript(sourceUrl) {
+  const normalizedUrl = String(sourceUrl || "").trim();
+  if (!normalizedUrl) {
+    return Promise.reject(new Error("Invalid script URL."));
+  }
+
+  const existingPromise = externalScriptLoadPromises.get(normalizedUrl);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const loader = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = normalizedUrl;
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => reject(new Error(`Failed to load script: ${normalizedUrl}`));
+    document.head.appendChild(script);
+  });
+
+  externalScriptLoadPromises.set(normalizedUrl, loader);
+  return loader;
+}
+
+async function ensureGlobalScriptLoaded(sourceList, availabilityCheck, logPrefix) {
+  if (availabilityCheck()) {
+    return true;
+  }
+
+  for (const source of sourceList) {
+    try {
+      await loadExternalScript(source);
+      if (availabilityCheck()) {
+        queueRuntimeLog(`${logPrefix}.loaded`, { source });
+        return true;
+      }
+    } catch (error) {
+      queueRuntimeLog(`${logPrefix}.load-failed`, {
+        source,
+        error: toRuntimeLogError(error)
+      });
+    }
+  }
+
+  return availabilityCheck();
+}
+
+async function ensurePdfJsEngineAvailable() {
+  const available = await ensureGlobalScriptLoaded(
+    PDF_JS_SOURCES,
+    () => Boolean(window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions),
+    "pdf.engine"
+  );
+
+  if (!available) {
+    setDocumentStatus("PDF engine is unavailable. Refresh and try again.", "error");
+  }
+
+  return available;
+}
+
+async function ensurePdfExportEngineAvailable() {
+  const available = await ensureGlobalScriptLoaded(
+    PDF_LIB_SOURCES,
+    () => Boolean(window.PDFLib && window.PDFLib.PDFDocument),
+    "pdf.export.engine"
+  );
+
+  if (!available) {
+    setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
+  }
+
+  return available;
+}
+
+async function configurePdfWorker() {
   if (isPdfWorkerConfigured) {
     return true;
   }
 
-  if (!window.pdfjsLib || !window.pdfjsLib.GlobalWorkerOptions) {
-    setDocumentStatus("PDF engine is unavailable. Refresh and try again.", "error");
+  if (!(await ensurePdfJsEngineAvailable())) {
     return false;
   }
 
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = getPreferredPdfWorkerSource();
   isPdfWorkerConfigured = true;
   return true;
 }
@@ -4069,8 +4163,7 @@ async function exportAnnotatedPdf() {
     return;
   }
 
-  if (!window.PDFLib || !window.PDFLib.PDFDocument) {
-    setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
+  if (!(await ensurePdfExportEngineAvailable())) {
     return;
   }
 
@@ -4175,7 +4268,7 @@ async function loadPdfFromFile(file) {
     return;
   }
 
-  if (!configurePdfWorker()) {
+  if (!(await configurePdfWorker())) {
     return;
   }
 
@@ -4334,12 +4427,12 @@ function goToNextPdfPage() {
   renderPdfPage(pdfPageNumber + 1);
 }
 
-function requestDocumentFileSelection() {
+async function requestDocumentFileSelection() {
   if (pdfExportInProgress || sessionRestoreInProgress) {
     return;
   }
 
-  if (!configurePdfWorker()) {
+  if (!(await configurePdfWorker())) {
     return;
   }
 
