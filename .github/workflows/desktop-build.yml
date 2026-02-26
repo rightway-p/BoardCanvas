@@ -63,7 +63,7 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.build_linux == true || inputs.build_linux == 'true') }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.build_linux == true || inputs.build_linux == 'true')) }}
     runs-on: ubuntu-22.04
 
     steps:
