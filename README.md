@@ -112,6 +112,98 @@ Artifacts:
 
 - `index.html`: UI markup
 - `styles.css`: styles and layout
-- `app.js`: drawing logic and state
+- `app.js`: drawing logic and state (4771 lines, being modularized)
+- `js/`: Modular code (new)
+  - `runtime.js`: Platform detection, Tauri communication, logging
+  - `overlay.js`: Overlay mode control with built-in diagnostics
+  - `diagnostics.js`: Developer diagnostic tools (exposed as `window.Diagnostics`)
+  - `init.js`: Module integration bridge
 - `src-tauri/`: desktop wrapper
+  - `src/main.rs`: Rust backend with diagnostic commands
 - `.github/workflows/desktop-build.yml`: CI build pipeline
+- `MODULES.md`: Module architecture documentation
+- `DIAGNOSTICS_GUIDE.md`: Troubleshooting guide for overlay issues
+
+## Modular Architecture (New)
+
+The codebase is being refactored into modules for better maintainability. See [MODULES.md](MODULES.md) for details.
+
+### Quick module overview:
+
+```javascript
+// Runtime & logging
+import { queueRuntimeLog, detectRuntimePlatform } from './js/runtime.js';
+
+// Overlay with auto-verification
+import { setDesktopWebviewBackgroundAlpha, diagnoseOverlayState } from './js/overlay.js';
+
+// Developer diagnostics (also available as window.Diagnostics)
+import { Diagnostics } from './js/diagnostics.js';
+```
+
+### Diagnostic Tools
+
+For debugging overlay transparency and mouse mode issues, use the built-in diagnostics:
+
+```javascript
+// In browser console (F12)
+await Diagnostics.runFullDiagnostics();
+await Diagnostics.verifyOverlayState();
+await Diagnostics.verifyMouseModeState(true);
+```
+
+See [DIAGNOSTICS_GUIDE.md](DIAGNOSTICS_GUIDE.md) for complete troubleshooting guide.
+
+## Known Issues
+
+See GitHub Issues for current bugs. Main issues:
+
+1. **Overlay visual bug**: Window not transparent despite successful API calls
+   - **Status**: 🔴 Critical bug found and fixed (2026-02-25)
+   - **Fix**: `set_window_overlay_surface` LAYERED removal logic corrected
+   - Diagnosis: `Diagnostics.verifyOverlayState()`
+   - See [BUGFIX_TRACKER.md](BUGFIX_TRACKER.md) for fix details
+
+2. **Overlay mouse mode interaction bug**: Clicks pass through toolbar
+   - **Status**: 🟡 Partial solution (recovery zone added)
+   - **Plan**: WM_NCHITTEST implementation for better handling
+   - Diagnosis: `Diagnostics.verifyMouseModeState(true)`
+   - See [BUGFIX_TRACKER.md](BUGFIX_TRACKER.md) for next steps
+
+## Documentation
+
+### 🧭 Start Here
+- � **[DOCS_INDEX.md](DOCS_INDEX.md)** - Complete document index (recommended)
+  - 📊 All documents at a glance
+  - 🎯 Role-based essential docs
+  - ⚡ Quick find by situation
+  - 🔄 Daily workflow patterns
+- �🗺️ **[NAVIGATION.md](NAVIGATION.md)** - Complete document navigation guide
+  - 📊 Visual document structure
+  - 🎯 Scenario-based paths (5 scenarios)
+  - 🔍 Quick search by keyword
+  - 📱 Role-based learning paths
+- ⚡ **[NAVIGATION_QUICK.md](NAVIGATION_QUICK.md)** - Quick navigation reference (1 page)
+
+### 📚 Troubleshooting Documents
+
+- 📋 **[BUGFIX_TRACKER.md](BUGFIX_TRACKER.md)** - Fix tracking & prevention guide
+  - ✅ Applied fixes with test checklists
+  - ❌ Failed approaches (avoid repetition)
+  - 🔄 Planned improvements by priority
+  - 📊 Testing procedures
+
+- 🔍 **[BUG_ANALYSIS.md](BUG_ANALYSIS.md)** - Detailed bug analysis
+  - Root cause analysis
+  - Technical solutions
+  - Code examples
+
+- 🛠️ **[DIAGNOSTICS_GUIDE.md](DIAGNOSTICS_GUIDE.md)** - User troubleshooting guide
+  - Step-by-step diagnosis
+  - Recovery procedures
+  - Console commands
+
+### 🚀 Quick Access
+- ⚡ **[QUICKREF.md](QUICKREF.md)** - Build and test commands
+- 📋 **[TODO.md](TODO.md)** - Current work items
+- 🏗️ **[MODULES.md](MODULES.md)** - Code architecture
