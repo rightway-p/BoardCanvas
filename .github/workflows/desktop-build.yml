@@ -98,17 +98,36 @@ jobs:
         run: |
           set -e
           mkdir -p artifacts/linux
-          mapfile -t candidates < <(
-            find src-tauri/target target -type f 2>/dev/null | grep -E '(/|^)(BoardCanvas|boardcanvas|.*\.AppImage|.*\.deb|.*\.rpm)$' | grep -Ev '/deps/' || true
-          )
+          mapfile -t candidates < <(find src-tauri/target target -type f 2>/dev/null || true)
 
-          if [ "${#candidates[@]}" -eq 0 ]; then
+          selected=()
+          for file in "${candidates[@]}"; do
+            case "$file" in
+              */release/*|*/bundle/*) ;;
+              *) continue ;;
+            esac
+
+            case "$file" in
+              *.AppImage|*.deb|*.rpm)
+                selected+=("$file")
+                continue
+                ;;
+            esac
+
+            if [ -x "$file" ] && file "$file" | grep -q 'ELF'; then
+              selected+=("$file")
+            fi
+          done
+
+          if [ "${#selected[@]}" -eq 0 ]; then
             echo "No Linux build outputs found."
+            echo "Debug: target tree"
+            find src-tauri/target -maxdepth 4 -type f 2>/dev/null | head -200 || true
             exit 1
           fi
 
           echo "Linux build outputs:"
-          for file in "${candidates[@]}"; do
+          for file in "${selected[@]}"; do
             echo " - $file"
             cp "$file" artifacts/linux/
           done
