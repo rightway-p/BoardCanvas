@@ -26,6 +26,10 @@ python -m http.server 5500
 
 Then open `http://localhost:5500`.
 
+Live web app (GitHub Pages):
+
+- https://rightway-p.github.io/BoardCanvas/
+
 ## Desktop Wrapper (Windows now, Linux prepared)
 
 This repository includes a Tauri wrapper under `src-tauri`.
