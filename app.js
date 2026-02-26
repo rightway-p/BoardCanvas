@@ -1429,6 +1429,31 @@ async function readGlobalCursorPosition() {
 }
 
 async function readWindowCursorPositionCss() {
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    const [cursorPosition, runtimeScale] = await Promise.all([
+      callWindowMethod(appWindowRef, "cursorPosition"),
+      callWindowMethod(appWindowRef, "scaleFactor")
+    ]);
+
+    if (cursorPosition && Number.isFinite(cursorPosition.x) && Number.isFinite(cursorPosition.y)) {
+      const rawX = Number(cursorPosition.x);
+      const rawY = Number(cursorPosition.y);
+      const browserScaleFactor = Math.max(1, Number(window.devicePixelRatio) || 1);
+      const scaleFactor = Number.isFinite(runtimeScale) && runtimeScale > 0
+        ? Number(runtimeScale)
+        : browserScaleFactor;
+
+      return {
+        x: rawX / scaleFactor,
+        y: rawY / scaleFactor,
+        rawX,
+        rawY,
+        scaleFactor
+      };
+    }
+  }
+
   const point = await invokeDesktopCommand("get_window_cursor_position");
   if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
     return null;
@@ -1578,7 +1603,7 @@ async function pollOverlayMouseTracker() {
 
     if (!cursorPosition) {
       overlayMousePollFailureCount += 1;
-      if (overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
+      if (runtimePlatform === "windows" && overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
         await setOverlayMousePassthrough(false, {
           announce: true,
           restoreFocus: false
@@ -1757,11 +1782,7 @@ async function setOverlayMousePassthrough(active, options = {}) {
 
     applyOverlayMouseModeUI(nextActive);
     if (nextActive) {
-      if (runtimePlatform === "windows") {
-        startOverlayMouseTracker();
-      } else {
-        stopOverlayMouseTracker();
-      }
+      startOverlayMouseTracker();
     } else {
       stopOverlayMouseTracker();
     }
