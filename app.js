@@ -1,0 +1,5309 @@
+const backgroundCanvas = document.getElementById("boardBackground");
+const backgroundCtx = backgroundCanvas.getContext("2d");
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const app = document.querySelector(".app");
+const toolbar = document.querySelector(".toolbar");
+const boardWrapper = document.querySelector(".board-wrapper");
+
+const penToolButton = document.getElementById("penTool");
+const overlayMouseModeToggleButton = document.getElementById("overlayMouseModeToggle");
+const eraserToolButton = document.getElementById("eraserTool");
+const pixelEraserModeButton = document.getElementById("pixelEraserMode");
+const strokeEraserModeButton = document.getElementById("strokeEraserMode");
+const undoButton = document.getElementById("undoButton");
+const redoButton = document.getElementById("redoButton");
+const clearButton = document.getElementById("clearButton");
+const fullscreenToggleButton = document.getElementById("fullscreenToggle");
+const overlayModeToggleButton = document.getElementById("overlayModeToggle");
+
+const penColorInput = document.getElementById("penColor");
+const boardColorInput = document.getElementById("boardColor");
+const lineWidthInput = document.getElementById("lineWidth");
+const lineWidthDecButton = document.getElementById("lineWidthDec");
+const lineWidthIncButton = document.getElementById("lineWidthInc");
+const documentEditor = document.getElementById("documentEditor");
+const openDocumentPopupButton = document.getElementById("openDocumentPopup");
+const documentPopup = document.getElementById("documentPopup");
+const documentLoadButton = document.getElementById("documentLoadButton");
+const documentInput = document.getElementById("documentInput");
+const pdfPrevPageButton = document.getElementById("pdfPrevPage");
+const pdfNextPageButton = document.getElementById("pdfNextPage");
+const pdfPageIndicator = document.getElementById("pdfPageIndicator");
+const exportAnnotatedPdfButton = document.getElementById("exportAnnotatedPdfButton");
+const toolbarPdfPageIndicator = document.getElementById("toolbarPdfPageIndicator");
+const removeDocumentButton = document.getElementById("removeDocumentButton");
+const documentStatus = document.getElementById("documentStatus");
+const eraserToolEditor = document.getElementById("eraserToolEditor");
+const eraserToolPopup = document.getElementById("eraserToolPopup");
+const eraserWidthInput = document.getElementById("eraserWidth");
+const eraserWidthDecButton = document.getElementById("eraserWidthDec");
+const eraserWidthIncButton = document.getElementById("eraserWidthInc");
+const boardColorEditor = document.getElementById("boardColorEditor");
+const openBoardColorPopupButton = document.getElementById("openBoardColorPopup");
+const boardColorPreviewInput = document.getElementById("boardColorPreview");
+const boardColorPopup = document.getElementById("boardColorPopup");
+const presetHelp = document.getElementById("presetHelp");
+const presetHelpButton = document.getElementById("presetHelpButton");
+const presetHelpPopup = document.getElementById("presetHelpPopup");
+const toolbarDragHandle = document.getElementById("toolbarDragHandle");
+const modeLabel = document.getElementById("modeLabel");
+const penPresetsContainer = document.getElementById("penPresets");
+const boardPresetsContainer = document.getElementById("boardPresets");
+
+const DEFAULT_PEN_PRESETS = [
+  { color: "#111111", width: 2, type: "basic" },
+  { color: "#ffffff", width: 2, type: "basic" },
+  { color: "#e53935", width: 2, type: "basic" },
+  { color: "#1e88e5", width: 2, type: "basic" }
+];
+
+const DEFAULT_BOARD_PRESETS = [
+  "#ffffff",
+  "#f1f3f5",
+  "#0b6623",
+  "#1b1f3b",
+  "#fff8e1",
+  "#fce4ec",
+  "#e3f2fd",
+  "#ede7f6"
+];
+
+const PEN_PRESET_STORAGE_KEY = "board.pen.presets.v1";
+const BOARD_PRESET_STORAGE_KEY = "board.background.presets.v1";
+const LAST_PEN_COLOR_STORAGE_KEY = "board.pen.lastColor.v1";
+const LAST_PEN_WIDTH_STORAGE_KEY = "board.pen.lastWidth.v1";
+const LAST_ERASER_WIDTH_STORAGE_KEY = "board.eraser.lastWidth.v1";
+const LAST_ERASER_MODE_STORAGE_KEY = "board.eraser.lastMode.v1";
+const LAST_BOARD_COLOR_STORAGE_KEY = "board.background.lastColor.v1";
+const LAST_TOOLBAR_LAYOUT_STORAGE_KEY = "board.toolbar.layout.v1";
+const SESSION_STORAGE_KEY = "board.session.state.v1";
+const SESSION_STORAGE_VERSION = 1;
+const SESSION_AUTOSAVE_DELAY_MS = 500;
+const SESSION_DB_NAME = "boardcanvas.session.db";
+const SESSION_DB_STORE = "session-files";
+const SESSION_DB_PDF_KEY = "last-pdf";
+const PDF_JS_SOURCES = [
+  "./vendor/pdf.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+];
+const PDF_LIB_SOURCES = [
+  "./vendor/pdf-lib.min.js",
+  "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"
+];
+const PDF_WORKER_SOURCES = [
+  "./vendor/pdf.worker.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
+];
+
+const QUALITY_PRESETS = {
+  normal: {
+    dprCap: 2,
+    minSegmentLength: 1.0,
+    inputSmoothing: 0.22,
+    maxPointsPerFrame: 48,
+    frameBudgetMs: 6
+  },
+  low: {
+    dprCap: 1,
+    minSegmentLength: 1.4,
+    inputSmoothing: 0.28,
+    maxPointsPerFrame: 28,
+    frameBudgetMs: 4
+  }
+};
+const MAX_QUEUE_POINTS = 320;
+const TOOLBAR_DOCK_THRESHOLD = 48;
+const HISTORY_STACK_LIMIT = 120;
+
+let qualityLevel = detectLowSpecDevice() ? "low" : "normal";
+let quality = QUALITY_PRESETS[qualityLevel];
+
+let drawing = false;
+let hasStrokeMoved = false;
+let lastPoint = null;
+let lastMidPoint = null;
+let filteredPoint = null;
+let pixelRatio = 1;
+let frameCostAverage = 0;
+let pendingQualityResize = false;
+
+let currentPenType = "basic";
+let penPresets = [];
+let boardPresetColors = [];
+
+const pendingPoints = [];
+let pendingHead = 0;
+let frameRequested = false;
+const strokes = [];
+let boardStrokeSnapshot = [];
+const pdfPageStrokeSnapshots = new Map();
+let activeStroke = null;
+let strokeEraserActive = false;
+let strokeEraserPointerId = null;
+let strokeEraserLastPoint = null;
+let strokeEraserHistoryArmed = false;
+let toolbarDragPointerId = null;
+let toolbarDragOffsetX = 0;
+let toolbarDragOffsetY = 0;
+let toolbarDragNextX = 12;
+let toolbarDragNextY = 12;
+let toolbarDragPreviewPlacement = "top";
+
+let tool = "pen";
+let eraserMode = "eraser";
+let toolbarLayout = {
+  placement: "top",
+  floatX: 120,
+  floatY: 120
+};
+let pdfDocument = null;
+let pdfPageNumber = 1;
+let pdfPageRasterCanvas = null;
+let pdfRenderTask = null;
+let pdfRenderToken = 0;
+let pdfRenderDebounceTimer = null;
+let pdfLoadingToken = 0;
+let pdfExportInProgress = false;
+let loadedPdfBytes = null;
+let sessionPdfBytesDirty = false;
+let loadedDocumentName = "";
+let isPdfWorkerConfigured = false;
+let sessionAutosaveTimer = null;
+let sessionRestoreInProgress = false;
+const strokeHistoryByContext = new Map();
+let overlayMode = false;
+let overlayTransitionInProgress = false;
+let overlayWindowSnapshot = null;
+let boardColorBeforeOverlay = null;
+let overlayMousePassthrough = false;
+let overlayMouseTransitionInProgress = false;
+let overlayMouseUiBypassActive = false;
+let overlayMouseNativeIgnoreState = false;
+let overlayMouseNativeQueue = Promise.resolve();
+let overlayMouseTrackerTimer = null;
+let overlayMousePollInFlight = false;
+let overlayMousePollFailureCount = 0;
+let overlayMouseToolbarRecoveryUntil = 0;
+let overlaySurfaceStyleSnapshot = null;
+let nativeFullscreenActive = false;
+let nativeWindowMaximized = false;
+let overlayMouseForwardOptionAvailable = null;
+const runtimePlatform = detectRuntimePlatform();
+const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
+const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
+const OVERLAY_MOUSE_HIT_PADDING_PX = 32;
+const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 96;
+const OVERLAY_MOUSE_RECOVERY_HOLD_MS = 180;
+const OVERLAY_HIDE_HOST_WITH_TOOLBAR_FALLBACK = false;
+const RUNTIME_BUILD_TAG = "overlay-monitor-mouse-fallback-3";
+const OVERLAY_WINDOW_LABEL = "overlay-canvas-window";
+const OVERLAY_WINDOW_QUERY_KEY = "overlayWindow";
+const OVERLAY_WINDOW_CLOSED_EVENT = "overlay-window-closed";
+const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
+const missingNativeWindowMethods = new Set();
+let runtimeLogPathCache = "";
+let runtimeLogPathRequested = false;
+let runtimeLogQueue = Promise.resolve();
+let overlayWindowListenerUnsubscribe = null;
+const externalScriptLoadPromises = new Map();
+
+function trimRuntimeLogValue(value, limit = MAX_RUNTIME_LOG_VALUE_LENGTH) {
+  const text = String(value ?? "");
+  if (text.length <= limit) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function toRuntimeLogError(error) {
+  if (!error) {
+    return null;
+  }
+
+  if (typeof error === "string") {
+    return trimRuntimeLogValue(error);
+  }
+
+  if (error instanceof Error) {
+    const detail = {
+      name: trimRuntimeLogValue(error.name || "Error", 64),
+      message: trimRuntimeLogValue(error.message || "")
+    };
+    if (error.stack) {
+      detail.stack = trimRuntimeLogValue(String(error.stack), 500);
+    }
+    return detail;
+  }
+
+  return sanitizeRuntimeLogDetails(error, 0);
+}
+
+function sanitizeRuntimeLogDetails(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (depth > 2) {
+    return trimRuntimeLogValue(value);
+  }
+
+  const valueType = typeof value;
+  if (valueType === "string") {
+    return trimRuntimeLogValue(value);
+  }
+  if (valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (valueType === "bigint") {
+    return trimRuntimeLogValue(`${value}n`);
+  }
+
+  if (valueType === "function") {
+    return "[function]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((entry) => sanitizeRuntimeLogDetails(entry, depth + 1));
+  }
+
+  if (value instanceof Error) {
+    return toRuntimeLogError(value);
+  }
+
+  if (valueType === "object") {
+    const normalized = {};
+    const keys = Object.keys(value).slice(0, 16);
+    for (const key of keys) {
+      normalized[key] = sanitizeRuntimeLogDetails(value[key], depth + 1);
+    }
+    return normalized;
+  }
+
+  return trimRuntimeLogValue(value);
+}
+
+function getTauriInvoke() {
+  const tauriApi = window.__TAURI__;
+  if (!tauriApi) {
+    return null;
+  }
+
+  if (typeof tauriApi.invoke === "function") {
+    return tauriApi.invoke.bind(tauriApi);
+  }
+
+  if (tauriApi.tauri && typeof tauriApi.tauri.invoke === "function") {
+    return tauriApi.tauri.invoke.bind(tauriApi.tauri);
+  }
+
+  return null;
+}
+
+async function invokeDesktopCommand(command, args = {}, options = {}) {
+  const { logError = false } = options;
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return null;
+  }
+
+  try {
+    return await invoke(command, args);
+  } catch (error) {
+    if (logError) {
+      queueRuntimeLog("desktop.command.error", {
+        command,
+        args: sanitizeRuntimeLogDetails(args),
+        error: toRuntimeLogError(error)
+      });
+    }
+    return null;
+  }
+}
+
+async function setDesktopWebviewBackgroundAlpha(alpha) {
+  if (!isDesktopAppRuntime()) {
+    return false;
+  }
+  if (runtimePlatform !== "windows") {
+    // Linux/macOS runtime: no WebView alpha command needed in current path.
+    return true;
+  }
+
+  const normalizedAlpha = Math.max(0, Math.min(255, Number(alpha) || 0));
+  const result = await invokeDesktopCommand("set_webview_background_alpha", {
+    alpha: normalizedAlpha
+  }, {
+    logError: true
+  });
+  if (!Number.isFinite(result)) {
+    queueRuntimeLog("overlay.webview.background-alpha.unavailable", {
+      requestedAlpha: normalizedAlpha,
+      returnedAlpha: result ?? null
+    });
+    return false;
+  }
+
+  queueRuntimeLog("overlay.webview.background-alpha.applied", {
+    requestedAlpha: normalizedAlpha,
+    returnedAlpha: Number(result)
+  });
+  return true;
+}
+
+async function setDesktopOverlaySurface(enabled) {
+  if (!isDesktopAppRuntime()) {
+    return false;
+  }
+  if (runtimePlatform !== "windows") {
+    // Linux/macOS runtime: no host-surface command needed in current path.
+    return true;
+  }
+
+  const result = await invokeDesktopCommand("set_window_overlay_surface", {
+    enabled: Boolean(enabled)
+  }, {
+    logError: true
+  });
+  if (result !== true) {
+    queueRuntimeLog("overlay.host-surface.unavailable", {
+      enabled: Boolean(enabled),
+      result: result ?? null
+    });
+    return false;
+  }
+
+  queueRuntimeLog("overlay.host-surface.applied", {
+    enabled: Boolean(enabled)
+  });
+  return true;
+}
+
+async function setDesktopWindowClickThrough(enabled) {
+  if (!isDesktopAppRuntime() || runtimePlatform !== "windows") {
+    queueRuntimeLog("overlay.clickthrough.unsupported-runtime", {
+      enabled: Boolean(enabled),
+      runtimePlatform
+    });
+    return false;
+  }
+
+  const result = await invokeDesktopCommand("set_window_click_through", {
+    enabled: Boolean(enabled)
+  }, {
+    logError: true
+  });
+
+  if (!result || typeof result !== "object") {
+    queueRuntimeLog("overlay.clickthrough.unavailable", {
+      enabled: Boolean(enabled),
+      result: result ?? null
+    });
+    return false;
+  }
+
+  const expected = Boolean(enabled);
+  const applied = Boolean(result.has_transparent);
+  queueRuntimeLog("overlay.clickthrough.applied", {
+    enabled: expected,
+    hasTransparent: applied
+  });
+  return applied === expected;
+}
+
+function queueRuntimeLog(message, details = null) {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return;
+  }
+
+  const payload = {
+    time: new Date().toISOString(),
+    message: trimRuntimeLogValue(message || ""),
+    details: details ? sanitizeRuntimeLogDetails(details) : null
+  };
+  const serialized = JSON.stringify(payload);
+
+  runtimeLogQueue = runtimeLogQueue
+    .catch(() => null)
+    .then(() => invoke("append_runtime_log", { message: serialized }))
+    .catch(() => null);
+}
+
+async function primeRuntimeLogPath() {
+  if (runtimeLogPathRequested) {
+    return runtimeLogPathCache;
+  }
+
+  runtimeLogPathRequested = true;
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    return runtimeLogPathCache;
+  }
+
+  try {
+    const path = await invoke("get_runtime_log_path");
+    runtimeLogPathCache = typeof path === "string" ? path : "";
+    queueRuntimeLog("runtime.bootstrap", {
+      platform: runtimePlatform,
+      protocol: String((window.location && window.location.protocol) || ""),
+      logPath: runtimeLogPathCache || null
+    });
+  } catch (error) {
+    queueRuntimeLog("runtime.logpath.failed", {
+      error: toRuntimeLogError(error)
+    });
+  }
+
+  return runtimeLogPathCache;
+}
+
+function setupRuntimeErrorLogging() {
+  window.addEventListener("error", (event) => {
+    queueRuntimeLog("window.error", {
+      message: trimRuntimeLogValue(event.message || ""),
+      filename: trimRuntimeLogValue(event.filename || "", 140),
+      line: Number.isFinite(event.lineno) ? event.lineno : null,
+      column: Number.isFinite(event.colno) ? event.colno : null,
+      error: toRuntimeLogError(event.error)
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    queueRuntimeLog("window.unhandledrejection", {
+      reason: toRuntimeLogError(event.reason)
+    });
+  });
+}
+
+function detectRuntimePlatform() {
+  const userAgent = String((window.navigator && window.navigator.userAgent) || "").toLowerCase();
+  const platform = String((window.navigator && window.navigator.platform) || "").toLowerCase();
+  const source = `${userAgent} ${platform}`;
+
+  if (source.includes("win")) {
+    return "windows";
+  }
+
+  if (source.includes("mac")) {
+    return "macos";
+  }
+
+  if (source.includes("linux")) {
+    return "linux";
+  }
+
+  return "unknown";
+}
+
+function isLikelyTauriProtocol() {
+  const protocol = String((window.location && window.location.protocol) || "").toLowerCase();
+  if (protocol === "tauri:" || protocol === "asset:" || protocol === "app:") {
+    return true;
+  }
+
+  const hostname = String((window.location && window.location.hostname) || "").toLowerCase();
+  if (protocol === "https:" && (hostname === "tauri.localhost" || hostname.endsWith(".tauri.localhost"))) {
+    return true;
+  }
+
+  // Some desktop builds expose the app bridge under https origin.
+  return isDesktopAppRuntime();
+}
+
+function getFullscreenElement() {
+  return document.fullscreenElement
+    || document.webkitFullscreenElement
+    || document.msFullscreenElement
+    || null;
+}
+
+function waitShortDelay(ms = 60) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isBrowserFullscreenSupported() {
+  return Boolean(
+    document.fullscreenEnabled
+    || document.webkitFullscreenEnabled
+    || document.msFullscreenEnabled
+  );
+}
+
+function isFullscreenSupported() {
+  return isBrowserFullscreenSupported() || Boolean(getTauriAppWindow());
+}
+
+function isFullscreenActive() {
+  return Boolean(getFullscreenElement()) || nativeFullscreenActive || nativeWindowMaximized;
+}
+
+async function refreshNativeFullscreenState() {
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = false;
+    return false;
+  }
+
+  const [nextFullscreenState, nextMaximizedState] = await Promise.all([
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized")
+  ]);
+
+  if (typeof nextFullscreenState === "boolean") {
+    nativeFullscreenActive = nextFullscreenState;
+  }
+
+  if (typeof nextMaximizedState === "boolean") {
+    nativeWindowMaximized = nextMaximizedState;
+  }
+
+  return nativeFullscreenActive || nativeWindowMaximized;
+}
+
+async function requestNativeFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    queueRuntimeLog("fullscreen.native.enter.skipped", { reason: "window-unavailable" });
+    return false;
+  }
+
+  queueRuntimeLog("fullscreen.native.enter.start", {
+    overlayMode,
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "setFullscreen-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+  if (setFullscreenResult !== null) {
+    nativeFullscreenActive = true;
+    nativeWindowMaximized = false;
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "setFullscreen-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "maximize-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+  if (maximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = true;
+    queueRuntimeLog("fullscreen.native.enter.success", {
+      step: "maximize-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  queueRuntimeLog("fullscreen.native.enter.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  return false;
+}
+
+async function requestNativeExitFullscreenLike(appWindowRef) {
+  if (!appWindowRef) {
+    queueRuntimeLog("fullscreen.native.exit.skipped", { reason: "window-unavailable" });
+    return false;
+  }
+
+  queueRuntimeLog("fullscreen.native.exit.start", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  const exitFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", false);
+  const unmaximizeResult = await callWindowMethod(appWindowRef, "unmaximize");
+  await refreshNativeFullscreenState();
+  if (!nativeFullscreenActive && !nativeWindowMaximized) {
+    queueRuntimeLog("fullscreen.native.exit.success", {
+      step: "state-cleared",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (exitFullscreenResult !== null || unmaximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = false;
+    queueRuntimeLog("fullscreen.native.exit.success", {
+      step: "method-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  queueRuntimeLog("fullscreen.native.exit.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  return false;
+}
+
+async function requestNativeOverlayLike(appWindowRef) {
+  if (!appWindowRef) {
+    queueRuntimeLog("overlay.native.enter.skipped", { reason: "window-unavailable" });
+    return false;
+  }
+
+  queueRuntimeLog("overlay.native.enter.start", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
+  await refreshNativeFullscreenState();
+  if (nativeWindowMaximized || nativeFullscreenActive) {
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (setFullscreenResult !== null) {
+    nativeFullscreenActive = true;
+    nativeWindowMaximized = false;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "setFullscreen-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await callWindowMethod(appWindowRef, "unmaximize");
+  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (maximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = true;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  queueRuntimeLog("overlay.native.enter.failed", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+  return false;
+}
+
+function syncFullscreenUiFromNativeWindow() {
+  refreshNativeFullscreenState()
+    .catch(() => null)
+    .finally(() => {
+      updateFullscreenButtons();
+    });
+}
+
+function bootstrapRuntimeBridgeSync() {
+  let attempts = 0;
+  const maxAttempts = 24;
+  const timerId = window.setInterval(() => {
+    attempts += 1;
+    updateFullscreenButtons();
+    updateOverlayModeButton();
+
+    if (isDesktopAppRuntime() || attempts >= maxAttempts) {
+      window.clearInterval(timerId);
+      syncFullscreenUiFromNativeWindow();
+      updateOverlayModeButton();
+    }
+  }, 250);
+}
+
+function updateFullscreenButtons() {
+  const supported = isFullscreenSupported();
+  const active = isFullscreenActive() || overlayMode;
+  const lockedByOverlay = overlayMode || overlayTransitionInProgress;
+
+  fullscreenToggleButton.disabled = !supported || lockedByOverlay;
+  fullscreenToggleButton.classList.toggle("is-fullscreen", supported && active);
+
+  if (!supported) {
+    fullscreenToggleButton.setAttribute("aria-label", "\uC804\uCCB4\uD654\uBA74 \uBBF8\uC9C0\uC6D0");
+    fullscreenToggleButton.title = "\uC804\uCCB4\uD654\uBA74 \uBBF8\uC9C0\uC6D0";
+    return;
+  }
+
+  const label = active
+    ? "\uC804\uCCB4\uD654\uBA74 \uC885\uB8CC"
+    : "\uC804\uCCB4\uD654\uBA74";
+  fullscreenToggleButton.setAttribute("aria-label", label);
+  fullscreenToggleButton.title = label;
+}
+async function enterFullscreen() {
+  if (!isFullscreenSupported() || isFullscreenActive()) {
+    queueRuntimeLog("fullscreen.enter.skipped", {
+      supported: isFullscreenSupported(),
+      active: isFullscreenActive()
+    });
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    queueRuntimeLog("fullscreen.enter.desktop.start", { overlayMode });
+    const entered = await requestNativeFullscreenLike(appWindowRef);
+    updateFullscreenButtons();
+    if (!entered) {
+      setDocumentStatus("Unable to enable fullscreen in desktop runtime.", "warning");
+      queueRuntimeLog("fullscreen.enter.desktop.failed", {
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
+    } else {
+      queueRuntimeLog("fullscreen.enter.desktop.success", {
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
+    }
+    return;
+  }
+
+  if (isBrowserFullscreenSupported()) {
+    const target = document.documentElement;
+    try {
+      if (typeof target.requestFullscreen === "function") {
+        await target.requestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof target.webkitRequestFullscreen === "function") {
+        target.webkitRequestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof target.msRequestFullscreen === "function") {
+        target.msRequestFullscreen();
+        await waitShortDelay();
+        if (getFullscreenElement()) {
+          return;
+        }
+      }
+    } catch (error) {
+      // Browser fullscreen can fail in app webviews.
+      queueRuntimeLog("fullscreen.enter.browser.error", {
+        error: toRuntimeLogError(error)
+      });
+    }
+  }
+  updateFullscreenButtons();
+  queueRuntimeLog("fullscreen.enter.browser.done", {
+    active: Boolean(getFullscreenElement())
+  });
+}
+
+async function exitFullscreen() {
+  if (!isFullscreenActive()) {
+    queueRuntimeLog("fullscreen.exit.skipped", { reason: "not-active" });
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    queueRuntimeLog("fullscreen.exit.desktop.start", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    await requestNativeExitFullscreenLike(appWindowRef);
+    updateFullscreenButtons();
+    queueRuntimeLog("fullscreen.exit.desktop.done", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return;
+  }
+
+  if (getFullscreenElement()) {
+    try {
+      if (typeof document.exitFullscreen === "function") {
+        await document.exitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof document.webkitExitFullscreen === "function") {
+        document.webkitExitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+
+      if (typeof document.msExitFullscreen === "function") {
+        document.msExitFullscreen();
+        await waitShortDelay();
+        if (!getFullscreenElement()) {
+          return;
+        }
+      }
+    } catch (error) {
+      // Ignore exit errors and try native fallback.
+      queueRuntimeLog("fullscreen.exit.browser.error", {
+        error: toRuntimeLogError(error)
+      });
+    }
+  }
+  updateFullscreenButtons();
+  queueRuntimeLog("fullscreen.exit.browser.done", {
+    active: Boolean(getFullscreenElement())
+  });
+}
+
+async function toggleFullscreen() {
+  if (overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("fullscreen.toggle.skipped", {
+      reason: "overlay-active",
+      overlayMode,
+      overlayTransitionInProgress
+    });
+    return;
+  }
+
+  if (isDesktopAppRuntime()) {
+    await refreshNativeFullscreenState();
+  }
+
+  if (isFullscreenActive()) {
+    await exitFullscreen();
+    return;
+  }
+
+  await enterFullscreen();
+}
+
+function getTauriWindowApi() {
+  if (!window.__TAURI__ || !window.__TAURI__.window) {
+    return null;
+  }
+
+  return window.__TAURI__.window;
+}
+
+function getTauriAppWindow() {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!tauriWindowApi || !tauriWindowApi.appWindow) {
+    return null;
+  }
+
+  return tauriWindowApi.appWindow;
+}
+
+function isDesktopAppRuntime() {
+  return Boolean(getTauriAppWindow());
+}
+
+function isWindowsDesktopRuntime() {
+  return isDesktopAppRuntime() && runtimePlatform === "windows";
+}
+
+async function callWindowMethod(targetWindow, methodName, ...args) {
+  if (!targetWindow || typeof targetWindow[methodName] !== "function") {
+    if (!missingNativeWindowMethods.has(methodName)) {
+      missingNativeWindowMethods.add(methodName);
+      queueRuntimeLog("window.method.missing", { method: methodName });
+    }
+    return null;
+  }
+
+  try {
+    return await targetWindow[methodName](...args);
+  } catch (error) {
+    queueRuntimeLog("window.method.error", {
+      method: methodName,
+      args: sanitizeRuntimeLogDetails(args),
+      error: toRuntimeLogError(error)
+    });
+    return null;
+  }
+}
+
+function getTauriEventApi() {
+  if (!window.__TAURI__ || !window.__TAURI__.event) {
+    return null;
+  }
+
+  return window.__TAURI__.event;
+}
+
+function isDedicatedOverlayWindow() {
+  try {
+    const params = new URLSearchParams(String((window.location && window.location.search) || ""));
+    return params.get(OVERLAY_WINDOW_QUERY_KEY) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+async function emitTauriRuntimeEvent(eventName, payload = {}) {
+  const eventApi = getTauriEventApi();
+  if (!eventApi || typeof eventApi.emit !== "function") {
+    return false;
+  }
+
+  try {
+    await eventApi.emit(eventName, payload);
+    return true;
+  } catch (error) {
+    queueRuntimeLog("event.emit.error", {
+      eventName,
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  }
+}
+
+async function installOverlayWindowClosedListener() {
+  if (overlayWindowListenerUnsubscribe !== null) {
+    return;
+  }
+
+  const eventApi = getTauriEventApi();
+  if (!eventApi || typeof eventApi.listen !== "function") {
+    return;
+  }
+
+  try {
+    overlayWindowListenerUnsubscribe = await eventApi.listen(OVERLAY_WINDOW_CLOSED_EVENT, async () => {
+      if (isDedicatedOverlayWindow()) {
+        return;
+      }
+
+      const appWindowRef = getTauriAppWindow();
+      if (!appWindowRef) {
+        return;
+      }
+
+      await callWindowMethod(appWindowRef, "show");
+      await callWindowMethod(appWindowRef, "setFocus");
+      updateOverlayModeButton();
+    });
+  } catch (error) {
+    queueRuntimeLog("event.listen.error", {
+      eventName: OVERLAY_WINDOW_CLOSED_EVENT,
+      error: toRuntimeLogError(error)
+    });
+  }
+}
+
+async function openDedicatedOverlayWindow() {
+  if (isDedicatedOverlayWindow()) {
+    return false;
+  }
+
+  const tauriWindowApi = getTauriWindowApi();
+  const appWindowRef = getTauriAppWindow();
+  if (!tauriWindowApi || !appWindowRef || typeof tauriWindowApi.WebviewWindow !== "function") {
+    return false;
+  }
+
+  try {
+    if (typeof tauriWindowApi.WebviewWindow.getByLabel === "function") {
+      const existing = tauriWindowApi.WebviewWindow.getByLabel(OVERLAY_WINDOW_LABEL);
+      if (existing) {
+        await callWindowMethod(existing, "setFocus");
+        await callWindowMethod(appWindowRef, "hide");
+        return true;
+      }
+    }
+
+    const [monitorInfo, outerPosition, outerSize] = await Promise.all([
+      callWindowMethod(appWindowRef, "currentMonitor"),
+      callWindowMethod(appWindowRef, "outerPosition"),
+      callWindowMethod(appWindowRef, "outerSize")
+    ]);
+
+    const monitorX = Number(monitorInfo?.position?.x);
+    const monitorY = Number(monitorInfo?.position?.y);
+    const monitorWidth = Number(monitorInfo?.size?.width);
+    const monitorHeight = Number(monitorInfo?.size?.height);
+
+    const fallbackX = Number(outerPosition?.x);
+    const fallbackY = Number(outerPosition?.y);
+    const fallbackWidth = Number(outerSize?.width);
+    const fallbackHeight = Number(outerSize?.height);
+
+    const launchX = Number.isFinite(monitorX) ? Math.round(monitorX) : (Number.isFinite(fallbackX) ? Math.round(fallbackX) : 0);
+    const launchY = Number.isFinite(monitorY) ? Math.round(monitorY) : (Number.isFinite(fallbackY) ? Math.round(fallbackY) : 0);
+    const launchWidth = Number.isFinite(monitorWidth) && monitorWidth > 100
+      ? Math.round(monitorWidth)
+      : (Number.isFinite(fallbackWidth) && fallbackWidth > 100 ? Math.round(fallbackWidth) : 1280);
+    const launchHeight = Number.isFinite(monitorHeight) && monitorHeight > 100
+      ? Math.round(monitorHeight)
+      : (Number.isFinite(fallbackHeight) && fallbackHeight > 100 ? Math.round(fallbackHeight) : 720);
+
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set(OVERLAY_WINDOW_QUERY_KEY, "1");
+    const overlayWindow = new tauriWindowApi.WebviewWindow(OVERLAY_WINDOW_LABEL, {
+      url: nextUrl.toString(),
+      x: launchX,
+      y: launchY,
+      width: launchWidth,
+      height: launchHeight,
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      fullscreen: false,
+      resizable: false,
+      focus: true,
+      skipTaskbar: true
+    });
+    queueRuntimeLog("overlay.window.create.bounds", {
+      x: launchX,
+      y: launchY,
+      width: launchWidth,
+      height: launchHeight,
+      monitorDetected: Boolean(Number.isFinite(monitorX) && Number.isFinite(monitorY))
+    });
+
+    if (overlayWindow && typeof overlayWindow.once === "function") {
+      overlayWindow.once("tauri://created", async () => {
+        const logicalSize = (typeof tauriWindowApi.LogicalSize === "function")
+          ? new tauriWindowApi.LogicalSize(launchWidth, launchHeight)
+          : null;
+        const logicalPosition = (typeof tauriWindowApi.LogicalPosition === "function")
+          ? new tauriWindowApi.LogicalPosition(launchX, launchY)
+          : null;
+        if (logicalSize) {
+          await callWindowMethod(overlayWindow, "setSize", logicalSize);
+        }
+        if (logicalPosition) {
+          await callWindowMethod(overlayWindow, "setPosition", logicalPosition);
+        }
+        await callWindowMethod(overlayWindow, "setAlwaysOnTop", true);
+        await callWindowMethod(appWindowRef, "hide");
+      });
+      overlayWindow.once("tauri://error", (error) => {
+        queueRuntimeLog("overlay.window.create.error", {
+          error: toRuntimeLogError(error)
+        });
+      });
+    } else {
+      await callWindowMethod(appWindowRef, "hide");
+    }
+    return true;
+  } catch (error) {
+    queueRuntimeLog("overlay.window.create.exception", {
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  }
+}
+
+async function captureOverlayWindowSnapshot(appWindowRef) {
+  const [position, size, decorated, alwaysOnTop, fullscreen, maximized, resizable] = await Promise.all([
+    callWindowMethod(appWindowRef, "outerPosition"),
+    callWindowMethod(appWindowRef, "outerSize"),
+    callWindowMethod(appWindowRef, "isDecorated"),
+    callWindowMethod(appWindowRef, "isAlwaysOnTop"),
+    callWindowMethod(appWindowRef, "isFullscreen"),
+    callWindowMethod(appWindowRef, "isMaximized"),
+    callWindowMethod(appWindowRef, "isResizable")
+  ]);
+
+  return {
+    position: position && Number.isFinite(position.x) && Number.isFinite(position.y)
+      ? { x: Math.round(position.x), y: Math.round(position.y) }
+      : null,
+    size: size && Number.isFinite(size.width) && Number.isFinite(size.height)
+      ? { width: Math.max(200, Math.round(size.width)), height: Math.max(120, Math.round(size.height)) }
+      : null,
+    decorated: typeof decorated === "boolean" ? decorated : null,
+    alwaysOnTop: typeof alwaysOnTop === "boolean" ? alwaysOnTop : null,
+    fullscreen: typeof fullscreen === "boolean" ? fullscreen : null,
+    maximized: typeof maximized === "boolean" ? maximized : null,
+    resizable: typeof resizable === "boolean" ? resizable : null
+  };
+}
+
+async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
+  const tauriWindowApi = getTauriWindowApi();
+  if (!appWindowRef || !snapshot) {
+    queueRuntimeLog("overlay.snapshot.restore.skipped", {
+      hasWindow: Boolean(appWindowRef),
+      hasSnapshot: Boolean(snapshot)
+    });
+    return;
+  }
+
+  queueRuntimeLog("overlay.snapshot.restore.start", {
+    snapshot: sanitizeRuntimeLogDetails(snapshot)
+  });
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+
+  if (typeof snapshot.decorated === "boolean") {
+    await callWindowMethod(appWindowRef, "setDecorations", snapshot.decorated);
+  } else {
+    await callWindowMethod(appWindowRef, "setDecorations", true);
+  }
+
+  if (typeof snapshot.alwaysOnTop === "boolean") {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", snapshot.alwaysOnTop);
+  } else {
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", false);
+  }
+  if (typeof snapshot.resizable === "boolean") {
+    await callWindowMethod(appWindowRef, "setResizable", snapshot.resizable);
+  } else {
+    await callWindowMethod(appWindowRef, "setResizable", true);
+  }
+
+  if (snapshot.maximized === true) {
+    await callWindowMethod(appWindowRef, "maximize");
+  } else {
+    await callWindowMethod(appWindowRef, "unmaximize");
+
+    if (snapshot.size && tauriWindowApi && typeof tauriWindowApi.LogicalSize === "function") {
+      const nextSize = new tauriWindowApi.LogicalSize(snapshot.size.width, snapshot.size.height);
+      await callWindowMethod(appWindowRef, "setSize", nextSize);
+    }
+
+    if (snapshot.position && tauriWindowApi && typeof tauriWindowApi.LogicalPosition === "function") {
+      const nextPosition = new tauriWindowApi.LogicalPosition(snapshot.position.x, snapshot.position.y);
+      await callWindowMethod(appWindowRef, "setPosition", nextPosition);
+    }
+  }
+
+  if (snapshot.fullscreen === true) {
+    await callWindowMethod(appWindowRef, "setFullscreen", true);
+  }
+
+  await refreshNativeFullscreenState();
+  queueRuntimeLog("overlay.snapshot.restore.done", {
+    nativeFullscreenActive,
+    nativeWindowMaximized
+  });
+}
+
+async function hideOverlayHostWindowBehindToolbar(appWindowRef) {
+  if (!OVERLAY_HIDE_HOST_WITH_TOOLBAR_FALLBACK || !appWindowRef || !toolbar) {
+    return false;
+  }
+
+  const tauriWindowApi = getTauriWindowApi();
+  if (!tauriWindowApi
+    || typeof tauriWindowApi.LogicalSize !== "function"
+    || typeof tauriWindowApi.LogicalPosition !== "function") {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  if (!Number.isFinite(rect.left)
+    || !Number.isFinite(rect.top)
+    || !Number.isFinite(rect.width)
+    || !Number.isFinite(rect.height)) {
+    return false;
+  }
+
+  const padding = 6;
+  const nextWidth = Math.max(220, Math.round(rect.width + (padding * 2)));
+  const nextHeight = Math.max(48, Math.round(rect.height + (padding * 2)));
+  const nextX = Math.max(0, Math.round(rect.left - padding));
+  const nextY = Math.max(0, Math.round(rect.top - padding));
+
+  const nextSize = new tauriWindowApi.LogicalSize(nextWidth, nextHeight);
+  const nextPosition = new tauriWindowApi.LogicalPosition(nextX, nextY);
+  await callWindowMethod(appWindowRef, "setSize", nextSize);
+  await callWindowMethod(appWindowRef, "setPosition", nextPosition);
+
+  queueRuntimeLog("overlay.host-window.toolbar-shield.applied", {
+    x: nextX,
+    y: nextY,
+    width: nextWidth,
+    height: nextHeight
+  });
+  return true;
+}
+
+function isOverlayModeSupported() {
+  return isDesktopAppRuntime() && (runtimePlatform === "windows" || runtimePlatform === "linux");
+}
+
+function isOverlayMouseModeSupported() {
+  return isOverlayModeSupported() && overlayMode && isDesktopAppRuntime();
+}
+
+function updateOverlayMouseModeButton() {
+  if (!overlayMouseModeToggleButton) {
+    return;
+  }
+
+  const visible = overlayMode && isOverlayMouseModeSupported();
+  overlayMouseModeToggleButton.hidden = !visible;
+  if (!visible) {
+    overlayMouseModeToggleButton.classList.remove("is-active");
+    overlayMouseModeToggleButton.setAttribute("aria-pressed", "false");
+    overlayMouseModeToggleButton.disabled = true;
+    return;
+  }
+
+  const supported = isOverlayMouseModeSupported();
+  overlayMouseModeToggleButton.classList.toggle("is-active", supported && overlayMousePassthrough);
+  overlayMouseModeToggleButton.setAttribute("aria-pressed", String(supported && overlayMousePassthrough));
+  overlayMouseModeToggleButton.disabled = !supported
+    || overlayTransitionInProgress
+    || overlayMouseTransitionInProgress
+    || pdfExportInProgress
+    || sessionRestoreInProgress;
+  overlayMouseModeToggleButton.title = overlayMousePassthrough
+    ? "마우스 모드 종료 (F7)"
+    : "마우스 모드 (F7)";
+}
+
+function isToolbarHitByPoint(clientX, clientY) {
+  if (!toolbar || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  return clientX >= (rect.left - OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientX <= (rect.right + OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientY >= (rect.top - OVERLAY_MOUSE_HIT_PADDING_PX)
+    && clientY <= (rect.bottom + OVERLAY_MOUSE_HIT_PADDING_PX);
+}
+
+function isToolbarRecoveryZoneHit(clientX, clientY) {
+  if (!toolbar || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  const placement = (toolbarLayout && typeof toolbarLayout.placement === "string")
+    ? toolbarLayout.placement
+    : "right";
+
+  if (placement === "right") {
+    const laneStart = Math.min(
+      rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX,
+      window.innerWidth - OVERLAY_MOUSE_RECOVERY_ZONE_PX
+    );
+    return clientX >= laneStart;
+  }
+
+  if (placement === "left") {
+    const laneEnd = Math.max(
+      rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX,
+      OVERLAY_MOUSE_RECOVERY_ZONE_PX
+    );
+    return clientX <= laneEnd;
+  }
+
+  if (placement === "top") {
+    return clientY <= (rect.bottom + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  if (placement === "bottom") {
+    return clientY >= (rect.top - OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+  }
+
+  return clientX >= (rect.left - OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientX <= (rect.right + OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientY >= (rect.top - OVERLAY_MOUSE_RECOVERY_ZONE_PX)
+    && clientY <= (rect.bottom + OVERLAY_MOUSE_RECOVERY_ZONE_PX);
+}
+
+function isOverlayUiEventTarget(target) {
+  if (!toolbar || !target || !(target instanceof Element)) {
+    return false;
+  }
+
+  return toolbar.contains(target);
+}
+
+async function setOverlayNativeIgnoreState(nextIgnore) {
+  const desiredIgnore = Boolean(nextIgnore);
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    return false;
+  }
+
+  if (overlayMouseNativeIgnoreState === desiredIgnore) {
+    return true;
+  }
+
+  if (runtimePlatform === "windows") {
+    overlayMouseForwardOptionAvailable = false;
+    const fallbackResult = await setDesktopWindowClickThrough(desiredIgnore);
+    if (!fallbackResult) {
+      return false;
+    }
+
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
+  }
+
+  const withForwardResult = await callWindowMethod(
+    appWindowRef,
+    "setIgnoreCursorEvents",
+    desiredIgnore,
+    { forward: true }
+  );
+  if (withForwardResult !== null) {
+    overlayMouseForwardOptionAvailable = true;
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
+  }
+
+  const withoutForwardResult = await callWindowMethod(
+    appWindowRef,
+    "setIgnoreCursorEvents",
+    desiredIgnore
+  );
+  if (withoutForwardResult !== null) {
+    overlayMouseForwardOptionAvailable = false;
+    queueRuntimeLog("overlay.mousemode.forward-unavailable", null);
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
+  }
+
+  return false;
+}
+
+function queueOverlayNativeIgnoreState(nextIgnore) {
+  const desiredIgnore = Boolean(nextIgnore);
+  overlayMouseNativeQueue = overlayMouseNativeQueue
+    .catch(() => null)
+    .then(() => setOverlayNativeIgnoreState(desiredIgnore));
+  return overlayMouseNativeQueue;
+}
+
+async function readGlobalCursorPosition() {
+  const point = await invokeDesktopCommand("get_global_cursor_position");
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return null;
+  }
+
+  return {
+    x: Number(point.x),
+    y: Number(point.y)
+  };
+}
+
+async function readWindowCursorPositionCss() {
+  const appWindowRef = getTauriAppWindow();
+  if (appWindowRef) {
+    const [cursorPosition, runtimeScale] = await Promise.all([
+      callWindowMethod(appWindowRef, "cursorPosition"),
+      callWindowMethod(appWindowRef, "scaleFactor")
+    ]);
+
+    if (cursorPosition && Number.isFinite(cursorPosition.x) && Number.isFinite(cursorPosition.y)) {
+      const rawX = Number(cursorPosition.x);
+      const rawY = Number(cursorPosition.y);
+      const browserScaleFactor = Math.max(1, Number(window.devicePixelRatio) || 1);
+      const scaleFactor = Number.isFinite(runtimeScale) && runtimeScale > 0
+        ? Number(runtimeScale)
+        : browserScaleFactor;
+
+      return {
+        x: rawX / scaleFactor,
+        y: rawY / scaleFactor,
+        rawX,
+        rawY,
+        scaleFactor
+      };
+    }
+  }
+
+  const point = await invokeDesktopCommand("get_window_cursor_position");
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return null;
+  }
+
+  const rawX = Number(point.x);
+  const rawY = Number(point.y);
+  const runtimeScaleFactor = Number(point.scaleFactor ?? point.scale_factor);
+  const browserScaleFactor = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const scaleFactor = Number.isFinite(runtimeScaleFactor) && runtimeScaleFactor > 0
+    ? runtimeScaleFactor
+    : browserScaleFactor;
+  const scaledX = rawX / scaleFactor;
+  const scaledY = rawY / scaleFactor;
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || Number(document.documentElement.clientWidth) || 1);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || Number(document.documentElement.clientHeight) || 1);
+  const rawOutsideDistance = Math.max(0, -rawX)
+    + Math.max(0, -rawY)
+    + Math.max(0, rawX - viewportWidth)
+    + Math.max(0, rawY - viewportHeight);
+  const scaledOutsideDistance = Math.max(0, -scaledX)
+    + Math.max(0, -scaledY)
+    + Math.max(0, scaledX - viewportWidth)
+    + Math.max(0, scaledY - viewportHeight);
+
+  if (scaledOutsideDistance <= rawOutsideDistance) {
+    return {
+      x: scaledX,
+      y: scaledY,
+      rawX,
+      rawY,
+      scaleFactor
+    };
+  }
+
+  return {
+    x: rawX,
+    y: rawY,
+    rawX,
+    rawY,
+    scaleFactor
+  };
+}
+
+async function readWindowCursorPositionWithFallback() {
+  const directPoint = await readWindowCursorPositionCss();
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || Number(document.documentElement.clientWidth) || 1);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || Number(document.documentElement.clientHeight) || 1);
+  const tolerance = 240;
+
+  if (directPoint
+    && Number.isFinite(directPoint.x)
+    && Number.isFinite(directPoint.y)
+    && directPoint.x >= -tolerance
+    && directPoint.y >= -tolerance
+    && directPoint.x <= (viewportWidth + tolerance)
+    && directPoint.y <= (viewportHeight + tolerance)) {
+    return directPoint;
+  }
+
+  const [globalPoint, windowRect] = await Promise.all([
+    readGlobalCursorPosition(),
+    invokeDesktopCommand("get_window_rect")
+  ]);
+  if (!globalPoint
+    || !windowRect
+    || !Number.isFinite(windowRect.left)
+    || !Number.isFinite(windowRect.top)) {
+    return directPoint;
+  }
+
+  const fallbackPoint = {
+    x: Number(globalPoint.x) - Number(windowRect.left),
+    y: Number(globalPoint.y) - Number(windowRect.top),
+    rawX: Number(globalPoint.x),
+    rawY: Number(globalPoint.y),
+    scaleFactor: Number(window.devicePixelRatio) || 1
+  };
+
+  queueRuntimeLog("overlay.mousemode.cursor-fallback", {
+    x: Math.round(fallbackPoint.x),
+    y: Math.round(fallbackPoint.y),
+    rawX: Math.round(fallbackPoint.rawX),
+    rawY: Math.round(fallbackPoint.rawY)
+  });
+  return fallbackPoint;
+}
+
+function isToolbarHitByCursorPosition(cursorPosition) {
+  if (!cursorPosition) {
+    return false;
+  }
+
+  const cssHit = isToolbarHitByPoint(cursorPosition.x, cursorPosition.y);
+  if (cssHit) {
+    return true;
+  }
+
+  const scaleFactor = Number(cursorPosition.scaleFactor);
+  if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  const scaledPadding = OVERLAY_MOUSE_HIT_PADDING_PX * scaleFactor;
+  const left = (rect.left * scaleFactor) - scaledPadding;
+  const right = (rect.right * scaleFactor) + scaledPadding;
+  const top = (rect.top * scaleFactor) - scaledPadding;
+  const bottom = (rect.bottom * scaleFactor) + scaledPadding;
+  const rawX = Number(cursorPosition.rawX);
+  const rawY = Number(cursorPosition.rawY);
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+    return false;
+  }
+
+  return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom;
+}
+
+function stopOverlayMouseTracker() {
+  if (overlayMouseTrackerTimer !== null) {
+    window.clearInterval(overlayMouseTrackerTimer);
+    overlayMouseTrackerTimer = null;
+  }
+  overlayMousePollInFlight = false;
+  overlayMousePollFailureCount = 0;
+  overlayMouseToolbarRecoveryUntil = 0;
+}
+
+async function pollOverlayMouseTracker() {
+  if (overlayMousePollInFlight) {
+    return;
+  }
+
+  if (!overlayMode || !overlayMousePassthrough || overlayTransitionInProgress || overlayMouseTransitionInProgress) {
+    return;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef || !toolbar) {
+    return;
+  }
+
+  overlayMousePollInFlight = true;
+
+  try {
+    const cursorPosition = await readWindowCursorPositionWithFallback();
+
+    if (!cursorPosition) {
+      overlayMousePollFailureCount += 1;
+      if (runtimePlatform === "windows" && overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
+        await setOverlayMousePassthrough(false, {
+          announce: true,
+          restoreFocus: false
+        });
+      }
+      return;
+    }
+
+    const baseToolbarHit = isToolbarHitByCursorPosition(cursorPosition);
+    const needsRecoveryZone = overlayMouseForwardOptionAvailable === false;
+    let wantsToolbarInteraction = baseToolbarHit
+      || (needsRecoveryZone && isToolbarRecoveryZoneHit(cursorPosition.x, cursorPosition.y));
+    const now = Date.now();
+    if (wantsToolbarInteraction) {
+      overlayMouseToolbarRecoveryUntil = now + OVERLAY_MOUSE_RECOVERY_HOLD_MS;
+    } else if (overlayMouseToolbarRecoveryUntil > now) {
+      wantsToolbarInteraction = true;
+    }
+
+    if (wantsToolbarInteraction !== overlayMouseUiBypassActive) {
+      queueRuntimeLog("overlay.mousemode.hit-state", {
+        x: Math.round(cursorPosition.x),
+        y: Math.round(cursorPosition.y),
+        rawX: Number.isFinite(cursorPosition.rawX) ? Math.round(cursorPosition.rawX) : null,
+        rawY: Number.isFinite(cursorPosition.rawY) ? Math.round(cursorPosition.rawY) : null,
+        scaleFactor: Number.isFinite(cursorPosition.scaleFactor) ? Number(cursorPosition.scaleFactor) : null,
+        baseToolbarHit,
+        recoveryZone: needsRecoveryZone,
+        wantsToolbarInteraction
+      });
+      overlayMouseUiBypassActive = wantsToolbarInteraction;
+      updateOverlayMouseModeButton();
+    }
+
+    const success = await queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
+    if (!success) {
+      overlayMousePollFailureCount += 1;
+      if (overlayMousePollFailureCount >= OVERLAY_MOUSE_POLL_MAX_FAILURES) {
+        await setOverlayMousePassthrough(false, {
+          announce: true,
+          restoreFocus: false
+        });
+      }
+      return;
+    }
+
+    overlayMousePollFailureCount = 0;
+  } finally {
+    overlayMousePollInFlight = false;
+  }
+}
+
+function startOverlayMouseTracker() {
+  if (overlayMouseTrackerTimer !== null) {
+    return;
+  }
+
+  overlayMousePollFailureCount = 0;
+  overlayMouseTrackerTimer = window.setInterval(() => {
+    void pollOverlayMouseTracker();
+  }, OVERLAY_MOUSE_POLL_INTERVAL_MS);
+  void pollOverlayMouseTracker();
+}
+
+function syncOverlayMouseBypassWithPointerEvent(event) {
+  if (!overlayMode || !overlayMousePassthrough || overlayTransitionInProgress || overlayMouseTransitionInProgress) {
+    return;
+  }
+  if (overlayMouseForwardOptionAvailable === false) {
+    return;
+  }
+
+  const clientX = Number(event && event.clientX);
+  const clientY = Number(event && event.clientY);
+  const wantsToolbarInteraction = isOverlayUiEventTarget(event && event.target)
+    || isToolbarHitByPoint(clientX, clientY);
+  if (wantsToolbarInteraction === overlayMouseUiBypassActive) {
+    return;
+  }
+
+  overlayMouseUiBypassActive = wantsToolbarInteraction;
+  updateOverlayMouseModeButton();
+  void queueOverlayNativeIgnoreState(!wantsToolbarInteraction);
+}
+
+function applyOverlayMouseModeUI(active) {
+  const nextActive = Boolean(active) && overlayMode;
+  overlayMousePassthrough = nextActive;
+  app.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  document.body.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  document.documentElement.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
+  updateOverlayMouseModeButton();
+  updateToolUI();
+}
+
+async function setOverlayMousePassthrough(active, options = {}) {
+  const { announce = true, restoreFocus = false } = options;
+  const nextActive = Boolean(active);
+
+  if (nextActive === overlayMousePassthrough && !overlayMouseTransitionInProgress) {
+    updateOverlayMouseModeButton();
+    return true;
+  }
+
+  if (!overlayMode || !isOverlayModeSupported()) {
+    overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
+    stopOverlayMouseTracker();
+    void queueOverlayNativeIgnoreState(false);
+    applyOverlayMouseModeUI(false);
+    return false;
+  }
+
+  const appWindowRef = getTauriAppWindow();
+  if (!appWindowRef) {
+    overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
+    stopOverlayMouseTracker();
+    void queueOverlayNativeIgnoreState(false);
+    applyOverlayMouseModeUI(false);
+    return false;
+  }
+
+  overlayMouseTransitionInProgress = true;
+  updateOverlayMouseModeButton();
+  queueRuntimeLog("overlay.mousemode.start", {
+    active: nextActive
+  });
+
+  try {
+    if (nextActive) {
+      // Cursor tracking command is currently Windows-only.
+      // Linux should still allow mouse mode when native forward is supported.
+      if (runtimePlatform === "windows") {
+        const cursorProbe = await readWindowCursorPositionCss();
+        if (!cursorProbe) {
+          stopOverlayMouseTracker();
+          if (announce) {
+            setDocumentStatus("Mouse mode requires desktop cursor tracking support.", "warning");
+          }
+          queueRuntimeLog("overlay.mousemode.unsupported", {
+            active: nextActive,
+            reason: "cursor-tracking-unavailable"
+          });
+          return false;
+        }
+      }
+    }
+
+    overlayMouseUiBypassActive = nextActive;
+    const desiredIgnoreState = false;
+    const result = await queueOverlayNativeIgnoreState(desiredIgnoreState);
+    if (!result) {
+      stopOverlayMouseTracker();
+      if (announce) {
+        setDocumentStatus("Mouse mode is unavailable in this desktop build.", "warning");
+      }
+      queueRuntimeLog("overlay.mousemode.unsupported", {
+        active: nextActive
+      });
+      return false;
+    }
+
+    if (nextActive && runtimePlatform !== "windows" && overlayMouseForwardOptionAvailable === false) {
+      stopOverlayMouseTracker();
+      if (announce) {
+        setDocumentStatus("Mouse mode requires pointer forwarding support on Linux.", "warning");
+      }
+      queueRuntimeLog("overlay.mousemode.unsupported", {
+        active: nextActive,
+        reason: "forwarding-unavailable-linux"
+      });
+      void queueOverlayNativeIgnoreState(false);
+      return false;
+    }
+
+    applyOverlayMouseModeUI(nextActive);
+    if (nextActive) {
+      startOverlayMouseTracker();
+    } else {
+      stopOverlayMouseTracker();
+    }
+    if (!nextActive && restoreFocus) {
+      await callWindowMethod(appWindowRef, "setFocus");
+    }
+    if (announce) {
+      const message = nextActive
+        ? "Mouse mode enabled. Move cursor off toolbar to click through."
+        : "Mouse mode disabled.";
+      setDocumentStatus(message, "success");
+    }
+    queueRuntimeLog("overlay.mousemode.success", {
+      active: nextActive
+    });
+    return true;
+  } catch (error) {
+    stopOverlayMouseTracker();
+    if (announce) {
+      setDocumentStatus("Failed to toggle mouse mode.", "error");
+    }
+    queueRuntimeLog("overlay.mousemode.error", {
+      active: nextActive,
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  } finally {
+    overlayMouseTransitionInProgress = false;
+    updateOverlayMouseModeButton();
+  }
+}
+
+function toggleOverlayMouseMode() {
+  if (!isOverlayMouseModeSupported()) {
+    return;
+  }
+
+  if (overlayTransitionInProgress || overlayMouseTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  void setOverlayMousePassthrough(!overlayMousePassthrough, {
+    announce: true,
+    restoreFocus: overlayMousePassthrough
+  });
+}
+
+function updateOverlayModeButton() {
+  const overlaySupported = isOverlayModeSupported();
+  if (overlayModeToggleButton) {
+    overlayModeToggleButton.hidden = !overlaySupported;
+  }
+
+  if (!overlaySupported) {
+    overlayMode = false;
+    overlayMousePassthrough = false;
+    overlayMouseTransitionInProgress = false;
+    overlayMouseUiBypassActive = false;
+    overlayMouseNativeIgnoreState = false;
+    overlayMouseForwardOptionAvailable = null;
+    stopOverlayMouseTracker();
+    app.classList.remove("overlay-mode");
+    app.classList.remove("overlay-mouse-mode");
+    document.body.classList.remove("overlay-mode");
+    document.body.classList.remove("overlay-mouse-mode");
+    document.documentElement.classList.remove("overlay-mode");
+    document.documentElement.classList.remove("overlay-mouse-mode");
+    if (overlayModeToggleButton) {
+      overlayModeToggleButton.classList.remove("is-active");
+      overlayModeToggleButton.setAttribute("aria-pressed", "false");
+      overlayModeToggleButton.disabled = true;
+    }
+    void queueOverlayNativeIgnoreState(false);
+    updateOverlayMouseModeButton();
+    updateToolUI();
+    return;
+  }
+
+  if (overlayModeToggleButton) {
+    overlayModeToggleButton.classList.toggle("is-active", overlayMode);
+    overlayModeToggleButton.setAttribute("aria-pressed", String(overlayMode));
+    overlayModeToggleButton.disabled = overlayTransitionInProgress || pdfExportInProgress || sessionRestoreInProgress;
+    overlayModeToggleButton.title = overlayMode
+      ? "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC \uC885\uB8CC (F8)"
+      : "\uC624\uBC84\uB808\uC774 \uBAA8\uB4DC (F8)";
+  }
+  updateOverlayMouseModeButton();
+}
+
+async function applyOverlayModeUI(active) {
+  const nextActive = Boolean(active);
+  if (nextActive) {
+    boardColorBeforeOverlay = normalizeHexColor(boardColorInput.value) || boardColorBeforeOverlay || "#ffffff";
+  }
+
+  overlayMode = nextActive;
+  if (!overlayMode && overlayMousePassthrough) {
+    applyOverlayMouseModeUI(false);
+  }
+  if (!overlayMode) {
+    stopOverlayMouseTracker();
+    overlayMouseUiBypassActive = false;
+    overlayMouseForwardOptionAvailable = null;
+    void queueOverlayNativeIgnoreState(false);
+  }
+  if (overlayMode) {
+    if (!overlaySurfaceStyleSnapshot) {
+      overlaySurfaceStyleSnapshot = {
+        htmlBackground: document.documentElement.style.background || "",
+        htmlBackgroundColor: document.documentElement.style.backgroundColor || "",
+        bodyBackground: document.body.style.background || "",
+        bodyBackgroundColor: document.body.style.backgroundColor || "",
+        appBackground: app && app.style ? app.style.background || "" : "",
+        appBackgroundColor: app && app.style ? app.style.backgroundColor || "" : "",
+        wrapperBackground: boardWrapper && boardWrapper.style ? boardWrapper.style.background || "" : "",
+        wrapperBackgroundColor: boardWrapper && boardWrapper.style ? boardWrapper.style.backgroundColor || "" : "",
+        boardBackground: backgroundCanvas.style.background || "",
+        boardBackgroundColor: backgroundCanvas.style.backgroundColor || "",
+        boardDisplay: backgroundCanvas.style.display || "",
+        boardOpacity: backgroundCanvas.style.opacity || "",
+        drawCanvasBackground: canvas.style.background || "",
+        drawCanvasBackgroundColor: canvas.style.backgroundColor || ""
+      };
+    }
+
+    app.style.setProperty("--overlay-surface-color", "transparent");
+    document.documentElement.style.setProperty("--overlay-surface-color", "transparent");
+    document.body.style.setProperty("--overlay-surface-color", "transparent");
+    document.documentElement.style.background = "transparent";
+    document.documentElement.style.backgroundColor = "transparent";
+    document.documentElement.style.backgroundImage = "none";
+    document.body.style.background = "transparent";
+    document.body.style.backgroundColor = "transparent";
+    document.body.style.backgroundImage = "none";
+    if (app && app.style) {
+      app.style.background = "transparent";
+      app.style.backgroundColor = "transparent";
+      app.style.backgroundImage = "none";
+    }
+    if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.background = "transparent";
+      boardWrapper.style.backgroundColor = "transparent";
+      boardWrapper.style.backgroundImage = "none";
+    }
+    backgroundCanvas.style.background = "transparent";
+    backgroundCanvas.style.backgroundColor = "transparent";
+    backgroundCanvas.style.display = "none";
+    backgroundCanvas.style.opacity = "0";
+    backgroundCanvas.style.visibility = "hidden";
+    canvas.style.background = "transparent";
+    canvas.style.backgroundColor = "transparent";
+    canvas.style.backdropFilter = "none";
+
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      await waitShortDelay(16);
+      const surfaceApplied = await setDesktopOverlaySurface(true);
+      const alphaApplied = await setDesktopWebviewBackgroundAlpha(0);
+      if (!surfaceApplied || !alphaApplied) {
+        await waitShortDelay(80);
+        await setDesktopOverlaySurface(true);
+        await setDesktopWebviewBackgroundAlpha(0);
+      }
+    }
+  } else if (overlaySurfaceStyleSnapshot) {
+    document.documentElement.style.background = overlaySurfaceStyleSnapshot.htmlBackground;
+    document.documentElement.style.backgroundColor = overlaySurfaceStyleSnapshot.htmlBackgroundColor;
+    document.body.style.background = overlaySurfaceStyleSnapshot.bodyBackground;
+    document.body.style.backgroundColor = overlaySurfaceStyleSnapshot.bodyBackgroundColor;
+    if (app && app.style) {
+      app.style.background = overlaySurfaceStyleSnapshot.appBackground;
+      app.style.backgroundColor = overlaySurfaceStyleSnapshot.appBackgroundColor;
+    }
+    if (boardWrapper && boardWrapper.style) {
+      boardWrapper.style.background = overlaySurfaceStyleSnapshot.wrapperBackground;
+      boardWrapper.style.backgroundColor = overlaySurfaceStyleSnapshot.wrapperBackgroundColor;
+    }
+    backgroundCanvas.style.background = overlaySurfaceStyleSnapshot.boardBackground;
+    backgroundCanvas.style.backgroundColor = overlaySurfaceStyleSnapshot.boardBackgroundColor;
+    backgroundCanvas.style.display = overlaySurfaceStyleSnapshot.boardDisplay;
+    backgroundCanvas.style.opacity = overlaySurfaceStyleSnapshot.boardOpacity;
+    backgroundCanvas.style.visibility = "";
+    canvas.style.background = overlaySurfaceStyleSnapshot.drawCanvasBackground;
+    canvas.style.backgroundColor = overlaySurfaceStyleSnapshot.drawCanvasBackgroundColor;
+    canvas.style.backdropFilter = "";
+    overlaySurfaceStyleSnapshot = null;
+
+    const appWindowRef = getTauriAppWindow();
+    if (appWindowRef) {
+      await waitShortDelay(16);
+      await setDesktopWebviewBackgroundAlpha(255);
+      await setDesktopOverlaySurface(false);
+    }
+  }
+  app.classList.toggle("overlay-mode", overlayMode);
+  document.body.classList.toggle("overlay-mode", overlayMode);
+  document.documentElement.classList.toggle("overlay-mode", overlayMode);
+  if (overlayMode) {
+    setBoardColor("transparent");
+  } else {
+    const restoredColor = normalizeHexColor(boardColorInput.value)
+      || boardColorBeforeOverlay
+      || "#ffffff";
+    setBoardColor(restoredColor);
+    boardColorBeforeOverlay = null;
+  }
+  updateOverlayModeButton();
+  renderBoardBackground();
+}
+
+async function enterOverlayMode() {
+  if (overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("overlay.enter.skipped", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+  queueRuntimeLog("overlay.enter.start", {
+    runtimePlatform,
+    protocol: String((window.location && window.location.protocol) || ""),
+    isLikelyTauri: isLikelyTauriProtocol(),
+    desktopRuntime: isDesktopAppRuntime()
+  });
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (!isLikelyTauriProtocol()) {
+      setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      queueRuntimeLog("overlay.enter.blocked", { reason: "not-tauri-protocol" });
+      return;
+    }
+
+    if (!isOverlayModeSupported()) {
+      setDocumentStatus("Overlay mode is available in desktop app only.", "warning");
+      queueRuntimeLog("overlay.enter.blocked", {
+        reason: "unsupported-runtime",
+        runtimePlatform,
+        desktopRuntime: isDesktopAppRuntime()
+      });
+      return;
+    }
+
+    if (!appWindowRef) {
+      await enterFullscreen();
+      await applyOverlayModeUI(true);
+      updateFullscreenButtons();
+      setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+      queueRuntimeLog("overlay.enter.browser-fallback");
+      return;
+    }
+
+    if (!isDedicatedOverlayWindow()) {
+      const dedicatedOpened = await openDedicatedOverlayWindow();
+      if (dedicatedOpened) {
+        queueRuntimeLog("overlay.window.opened", {
+          label: OVERLAY_WINDOW_LABEL
+        });
+        return;
+      }
+    }
+
+    overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
+    queueRuntimeLog("overlay.snapshot.captured", {
+      snapshot: sanitizeRuntimeLogDetails(overlayWindowSnapshot)
+    });
+    await callWindowMethod(appWindowRef, "setDecorations", false);
+    await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
+    await callWindowMethod(appWindowRef, "setResizable", false);
+    const entered = await requestNativeOverlayLike(appWindowRef);
+    await callWindowMethod(appWindowRef, "setFocus");
+    if (!entered) {
+      setDocumentStatus("Unable to switch window to overlay mode.", "error");
+      queueRuntimeLog("overlay.enter.failed", {
+        reason: "native-request-failed",
+        nativeFullscreenActive,
+        nativeWindowMaximized
+      });
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      overlayWindowSnapshot = null;
+      await applyOverlayModeUI(false);
+      return;
+    }
+    await applyOverlayModeUI(true);
+    window.dispatchEvent(new Event("resize"));
+    updateFullscreenButtons();
+    setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
+    queueRuntimeLog("overlay.enter.success", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+  } catch (error) {
+    setDocumentStatus("Failed to enable overlay mode.", "error");
+    queueRuntimeLog("overlay.enter.error", {
+      error: toRuntimeLogError(error)
+    });
+  } finally {
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+    queueRuntimeLog("overlay.enter.final", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
+  }
+}
+
+async function exitOverlayMode() {
+  if (!overlayMode || overlayTransitionInProgress) {
+    queueRuntimeLog("overlay.exit.skipped", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
+    return;
+  }
+
+  overlayTransitionInProgress = true;
+  updateOverlayModeButton();
+  queueRuntimeLog("overlay.exit.start", {
+    hasSnapshot: Boolean(overlayWindowSnapshot)
+  });
+
+  try {
+    const appWindowRef = getTauriAppWindow();
+    if (isDedicatedOverlayWindow() && appWindowRef) {
+      if (overlayMousePassthrough) {
+        await setOverlayMousePassthrough(false, {
+          announce: false,
+          restoreFocus: false
+        });
+      }
+      await emitTauriRuntimeEvent(OVERLAY_WINDOW_CLOSED_EVENT, {
+        source: OVERLAY_WINDOW_LABEL
+      });
+      await callWindowMethod(appWindowRef, "close");
+      return;
+    }
+
+    if (appWindowRef) {
+      if (overlayMousePassthrough) {
+        await setOverlayMousePassthrough(false, {
+          announce: false,
+          restoreFocus: false
+        });
+      }
+      await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
+      await refreshNativeFullscreenState();
+    } else {
+      await exitFullscreen();
+    }
+
+    await applyOverlayModeUI(false);
+    updateFullscreenButtons();
+    setDocumentStatus("Board mode enabled.", "success");
+    queueRuntimeLog("overlay.exit.success", {
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+  } catch (error) {
+    setDocumentStatus("Failed to restore board mode.", "error");
+    queueRuntimeLog("overlay.exit.error", {
+      error: toRuntimeLogError(error)
+    });
+  } finally {
+    overlayWindowSnapshot = null;
+    overlayTransitionInProgress = false;
+    updateOverlayModeButton();
+    queueRuntimeLog("overlay.exit.final", {
+      overlayMode,
+      overlayTransitionInProgress
+    });
+  }
+}
+
+function toggleOverlayMode() {
+  if (!isOverlayModeSupported() || pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (overlayMode) {
+    exitOverlayMode();
+    return;
+  }
+
+  enterOverlayMode();
+}
+
+function isBoardColorPopupOpen() {
+  return !boardColorPopup.classList.contains("is-hidden");
+}
+
+function setBoardColorPopupOpen(open) {
+  boardColorPopup.classList.toggle("is-hidden", !open);
+  openBoardColorPopupButton.setAttribute("aria-expanded", String(open));
+}
+
+function updateBoardColorTriggerPreview(color) {
+  boardColorPreviewInput.style.setProperty("--board-color-preview", color);
+}
+
+function closeBoardColorPopup() {
+  setBoardColorPopupOpen(false);
+}
+
+function isPresetHelpOpen() {
+  return !presetHelpPopup.classList.contains("is-hidden");
+}
+
+function setPresetHelpOpen(open) {
+  presetHelpPopup.classList.toggle("is-hidden", !open);
+  presetHelpButton.setAttribute("aria-expanded", String(open));
+}
+
+function closePresetHelp() {
+  setPresetHelpOpen(false);
+}
+
+function isEraserToolPopupOpen() {
+  return !eraserToolPopup.classList.contains("is-hidden");
+}
+
+function setEraserToolPopupOpen(open) {
+  eraserToolPopup.classList.toggle("is-hidden", !open);
+  eraserToolButton.setAttribute("aria-expanded", String(open));
+}
+
+function closeEraserToolPopup() {
+  setEraserToolPopupOpen(false);
+}
+
+function isDocumentPopupOpen() {
+  return !documentPopup.classList.contains("is-hidden");
+}
+
+function setDocumentPopupOpen(open) {
+  documentPopup.classList.toggle("is-hidden", !open);
+  openDocumentPopupButton.setAttribute("aria-expanded", String(open));
+}
+
+function closeDocumentPopup() {
+  setDocumentPopupOpen(false);
+}
+
+function setDocumentStatus(message, tone = "normal") {
+  documentStatus.textContent = message;
+  documentStatus.classList.remove("is-success", "is-warning", "is-error");
+
+  if (tone === "success") {
+    documentStatus.classList.add("is-success");
+  } else if (tone === "warning") {
+    documentStatus.classList.add("is-warning");
+  } else if (tone === "error") {
+    documentStatus.classList.add("is-error");
+  }
+
+  if (tone === "warning" || tone === "error") {
+    queueRuntimeLog("status", { tone, message });
+  }
+}
+
+function hasLoadedPdfDocument() {
+  return Boolean(pdfDocument && Number.isFinite(pdfDocument.numPages) && pdfDocument.numPages > 0);
+}
+
+function getStrokeHistoryContextKey() {
+  if (hasLoadedPdfDocument()) {
+    return `pdf:${Math.max(1, Math.round(Number(pdfPageNumber) || 1))}`;
+  }
+
+  return "board";
+}
+
+function getOrCreateStrokeHistoryEntry(contextKey = getStrokeHistoryContextKey()) {
+  let entry = strokeHistoryByContext.get(contextKey);
+  if (!entry) {
+    entry = {
+      undo: [],
+      redo: []
+    };
+    strokeHistoryByContext.set(contextKey, entry);
+  }
+
+  return entry;
+}
+
+function pushStrokeSnapshot(stack, snapshot) {
+  stack.push(snapshot);
+  if (stack.length > HISTORY_STACK_LIMIT) {
+    stack.shift();
+  }
+}
+
+function clearAllStrokeHistory() {
+  strokeHistoryByContext.clear();
+  updateUndoRedoUI();
+}
+
+function updateUndoRedoUI() {
+  const entry = strokeHistoryByContext.get(getStrokeHistoryContextKey());
+  const canUndo = Boolean(entry && entry.undo.length > 0);
+  const canRedo = Boolean(entry && entry.redo.length > 0);
+  const controlsLocked = pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress;
+
+  if (undoButton) {
+    undoButton.disabled = controlsLocked || !canUndo;
+  }
+  if (redoButton) {
+    redoButton.disabled = controlsLocked || !canRedo;
+  }
+}
+
+function updatePdfNavigationUI() {
+  const hasPdf = hasLoadedPdfDocument();
+  const controlsLocked = pdfExportInProgress || sessionRestoreInProgress;
+  const currentPage = hasPdf ? pdfPageNumber : 0;
+  const totalPages = hasPdf ? Number(pdfDocument.numPages) : 0;
+  const indicatorText = hasPdf
+    ? `${currentPage} / ${totalPages}`
+    : "- / -";
+
+  documentLoadButton.disabled = controlsLocked;
+  pdfPrevPageButton.disabled = !hasPdf || controlsLocked || currentPage <= 1;
+  pdfNextPageButton.disabled = !hasPdf || controlsLocked || currentPage >= totalPages;
+  if (exportAnnotatedPdfButton) {
+    exportAnnotatedPdfButton.disabled = controlsLocked;
+  }
+  removeDocumentButton.disabled = !hasPdf || controlsLocked;
+  pdfPageIndicator.textContent = indicatorText;
+
+  if (toolbarPdfPageIndicator) {
+    toolbarPdfPageIndicator.textContent = indicatorText;
+    toolbarPdfPageIndicator.classList.toggle("is-empty", !hasPdf);
+  }
+
+  updateUndoRedoUI();
+  updateOverlayModeButton();
+}
+
+function getPreferredPdfWorkerSource() {
+  // Desktop builds package local worker. Web builds should prefer CDN fallback.
+  if (isDesktopAppRuntime()) {
+    return PDF_WORKER_SOURCES[0];
+  }
+  return PDF_WORKER_SOURCES[1] || PDF_WORKER_SOURCES[0];
+}
+
+function loadExternalScript(sourceUrl) {
+  const normalizedUrl = String(sourceUrl || "").trim();
+  if (!normalizedUrl) {
+    return Promise.reject(new Error("Invalid script URL."));
+  }
+
+  const existingPromise = externalScriptLoadPromises.get(normalizedUrl);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const loader = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = normalizedUrl;
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => reject(new Error(`Failed to load script: ${normalizedUrl}`));
+    document.head.appendChild(script);
+  });
+
+  externalScriptLoadPromises.set(normalizedUrl, loader);
+  return loader;
+}
+
+async function ensureGlobalScriptLoaded(sourceList, availabilityCheck, logPrefix) {
+  if (availabilityCheck()) {
+    return true;
+  }
+
+  for (const source of sourceList) {
+    try {
+      await loadExternalScript(source);
+      if (availabilityCheck()) {
+        queueRuntimeLog(`${logPrefix}.loaded`, { source });
+        return true;
+      }
+    } catch (error) {
+      queueRuntimeLog(`${logPrefix}.load-failed`, {
+        source,
+        error: toRuntimeLogError(error)
+      });
+    }
+  }
+
+  return availabilityCheck();
+}
+
+async function ensurePdfJsEngineAvailable() {
+  const available = await ensureGlobalScriptLoaded(
+    PDF_JS_SOURCES,
+    () => Boolean(window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions),
+    "pdf.engine"
+  );
+
+  if (!available) {
+    setDocumentStatus("PDF engine is unavailable. Refresh and try again.", "error");
+  }
+
+  return available;
+}
+
+async function ensurePdfExportEngineAvailable() {
+  const available = await ensureGlobalScriptLoaded(
+    PDF_LIB_SOURCES,
+    () => Boolean(window.PDFLib && window.PDFLib.PDFDocument),
+    "pdf.export.engine"
+  );
+
+  if (!available) {
+    setDocumentStatus("PDF export engine is unavailable. Refresh and try again.", "error");
+  }
+
+  return available;
+}
+
+async function configurePdfWorker() {
+  if (isPdfWorkerConfigured) {
+    return true;
+  }
+
+  if (!(await ensurePdfJsEngineAvailable())) {
+    return false;
+  }
+
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = getPreferredPdfWorkerSource();
+  isPdfWorkerConfigured = true;
+  return true;
+}
+
+function normalizeFileExtension(fileName) {
+  if (typeof fileName !== "string") {
+    return "";
+  }
+
+  const lastDot = fileName.lastIndexOf(".");
+  if (lastDot < 0 || lastDot >= fileName.length - 1) {
+    return "";
+  }
+
+  return fileName.slice(lastDot + 1).trim().toLowerCase();
+}
+
+function isPdfFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "pdf" || file.type === "application/pdf";
+}
+
+function isPptFile(file) {
+  const extension = normalizeFileExtension(file.name);
+  return extension === "ppt"
+    || extension === "pptx"
+    || file.type === "application/vnd.ms-powerpoint"
+    || file.type === "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+}
+
+function openSessionDatabase() {
+  if (!window.indexedDB) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    let request;
+    try {
+      request = window.indexedDB.open(SESSION_DB_NAME, 1);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(SESSION_DB_STORE)) {
+        database.createObjectStore(SESSION_DB_STORE);
+      }
+    };
+
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Failed to open session database."));
+    };
+  });
+}
+
+async function saveSessionPdfBytes(pdfBytes) {
+  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
+    return;
+  }
+
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF save aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to save PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.put(pdfBytes, SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function loadSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return null;
+    }
+
+    const value = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readonly");
+      transaction.onabort = () => reject(transaction.error || new Error("PDF read aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to read PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      const request = store.get(SESSION_DB_PDF_KEY);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("Failed to read PDF data."));
+    });
+
+    if (!value) {
+      return null;
+    }
+    if (value instanceof Uint8Array) {
+      return new Uint8Array(value);
+    }
+    if (value instanceof ArrayBuffer) {
+      return new Uint8Array(value);
+    }
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+async function clearSessionPdfBytes() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) {
+      return;
+    }
+
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("PDF clear aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Failed to clear PDF data."));
+
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      store.delete(SESSION_DB_PDF_KEY);
+    });
+  } catch (error) {
+    // Ignore persistence failures for optional PDF recovery.
+  } finally {
+    if (database) {
+      database.close();
+    }
+  }
+}
+
+function serializeSessionSnapshot() {
+  saveCurrentStrokeState();
+
+  const boardStrokes = cloneStrokeCollection(boardStrokeSnapshot);
+  const pdfPages = Array.from(pdfPageStrokeSnapshots.entries())
+    .map(([pageNumber, pageStrokes]) => {
+      return [Math.max(1, Math.round(Number(pageNumber) || 1)), cloneStrokeCollection(pageStrokes)];
+    })
+    .filter(([, pageStrokes]) => pageStrokes.length > 0)
+    .sort((a, b) => a[0] - b[0]);
+
+  return {
+    version: SESSION_STORAGE_VERSION,
+    savedAt: Date.now(),
+    hasPdf: hasLoadedPdfDocument(),
+    loadedDocumentName,
+    pdfPageNumber: Math.max(1, Math.round(Number(pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPages
+  };
+}
+
+function scheduleSessionAutosave() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+
+  sessionAutosaveTimer = window.setTimeout(() => {
+    sessionAutosaveTimer = null;
+    persistSessionState();
+  }, SESSION_AUTOSAVE_DELAY_MS);
+}
+
+function parseSessionSnapshot(rawValue) {
+  if (!rawValue || typeof rawValue !== "object") {
+    return null;
+  }
+
+  if (Number(rawValue.version) !== SESSION_STORAGE_VERSION) {
+    return null;
+  }
+
+  const boardStrokes = normalizeStrokeCollection(rawValue.boardStrokes);
+  const pdfPageMap = new Map();
+
+  if (Array.isArray(rawValue.pdfPages)) {
+    for (const entry of rawValue.pdfPages) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        continue;
+      }
+
+      const pageNumber = Math.max(1, Math.round(Number(entry[0]) || 1));
+      const pageStrokes = normalizeStrokeCollection(entry[1]);
+      if (pageStrokes.length <= 0) {
+        continue;
+      }
+
+      pdfPageMap.set(pageNumber, pageStrokes);
+    }
+  }
+
+  return {
+    hasPdf: Boolean(rawValue.hasPdf),
+    loadedDocumentName: typeof rawValue.loadedDocumentName === "string"
+      ? rawValue.loadedDocumentName
+      : "",
+    pdfPageNumber: Math.max(1, Math.round(Number(rawValue.pdfPageNumber) || 1)),
+    boardStrokes,
+    pdfPageMap
+  };
+}
+
+async function persistSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  try {
+    const snapshot = serializeSessionSnapshot();
+    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+
+    if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
+      if (sessionPdfBytesDirty) {
+        await saveSessionPdfBytes(loadedPdfBytes);
+        sessionPdfBytesDirty = false;
+      }
+    } else {
+      await clearSessionPdfBytes();
+      sessionPdfBytesDirty = false;
+    }
+  } catch (error) {
+    // localStorage/IndexedDB can be unavailable; skip recovery persistence.
+  }
+}
+
+async function restoreSessionState() {
+  if (sessionRestoreInProgress) {
+    return;
+  }
+
+  sessionRestoreInProgress = true;
+  updateUndoRedoUI();
+
+  try {
+    const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const snapshot = parseSessionSnapshot(rawSnapshot ? JSON.parse(rawSnapshot) : null);
+    if (!snapshot) {
+      return;
+    }
+
+    boardStrokeSnapshot = cloneStrokeCollection(snapshot.boardStrokes);
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+    restoreCurrentStrokeState();
+
+    if (!snapshot.hasPdf) {
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredPdfBytes = await loadSessionPdfBytes();
+    if (!(recoveredPdfBytes instanceof Uint8Array) || recoveredPdfBytes.length <= 0) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      updateUndoRedoUI();
+      return;
+    }
+
+    const recoveredFileName = snapshot.loadedDocumentName || "recovered.pdf";
+    const recoveredFile = new File([recoveredPdfBytes], recoveredFileName, { type: "application/pdf" });
+    await loadPdfFromFile(recoveredFile);
+    if (!hasLoadedPdfDocument()) {
+      loadedPdfBytes = null;
+      sessionPdfBytesDirty = false;
+      pdfPageStrokeSnapshots.clear();
+      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
+      clearAllStrokeHistory();
+      return;
+    }
+
+    // Reload saved page-level annotations after document load resets snapshots.
+    pdfPageStrokeSnapshots.clear();
+    for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
+      pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+
+    const targetPage = Math.min(
+      Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
+      snapshot.pdfPageNumber
+    );
+    await renderPdfPage(targetPage);
+    setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
+    clearAllStrokeHistory();
+    updateUndoRedoUI();
+  } catch (error) {
+    // Ignore recovery failures and continue with a clean runtime state.
+  } finally {
+    sessionRestoreInProgress = false;
+    updatePdfNavigationUI();
+  }
+}
+
+function getAnnotatedPdfFileName() {
+  const rawName = typeof loadedDocumentName === "string"
+    ? loadedDocumentName.trim()
+    : "";
+  const baseName = rawName
+    ? rawName.replace(/\.pdf$/i, "")
+    : "board";
+  const safeName = baseName
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .trim();
+  return `${safeName || "board"}-annotated.pdf`;
+}
+
+function downloadBlobFile(blob, fileName) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl);
+  }, 1000);
+}
+
+function canvasToJpegBytes(targetCanvas, quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    targetCanvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error("Could not encode JPEG image."));
+        return;
+      }
+
+      try {
+        const buffer = await blob.arrayBuffer();
+        resolve(new Uint8Array(buffer));
+      } catch (error) {
+        reject(error);
+      }
+    }, "image/jpeg", quality);
+  });
+}
+
+async function drawPdfPageToContext(pageNumber, targetContext, targetWidth, targetHeight) {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  const page = await pdfDocument.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const fitScale = Math.min(
+    Math.max(1, targetWidth) / baseViewport.width,
+    Math.max(1, targetHeight) / baseViewport.height
+  );
+  const viewport = page.getViewport({ scale: fitScale });
+
+  const rasterCanvas = document.createElement("canvas");
+  rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+  rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+  const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+  if (!rasterContext) {
+    throw new Error("Could not create export rendering context.");
+  }
+
+  rasterContext.imageSmoothingEnabled = true;
+  rasterContext.imageSmoothingQuality = "high";
+
+  const renderTask = page.render({
+    canvasContext: rasterContext,
+    viewport
+  });
+  await renderTask.promise;
+
+  const drawWidth = Math.max(1, Math.floor(rasterCanvas.width));
+  const drawHeight = Math.max(1, Math.floor(rasterCanvas.height));
+  const drawX = Math.floor((targetWidth - drawWidth) / 2);
+  const drawY = Math.floor((targetHeight - drawHeight) / 2);
+
+  targetContext.imageSmoothingEnabled = true;
+  targetContext.imageSmoothingQuality = "high";
+  targetContext.drawImage(rasterCanvas, drawX, drawY, drawWidth, drawHeight);
+}
+
+function clearPdfRenderDebounce() {
+  if (pdfRenderDebounceTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(pdfRenderDebounceTimer);
+  pdfRenderDebounceTimer = null;
+}
+
+function stopPdfRenderTask() {
+  if (!pdfRenderTask) {
+    return;
+  }
+
+  try {
+    pdfRenderTask.cancel();
+  } catch (error) {
+    // Ignore cancellation errors.
+  }
+
+  pdfRenderTask = null;
+}
+
+function getDefaultToolbarFloatPosition() {
+  const x = Math.max(12, Math.round((window.innerWidth * 0.5) - 170));
+  const y = Math.max(12, Math.round((window.innerHeight * 0.5) - 34));
+  return { x, y };
+}
+
+function normalizeToolbarPlacement(value, fallback = "top") {
+  const allowed = new Set(["top", "bottom", "left", "right", "floating"]);
+  if (allowed.has(value)) {
+    return value;
+  }
+
+  return fallback;
+}
+
+function getNearestDockPlacement(x, y, viewportWidth = window.innerWidth, viewportHeight = window.innerHeight) {
+  const distances = [
+    { placement: "top", distance: y },
+    { placement: "bottom", distance: viewportHeight - y },
+    { placement: "left", distance: x },
+    { placement: "right", distance: viewportWidth - x }
+  ];
+
+  distances.sort((a, b) => a.distance - b.distance);
+  return distances[0].placement;
+}
+
+function getDockPlacementFromPoint(x, y, viewportWidth = window.innerWidth, viewportHeight = window.innerHeight) {
+  const nearest = getNearestDockPlacement(x, y, viewportWidth, viewportHeight);
+  const distanceByPlacement = {
+    top: y,
+    bottom: viewportHeight - y,
+    left: x,
+    right: viewportWidth - x
+  };
+
+  return distanceByPlacement[nearest] <= TOOLBAR_DOCK_THRESHOLD
+    ? nearest
+    : null;
+}
+
+function normalizeToolbarFloatValue(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric) : fallback;
+}
+
+function loadToolbarLayout() {
+  const defaultFloat = getDefaultToolbarFloatPosition();
+  const fallback = {
+    placement: "top",
+    floatX: defaultFloat.x,
+    floatY: defaultFloat.y
+  };
+
+  try {
+    const raw = window.localStorage.getItem(LAST_TOOLBAR_LAYOUT_STORAGE_KEY);
+    if (!raw) {
+      return fallback;
+    }
+
+    const normalizedRawPlacement = normalizeToolbarPlacement(raw, "");
+    if (normalizedRawPlacement) {
+      return {
+        placement: normalizedRawPlacement,
+        floatX: fallback.floatX,
+        floatY: fallback.floatY
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") {
+      return {
+        placement: normalizeToolbarPlacement(parsed, fallback.placement),
+        floatX: fallback.floatX,
+        floatY: fallback.floatY
+      };
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+      return fallback;
+    }
+
+    return {
+      placement: normalizeToolbarPlacement(parsed.placement, fallback.placement),
+      floatX: normalizeToolbarFloatValue(parsed.floatX, fallback.floatX),
+      floatY: normalizeToolbarFloatValue(parsed.floatY, fallback.floatY)
+    };
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function saveToolbarLayout() {
+  try {
+    if (toolbarLayout.placement === "floating") {
+      window.localStorage.setItem(
+        LAST_TOOLBAR_LAYOUT_STORAGE_KEY,
+        JSON.stringify({
+          placement: "floating",
+          floatX: toolbarLayout.floatX,
+          floatY: toolbarLayout.floatY
+        })
+      );
+      return;
+    }
+
+    window.localStorage.setItem(LAST_TOOLBAR_LAYOUT_STORAGE_KEY, toolbarLayout.placement);
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function applyToolbarPlacementClass() {
+  app.classList.remove(
+    "toolbar-placement-top",
+    "toolbar-placement-bottom",
+    "toolbar-placement-left",
+    "toolbar-placement-right",
+    "toolbar-placement-floating"
+  );
+  app.classList.add(`toolbar-placement-${toolbarLayout.placement}`);
+}
+
+function clearToolbarDockPreviewClasses() {
+  app.classList.remove(
+    "toolbar-dock-preview-top",
+    "toolbar-dock-preview-bottom",
+    "toolbar-dock-preview-left",
+    "toolbar-dock-preview-right"
+  );
+}
+
+function applyToolbarDockPreview(placement) {
+  clearToolbarDockPreviewClasses();
+  app.classList.add(`toolbar-dock-preview-${placement}`);
+}
+
+function clampToolbarFloatingPosition(x, y) {
+  const margin = 12;
+  const rect = toolbar.getBoundingClientRect();
+  const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
+  const maxY = Math.max(margin, window.innerHeight - rect.height - margin);
+
+  return {
+    x: Math.min(maxX, Math.max(margin, Math.round(x))),
+    y: Math.min(maxY, Math.max(margin, Math.round(y)))
+  };
+}
+
+function applyToolbarFloatingPositionVariables() {
+  app.style.setProperty("--toolbar-float-x", `${toolbarLayout.floatX}px`);
+  app.style.setProperty("--toolbar-float-y", `${toolbarLayout.floatY}px`);
+}
+
+function setToolbarFloatingPosition(x, y, persist = true) {
+  const clamped = clampToolbarFloatingPosition(x, y);
+  toolbarLayout.floatX = clamped.x;
+  toolbarLayout.floatY = clamped.y;
+  applyToolbarFloatingPositionVariables();
+
+  if (persist) {
+    saveToolbarLayout();
+  }
+}
+
+function setToolbarPlacement(placement, persist = true) {
+  toolbarLayout.placement = normalizeToolbarPlacement(placement, toolbarLayout.placement);
+  applyToolbarPlacementClass();
+
+  if (persist) {
+    saveToolbarLayout();
+  }
+}
+
+function initToolbarLayout() {
+  toolbarLayout = loadToolbarLayout();
+  applyToolbarPlacementClass();
+  applyToolbarFloatingPositionVariables();
+
+  if (toolbarLayout.placement === "floating") {
+    setToolbarFloatingPosition(toolbarLayout.floatX, toolbarLayout.floatY, false);
+  }
+}
+
+function startToolbarDrag(event) {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  toolbarDragPreviewPlacement = toolbarLayout.placement;
+  app.classList.add("toolbar-is-dragging");
+
+  if (toolbarDragPreviewPlacement === "floating") {
+    clearToolbarDockPreviewClasses();
+  } else {
+    applyToolbarDockPreview(toolbarDragPreviewPlacement);
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  toolbarDragOffsetX = event.clientX - rect.left;
+  toolbarDragOffsetY = event.clientY - rect.top;
+  toolbarDragNextX = rect.left;
+  toolbarDragNextY = rect.top;
+  toolbarDragPointerId = event.pointerId;
+  toolbarDragHandle.setPointerCapture(event.pointerId);
+}
+
+function moveToolbarDrag(event) {
+  if (toolbarDragPointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  toolbarDragNextX = event.clientX - toolbarDragOffsetX;
+  toolbarDragNextY = event.clientY - toolbarDragOffsetY;
+
+  const dockPlacement = getDockPlacementFromPoint(event.clientX, event.clientY);
+  if (dockPlacement) {
+    toolbarDragPreviewPlacement = dockPlacement;
+    applyToolbarDockPreview(toolbarDragPreviewPlacement);
+    return;
+  }
+
+  toolbarDragPreviewPlacement = "floating";
+  clearToolbarDockPreviewClasses();
+
+  // When toolbar is already floating, follow cursor in real time.
+  if (toolbarLayout.placement === "floating") {
+    setToolbarFloatingPosition(toolbarDragNextX, toolbarDragNextY, false);
+  }
+}
+
+function endToolbarDrag(event) {
+  if (toolbarDragPointerId !== event.pointerId) {
+    return;
+  }
+
+  if (event.type === "pointercancel") {
+    toolbarDragPointerId = null;
+    app.classList.remove("toolbar-is-dragging");
+    clearToolbarDockPreviewClasses();
+    if (toolbarDragHandle.hasPointerCapture(event.pointerId)) {
+      toolbarDragHandle.releasePointerCapture(event.pointerId);
+    }
+    return;
+  }
+
+  const dockPlacement = getDockPlacementFromPoint(event.clientX, event.clientY);
+  if (dockPlacement) {
+    setToolbarPlacement(dockPlacement, true);
+  } else {
+    setToolbarPlacement("floating", false);
+    setToolbarFloatingPosition(toolbarDragNextX, toolbarDragNextY, false);
+    saveToolbarLayout();
+  }
+
+  app.classList.remove("toolbar-is-dragging");
+  clearToolbarDockPreviewClasses();
+  toolbarDragPointerId = null;
+  if (toolbarDragHandle.hasPointerCapture(event.pointerId)) {
+    toolbarDragHandle.releasePointerCapture(event.pointerId);
+  }
+}
+
+function handleViewportResize() {
+  setCanvasSize();
+  if (toolbarLayout.placement === "floating") {
+    setToolbarFloatingPosition(toolbarLayout.floatX, toolbarLayout.floatY, false);
+  }
+}
+
+function detectLowSpecDevice() {
+  const cores = Number(navigator.hardwareConcurrency || 4);
+  const memory = Number(navigator.deviceMemory || 4);
+  return cores <= 2 || memory <= 2;
+}
+
+function normalizeHexColor(color) {
+  if (typeof color !== "string") {
+    return "";
+  }
+
+  const normalized = color.trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeWidth(width, inputElement) {
+  const min = Number(inputElement.min || 1);
+  const max = Number(inputElement.max || 40);
+  const numeric = Number(width);
+  if (!Number.isFinite(numeric)) {
+    return min;
+  }
+
+  const rounded = Math.round(numeric);
+  return Math.min(max, Math.max(min, rounded));
+}
+
+function normalizeLineWidth(width) {
+  return normalizeWidth(width, lineWidthInput);
+}
+
+function normalizeEraserWidth(width) {
+  return normalizeWidth(width, eraserWidthInput);
+}
+
+function normalizeEraserMode(mode, fallbackMode = "eraser") {
+  if (mode === "eraser" || mode === "strokeEraser") {
+    return mode;
+  }
+
+  return fallbackMode;
+}
+
+function getContrastColor(hex) {
+  const value = normalizeHexColor(hex);
+  if (!value) {
+    return "#ffffff";
+  }
+
+  const red = Number.parseInt(value.slice(1, 3), 16);
+  const green = Number.parseInt(value.slice(3, 5), 16);
+  const blue = Number.parseInt(value.slice(5, 7), 16);
+  const luminance = (0.299 * red) + (0.587 * green) + (0.114 * blue);
+  return luminance >= 160 ? "#202020" : "#f5f5f5";
+}
+
+function clonePenPreset(preset) {
+  return {
+    color: preset.color,
+    width: preset.width,
+    type: preset.type
+  };
+}
+
+function normalizePenPreset(value, fallbackPreset) {
+  const fallback = fallbackPreset || DEFAULT_PEN_PRESETS[0];
+
+  if (typeof value === "string") {
+    const color = normalizeHexColor(value) || fallback.color;
+    return {
+      color,
+      width: fallback.width,
+      type: fallback.type
+    };
+  }
+
+  if (!value || typeof value !== "object") {
+    return clonePenPreset(fallback);
+  }
+
+  const color = normalizeHexColor(value.color) || fallback.color;
+  const width = normalizeLineWidth(value.width ?? fallback.width);
+  const type = (typeof value.type === "string" && value.type.trim())
+    ? value.type.trim()
+    : fallback.type;
+
+  return { color, width, type };
+}
+
+function loadColorPresets(storageKey, defaults) {
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return [...defaults];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length !== defaults.length) {
+      return [...defaults];
+    }
+
+    const normalized = parsed.map(normalizeHexColor);
+    if (normalized.some((color) => color === "")) {
+      return [...defaults];
+    }
+
+    return normalized;
+  } catch (error) {
+    return [...defaults];
+  }
+}
+
+function saveColorPresets(storageKey, colors) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(colors));
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function loadPenPresets(storageKey, defaults) {
+  const fallback = defaults.map(clonePenPreset);
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return fallback;
+    }
+
+    const normalized = defaults.map((defaultPreset, index) => {
+      return normalizePenPreset(parsed[index], defaultPreset);
+    });
+
+    return normalized;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function savePenPresets(storageKey, presets) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(presets));
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function loadStoredColor(storageKey, fallbackColor) {
+  const normalizedFallback = normalizeHexColor(fallbackColor);
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    const normalized = normalizeHexColor(raw);
+    return normalized || normalizedFallback;
+  } catch (error) {
+    return normalizedFallback;
+  }
+}
+
+function saveStoredColor(storageKey, color) {
+  const normalized = normalizeHexColor(color);
+  if (!normalized) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKey, normalized);
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function loadStoredLineWidth(storageKey, fallbackWidth) {
+  const normalizedFallback = normalizeLineWidth(fallbackWidth);
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return normalizedFallback;
+    }
+    return normalizeLineWidth(parsed);
+  } catch (error) {
+    return normalizedFallback;
+  }
+}
+
+function saveStoredLineWidth(storageKey, width) {
+  const normalized = normalizeLineWidth(width);
+  try {
+    window.localStorage.setItem(storageKey, String(normalized));
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function loadStoredEraserWidth(storageKey, fallbackWidth) {
+  const normalizedFallback = normalizeEraserWidth(fallbackWidth);
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return normalizedFallback;
+    }
+    return normalizeEraserWidth(parsed);
+  } catch (error) {
+    return normalizedFallback;
+  }
+}
+
+function saveStoredEraserWidth(storageKey, width) {
+  const normalized = normalizeEraserWidth(width);
+  try {
+    window.localStorage.setItem(storageKey, String(normalized));
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function loadStoredEraserMode(storageKey, fallbackMode) {
+  const normalizedFallback = normalizeEraserMode(fallbackMode);
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    return normalizeEraserMode(raw, normalizedFallback);
+  } catch (error) {
+    return normalizedFallback;
+  }
+}
+
+function saveStoredEraserMode(storageKey, mode) {
+  const normalized = normalizeEraserMode(mode);
+  try {
+    window.localStorage.setItem(storageKey, normalized);
+  } catch (error) {
+    // localStorage unavailable: skip persistence.
+  }
+}
+
+function getCurrentPenPresetSnapshot() {
+  return {
+    color: normalizeHexColor(penColorInput.value) || DEFAULT_PEN_PRESETS[0].color,
+    width: normalizeLineWidth(lineWidthInput.value),
+    type: currentPenType
+  };
+}
+
+function isSamePenPreset(a, b) {
+  if (!a || !b) {
+    return false;
+  }
+
+  return a.color === b.color
+    && Number(a.width) === Number(b.width)
+    && String(a.type) === String(b.type);
+}
+
+function updatePenPresetSelection() {
+  if (!penPresetsContainer) {
+    return;
+  }
+
+  const current = getCurrentPenPresetSnapshot();
+  const buttons = penPresetsContainer.querySelectorAll(".pen-preset");
+
+  buttons.forEach((button, index) => {
+    button.classList.toggle("is-active", isSamePenPreset(penPresets[index], current));
+  });
+}
+
+function updateBoardPresetSelection() {
+  if (!boardPresetsContainer) {
+    return;
+  }
+
+  const currentColor = normalizeHexColor(boardColorInput.value);
+  const buttons = boardPresetsContainer.querySelectorAll(".color-preset");
+
+  buttons.forEach((button, index) => {
+    button.classList.toggle("is-active", boardPresetColors[index] === currentColor);
+  });
+}
+
+function applyPenColor(color, persist = true) {
+  const normalized = normalizeHexColor(color);
+  if (!normalized) {
+    return;
+  }
+
+  penColorInput.value = normalized;
+  if (persist) {
+    saveStoredColor(LAST_PEN_COLOR_STORAGE_KEY, normalized);
+  }
+  updatePenPresetSelection();
+}
+
+function applyPenWidth(width, persist = true) {
+  const normalized = normalizeLineWidth(width);
+  lineWidthInput.value = String(normalized);
+  if (persist) {
+    saveStoredLineWidth(LAST_PEN_WIDTH_STORAGE_KEY, normalized);
+  }
+  updatePenPresetSelection();
+}
+
+function stepPenWidth(delta) {
+  const current = normalizeLineWidth(lineWidthInput.value);
+  applyPenWidth(current + delta, true);
+}
+
+function applyEraserWidth(width, persist = true) {
+  const normalized = normalizeEraserWidth(width);
+  eraserWidthInput.value = String(normalized);
+  if (persist) {
+    saveStoredEraserWidth(LAST_ERASER_WIDTH_STORAGE_KEY, normalized);
+  }
+}
+
+function stepEraserWidth(delta) {
+  const current = normalizeEraserWidth(eraserWidthInput.value);
+  applyEraserWidth(current + delta, true);
+}
+
+function applyEraserMode(mode, persist = true) {
+  eraserMode = normalizeEraserMode(mode, eraserMode);
+  if (persist) {
+    saveStoredEraserMode(LAST_ERASER_MODE_STORAGE_KEY, eraserMode);
+  }
+}
+
+function applyBoardColor(color, persist = true) {
+  const normalized = normalizeHexColor(color);
+  if (!normalized) {
+    return;
+  }
+
+  boardColorInput.value = normalized;
+  setBoardColor(normalized);
+  renderBoardBackground();
+  updateBoardColorTriggerPreview(normalized);
+  if (persist) {
+    saveStoredColor(LAST_BOARD_COLOR_STORAGE_KEY, normalized);
+  }
+  updateBoardPresetSelection();
+}
+
+function applyPenPreset(preset, persist = true) {
+  const normalized = normalizePenPreset(preset, DEFAULT_PEN_PRESETS[0]);
+  currentPenType = normalized.type;
+  applyPenColor(normalized.color, persist);
+  applyPenWidth(normalized.width, persist);
+  updatePenPresetSelection();
+}
+
+function saveCurrentPenPreset(index) {
+  if (index < 0 || index >= penPresets.length) {
+    return;
+  }
+
+  penPresets[index] = getCurrentPenPresetSnapshot();
+  savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+  renderPenPresets();
+}
+
+function saveCurrentBoardColorToPreset(index) {
+  if (index < 0 || index >= boardPresetColors.length) {
+    return;
+  }
+
+  const currentColor = normalizeHexColor(boardColorInput.value);
+  if (!currentColor) {
+    return;
+  }
+
+  boardPresetColors[index] = currentColor;
+  saveColorPresets(BOARD_PRESET_STORAGE_KEY, boardPresetColors);
+  renderBoardPresets();
+}
+
+function renderPenPresets() {
+  if (!penPresetsContainer) {
+    return;
+  }
+
+  penPresetsContainer.innerHTML = "";
+
+  penPresets.forEach((preset, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "color-preset pen-preset";
+    button.style.backgroundColor = preset.color;
+    button.style.setProperty("--pen-line-size", `${Math.max(2, Math.min(12, preset.width))}px`);
+    button.style.setProperty("--pen-line-color", getContrastColor(preset.color));
+    button.setAttribute("aria-label", `pen preset ${index + 1}`);
+    button.title = `Click: apply (${preset.color}, ${preset.width}px) | Right-click/Shift+Click: save current`;
+
+    button.addEventListener("click", (event) => {
+      if (event.shiftKey) {
+        saveCurrentPenPreset(index);
+        return;
+      }
+      applyPenPreset(preset, true);
+    });
+
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      saveCurrentPenPreset(index);
+    });
+
+    penPresetsContainer.appendChild(button);
+  });
+
+  updatePenPresetSelection();
+}
+
+function renderBoardPresets() {
+  if (!boardPresetsContainer) {
+    return;
+  }
+
+  boardPresetsContainer.innerHTML = "";
+
+  boardPresetColors.forEach((color, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "color-preset";
+    button.style.backgroundColor = color;
+    button.setAttribute("aria-label", `board preset ${index + 1}`);
+    button.title = "Click: apply | Right-click/Shift+Click: save current";
+
+    button.addEventListener("click", (event) => {
+      if (event.shiftKey) {
+        saveCurrentBoardColorToPreset(index);
+        return;
+      }
+      applyBoardColor(color, true);
+    });
+
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      saveCurrentBoardColorToPreset(index);
+    });
+
+    boardPresetsContainer.appendChild(button);
+  });
+
+  updateBoardPresetSelection();
+}
+
+function initPresets() {
+  penPresets = loadPenPresets(PEN_PRESET_STORAGE_KEY, DEFAULT_PEN_PRESETS);
+  boardPresetColors = loadColorPresets(BOARD_PRESET_STORAGE_KEY, DEFAULT_BOARD_PRESETS);
+
+  // Persist normalized model to migrate old string-only pen presets.
+  savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+
+  renderPenPresets();
+  renderBoardPresets();
+}
+
+function initLastUsedSettings() {
+  const initialPenColor = loadStoredColor(LAST_PEN_COLOR_STORAGE_KEY, penColorInput.value);
+  const initialPenWidth = loadStoredLineWidth(LAST_PEN_WIDTH_STORAGE_KEY, lineWidthInput.value);
+  const initialEraserWidth = loadStoredEraserWidth(LAST_ERASER_WIDTH_STORAGE_KEY, eraserWidthInput.value);
+  const initialEraserMode = loadStoredEraserMode(LAST_ERASER_MODE_STORAGE_KEY, eraserMode);
+  const initialBoardColor = loadStoredColor(LAST_BOARD_COLOR_STORAGE_KEY, boardColorInput.value);
+
+  applyPenColor(initialPenColor, false);
+  applyPenWidth(initialPenWidth, false);
+  applyEraserWidth(initialEraserWidth, false);
+  applyEraserMode(initialEraserMode, false);
+  applyBoardColor(initialBoardColor, false);
+}
+
+function clonePoint(point) {
+  return { x: point.x, y: point.y };
+}
+
+function cloneStroke(stroke) {
+  return {
+    ...stroke,
+    points: Array.isArray(stroke.points) ? stroke.points.map(clonePoint) : []
+  };
+}
+
+function cloneStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return [];
+  }
+
+  return collection
+    .filter((stroke) => stroke && Array.isArray(stroke.points) && stroke.points.length > 0)
+    .map(cloneStroke);
+}
+
+function normalizeStrokeCollection(collection) {
+  if (!Array.isArray(collection) || collection.length <= 0) {
+    return [];
+  }
+
+  const normalized = [];
+  for (const sourceStroke of collection) {
+    if (!sourceStroke || !Array.isArray(sourceStroke.points)) {
+      continue;
+    }
+
+    const points = [];
+    for (const sourcePoint of sourceStroke.points) {
+      const x = Number(sourcePoint && sourcePoint.x);
+      const y = Number(sourcePoint && sourcePoint.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        continue;
+      }
+
+      points.push({ x, y });
+    }
+
+    if (points.length <= 0) {
+      continue;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+
+    normalized.push({
+      kind: sourceStroke.kind === "pixel-eraser" ? "pixel-eraser" : "pen",
+      color: normalizeHexColor(sourceStroke.color) || "#111111",
+      widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
+      points,
+      minX,
+      minY,
+      maxX,
+      maxY
+    });
+  }
+
+  return normalized;
+}
+
+function saveUndoSnapshotForCurrentContext() {
+  const entry = getOrCreateStrokeHistoryEntry();
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  entry.redo.length = 0;
+  updateUndoRedoUI();
+}
+
+function captureUndoForStrokeMutation() {
+  if (strokeEraserActive) {
+    if (!strokeEraserHistoryArmed) {
+      return;
+    }
+    strokeEraserHistoryArmed = false;
+  }
+
+  saveUndoSnapshotForCurrentContext();
+}
+
+function finalizeStrokeMutation() {
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+}
+
+function undoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.undo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.redo, cloneStrokeCollection(strokes));
+  const previousSnapshot = entry.undo.pop();
+  replaceVisibleStrokes(previousSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function redoStrokeAction() {
+  if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
+    return false;
+  }
+
+  const entry = getOrCreateStrokeHistoryEntry();
+  if (entry.redo.length <= 0) {
+    updateUndoRedoUI();
+    return false;
+  }
+
+  pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
+  const nextSnapshot = entry.redo.pop();
+  replaceVisibleStrokes(nextSnapshot);
+  saveCurrentStrokeState();
+  scheduleSessionAutosave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function replaceVisibleStrokes(collection) {
+  strokes.length = 0;
+  const nextStrokes = cloneStrokeCollection(collection);
+  if (nextStrokes.length > 0) {
+    strokes.push(...nextStrokes);
+  }
+  redrawAllStrokes();
+}
+
+function savePdfPageStrokeSnapshot(pageNumber) {
+  const numericPage = Math.round(Number(pageNumber));
+  if (!Number.isFinite(numericPage) || numericPage < 1) {
+    return;
+  }
+
+  const snapshot = cloneStrokeCollection(strokes);
+  if (snapshot.length === 0) {
+    pdfPageStrokeSnapshots.delete(numericPage);
+    return;
+  }
+
+  pdfPageStrokeSnapshots.set(numericPage, snapshot);
+}
+
+function saveCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    return;
+  }
+
+  boardStrokeSnapshot = cloneStrokeCollection(strokes);
+}
+
+function restoreCurrentStrokeState() {
+  if (hasLoadedPdfDocument()) {
+    const numericPage = Math.round(Number(pdfPageNumber));
+    const snapshot = Number.isFinite(numericPage) && numericPage >= 1
+      ? (pdfPageStrokeSnapshots.get(numericPage) || [])
+      : [];
+    replaceVisibleStrokes(snapshot);
+    return;
+  }
+
+  replaceVisibleStrokes(boardStrokeSnapshot);
+}
+
+function createStrokeRecord(kind, startPoint) {
+  const point = clonePoint(startPoint);
+  const sourceWidth = kind === "pixel-eraser"
+    ? Number(eraserWidthInput.value)
+    : Number(lineWidthInput.value);
+  const widthPx = Math.max(1, sourceWidth * pixelRatio);
+
+  return {
+    kind,
+    color: penColorInput.value,
+    widthPx,
+    points: [point],
+    minX: point.x,
+    minY: point.y,
+    maxX: point.x,
+    maxY: point.y
+  };
+}
+
+function appendPointToStroke(stroke, point) {
+  const next = clonePoint(point);
+  stroke.points.push(next);
+  stroke.minX = Math.min(stroke.minX, next.x);
+  stroke.minY = Math.min(stroke.minY, next.y);
+  stroke.maxX = Math.max(stroke.maxX, next.x);
+  stroke.maxY = Math.max(stroke.maxY, next.y);
+}
+
+function drawStrokePath(stroke, targetContext = ctx) {
+  if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) {
+    return;
+  }
+
+  const isPixelEraser = stroke.kind === "pixel-eraser";
+  targetContext.lineJoin = "round";
+  targetContext.lineCap = "round";
+  targetContext.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
+  targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.lineWidth = Math.max(1, Number(stroke.widthPx));
+
+  if (stroke.points.length === 1) {
+    const point = stroke.points[0];
+    targetContext.beginPath();
+    targetContext.arc(point.x, point.y, targetContext.lineWidth / 2, 0, Math.PI * 2);
+    targetContext.fill();
+    return;
+  }
+
+  const points = stroke.points;
+  let previous = points[0];
+  let previousMidpoint = previous;
+
+  targetContext.beginPath();
+  targetContext.moveTo(previousMidpoint.x, previousMidpoint.y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    const current = points[index];
+    const midpoint = getMidpoint(previous, current);
+    targetContext.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
+    previous = current;
+    previousMidpoint = midpoint;
+  }
+
+  targetContext.stroke();
+}
+
+function redrawAllStrokes() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  for (const stroke of strokes) {
+    drawStrokePath(stroke);
+  }
+}
+
+function scaleStrokeCollection(collection, scaleX, scaleY) {
+  if (!Array.isArray(collection) || collection.length === 0) {
+    return;
+  }
+
+  const widthScale = (scaleX + scaleY) / 2;
+
+  for (const stroke of collection) {
+    if (!stroke.points.length) {
+      continue;
+    }
+
+    stroke.minX = Number.POSITIVE_INFINITY;
+    stroke.minY = Number.POSITIVE_INFINITY;
+    stroke.maxX = Number.NEGATIVE_INFINITY;
+    stroke.maxY = Number.NEGATIVE_INFINITY;
+
+    for (const point of stroke.points) {
+      point.x *= scaleX;
+      point.y *= scaleY;
+      stroke.minX = Math.min(stroke.minX, point.x);
+      stroke.minY = Math.min(stroke.minY, point.y);
+      stroke.maxX = Math.max(stroke.maxX, point.x);
+      stroke.maxY = Math.max(stroke.maxY, point.y);
+    }
+
+    stroke.widthPx = Math.max(1, stroke.widthPx * widthScale);
+  }
+}
+
+function scaleStoredStrokes(scaleX, scaleY) {
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+    return;
+  }
+
+  scaleStrokeCollection(strokes, scaleX, scaleY);
+  scaleStrokeCollection(boardStrokeSnapshot, scaleX, scaleY);
+
+  for (const snapshot of pdfPageStrokeSnapshots.values()) {
+    scaleStrokeCollection(snapshot, scaleX, scaleY);
+  }
+}
+
+function distancePointToSegment(point, a, b) {
+  const abX = b.x - a.x;
+  const abY = b.y - a.y;
+  const apX = point.x - a.x;
+  const apY = point.y - a.y;
+  const lengthSq = (abX * abX) + (abY * abY);
+
+  if (lengthSq <= 0.0001) {
+    return Math.hypot(apX, apY);
+  }
+
+  const t = Math.max(0, Math.min(1, ((apX * abX) + (apY * abY)) / lengthSq));
+  const nearestX = a.x + (abX * t);
+  const nearestY = a.y + (abY * t);
+  return Math.hypot(point.x - nearestX, point.y - nearestY);
+}
+
+function isPointNearStroke(point, stroke, radius) {
+  const points = stroke.points;
+  if (!points.length) {
+    return false;
+  }
+
+  if (points.length === 1) {
+    return Math.hypot(point.x - points[0].x, point.y - points[0].y) <= radius;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (distancePointToSegment(point, points[index - 1], points[index]) <= radius) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getStrokeEraserRadius() {
+  return Math.max(4 * pixelRatio, (Number(eraserWidthInput.value) * pixelRatio) / 2);
+}
+
+function findTopPenStrokeIndexAtPoint(point, skipped = null) {
+  const eraserRadius = getStrokeEraserRadius();
+
+  for (let index = strokes.length - 1; index >= 0; index -= 1) {
+    if (skipped && skipped.has(index)) {
+      continue;
+    }
+
+    const stroke = strokes[index];
+    if (stroke.kind !== "pen") {
+      continue;
+    }
+
+    const radius = (stroke.widthPx / 2) + eraserRadius;
+    if (
+      point.x < (stroke.minX - radius)
+      || point.x > (stroke.maxX + radius)
+      || point.y < (stroke.minY - radius)
+      || point.y > (stroke.maxY + radius)
+    ) {
+      continue;
+    }
+
+    if (isPointNearStroke(point, stroke, radius)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function eraseTopStrokeAtPoint(point) {
+  const index = findTopPenStrokeIndexAtPoint(point);
+  if (index < 0) {
+    return false;
+  }
+
+  captureUndoForStrokeMutation();
+  strokes.splice(index, 1);
+  redrawAllStrokes();
+  finalizeStrokeMutation();
+  return true;
+}
+
+function eraseStrokesAlongSegment(startPoint, endPoint) {
+  const distance = Math.hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y);
+  const stepSize = Math.max(getStrokeEraserRadius() * 0.7, 1);
+  const steps = Math.max(1, Math.ceil(distance / stepSize));
+  const removedIndexes = new Set();
+
+  for (let step = 0; step <= steps; step += 1) {
+    const t = step / steps;
+    const probe = {
+      x: startPoint.x + ((endPoint.x - startPoint.x) * t),
+      y: startPoint.y + ((endPoint.y - startPoint.y) * t)
+    };
+    const hitIndex = findTopPenStrokeIndexAtPoint(probe, removedIndexes);
+    if (hitIndex >= 0) {
+      removedIndexes.add(hitIndex);
+    }
+  }
+
+  if (removedIndexes.size === 0) {
+    return false;
+  }
+
+  captureUndoForStrokeMutation();
+  const sortedIndexes = Array.from(removedIndexes).sort((a, b) => b - a);
+  for (const index of sortedIndexes) {
+    strokes.splice(index, 1);
+  }
+
+  redrawAllStrokes();
+  finalizeStrokeMutation();
+  return true;
+}
+
+function startStrokeErasing(event) {
+  strokeEraserActive = true;
+  strokeEraserHistoryArmed = true;
+  strokeEraserPointerId = event.pointerId;
+  strokeEraserLastPoint = getCanvasPoint(event);
+  eraseTopStrokeAtPoint(strokeEraserLastPoint);
+  canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
+}
+
+function continueStrokeErasing(event) {
+  if (!strokeEraserActive || event.pointerId !== strokeEraserPointerId) {
+    return;
+  }
+
+  const point = getCanvasPoint(event);
+  eraseStrokesAlongSegment(strokeEraserLastPoint, point);
+  strokeEraserLastPoint = point;
+}
+
+function stopStrokeErasing(event) {
+  if (!strokeEraserActive || event.pointerId !== strokeEraserPointerId) {
+    return;
+  }
+
+  strokeEraserActive = false;
+  strokeEraserHistoryArmed = false;
+  strokeEraserPointerId = null;
+  strokeEraserLastPoint = null;
+
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+
+  updateUndoRedoUI();
+}
+
+function updateToolUI() {
+  const mouseModeActive = overlayMousePassthrough;
+  penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen");
+  const eraserSelected = tool === "eraser" || tool === "strokeEraser";
+  eraserToolButton.classList.toggle("is-active", !mouseModeActive && eraserSelected);
+  pixelEraserModeButton.classList.toggle("is-active", eraserMode === "eraser");
+  strokeEraserModeButton.classList.toggle("is-active", eraserMode === "strokeEraser");
+  const modeText = mouseModeActive
+    ? "Mouse"
+    : (tool === "pen"
+      ? "Pen"
+      : (tool === "eraser" ? "Eraser" : "StrokeEraser"));
+  modeLabel.textContent = `Mode: ${modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
+  if (overlayMousePassthrough) {
+    canvas.style.cursor = "default";
+    return;
+  }
+
+  canvas.style.cursor = tool === "pen" ? "crosshair" : "cell";
+}
+
+function renderBoardBackground() {
+  if (backgroundCanvas.width <= 0 || backgroundCanvas.height <= 0) {
+    return;
+  }
+
+  backgroundCtx.setTransform(1, 0, 0, 1, 0, 0);
+  backgroundCtx.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+  if (overlayMode) {
+    return;
+  }
+
+  backgroundCtx.fillStyle = normalizeHexColor(boardColorInput.value) || "#ffffff";
+  backgroundCtx.fillRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+
+  if (!pdfPageRasterCanvas || pdfPageRasterCanvas.width <= 0 || pdfPageRasterCanvas.height <= 0) {
+    return;
+  }
+
+  const fitScale = Math.min(
+    backgroundCanvas.width / pdfPageRasterCanvas.width,
+    backgroundCanvas.height / pdfPageRasterCanvas.height
+  );
+  const drawWidth = Math.max(1, Math.floor(pdfPageRasterCanvas.width * fitScale));
+  const drawHeight = Math.max(1, Math.floor(pdfPageRasterCanvas.height * fitScale));
+  const drawX = Math.floor((backgroundCanvas.width - drawWidth) / 2);
+  const drawY = Math.floor((backgroundCanvas.height - drawHeight) / 2);
+
+  backgroundCtx.imageSmoothingEnabled = true;
+  backgroundCtx.imageSmoothingQuality = "high";
+  backgroundCtx.drawImage(
+    pdfPageRasterCanvas,
+    0,
+    0,
+    pdfPageRasterCanvas.width,
+    pdfPageRasterCanvas.height,
+    drawX,
+    drawY,
+    drawWidth,
+    drawHeight
+  );
+}
+
+async function releasePdfDocument(documentRef) {
+  if (!documentRef || typeof documentRef.destroy !== "function") {
+    return;
+  }
+
+  try {
+    await documentRef.destroy();
+  } catch (error) {
+    // Ignore destroy errors.
+  }
+}
+
+async function unloadPdfDocument(updateStatus = true) {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  saveCurrentStrokeState();
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+  pdfRenderToken += 1;
+  pdfLoadingToken += 1;
+
+  const previousDocument = pdfDocument;
+  pdfDocument = null;
+  pdfPageNumber = 1;
+  pdfPageRasterCanvas = null;
+  loadedDocumentName = "";
+  loadedPdfBytes = null;
+  sessionPdfBytesDirty = false;
+  pdfPageStrokeSnapshots.clear();
+
+  restoreCurrentStrokeState();
+  clearAllStrokeHistory();
+  renderBoardBackground();
+  updatePdfNavigationUI();
+  scheduleSessionAutosave();
+
+  if (updateStatus) {
+    setDocumentStatus("No document");
+  }
+
+  await releasePdfDocument(previousDocument);
+}
+
+async function renderPdfPage(pageNumber) {
+  if (!hasLoadedPdfDocument()) {
+    pdfPageRasterCanvas = null;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  stopPdfRenderTask();
+
+  const clampedPage = Math.min(
+    Number(pdfDocument.numPages),
+    Math.max(1, Math.round(Number(pageNumber) || 1))
+  );
+  const pageChanged = clampedPage !== pdfPageNumber;
+  if (clampedPage !== pdfPageNumber) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    pdfPageNumber = clampedPage;
+    restoreCurrentStrokeState();
+  } else {
+    pdfPageNumber = clampedPage;
+  }
+  updatePdfNavigationUI();
+  if (pageChanged) {
+    scheduleSessionAutosave();
+  }
+
+  const token = ++pdfRenderToken;
+  const statusName = loadedDocumentName || "PDF";
+  setDocumentStatus(`${statusName}: rendering page...`);
+
+  try {
+    const page = await pdfDocument.getPage(clampedPage);
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    const baseViewport = page.getViewport({ scale: 1 });
+    const maxWidth = Math.max(1, backgroundCanvas.width);
+    const maxHeight = Math.max(1, backgroundCanvas.height);
+    const fitScale = Math.min(maxWidth / baseViewport.width, maxHeight / baseViewport.height);
+    const viewport = page.getViewport({ scale: fitScale });
+
+    const rasterCanvas = document.createElement("canvas");
+    rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
+    rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+    const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+    if (!rasterContext) {
+      setDocumentStatus("Could not create a PDF rendering context.", "error");
+      return;
+    }
+    rasterContext.imageSmoothingEnabled = true;
+    rasterContext.imageSmoothingQuality = "high";
+
+    pdfRenderTask = page.render({
+      canvasContext: rasterContext,
+      viewport
+    });
+    await pdfRenderTask.promise;
+
+    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
+      return;
+    }
+
+    pdfPageRasterCanvas = rasterCanvas;
+    renderBoardBackground();
+    updatePdfNavigationUI();
+    setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
+  } catch (error) {
+    if (error && error.name === "RenderingCancelledException") {
+      return;
+    }
+
+    setDocumentStatus("Failed to render PDF page.", "error");
+  } finally {
+    if (token === pdfRenderToken) {
+      pdfRenderTask = null;
+    }
+  }
+}
+
+async function exportAnnotatedPdf() {
+  if (pdfExportInProgress) {
+    return;
+  }
+
+  if (!(await ensurePdfExportEngineAvailable())) {
+    return;
+  }
+
+  saveCurrentStrokeState();
+  pdfExportInProgress = true;
+  updatePdfNavigationUI();
+
+  const hasPdf = hasLoadedPdfDocument();
+  const statusName = hasPdf ? (loadedDocumentName || "PDF") : "Board";
+  const totalPages = hasPdf ? Math.max(1, Number(pdfDocument.numPages) || 1) : 1;
+  const outputFileName = getAnnotatedPdfFileName();
+
+  try {
+    const exportWidth = Math.max(1, Math.floor(backgroundCanvas.width));
+    const exportHeight = Math.max(1, Math.floor(backgroundCanvas.height));
+    const boardColor = normalizeHexColor(boardColorInput.value) || "#ffffff";
+    const outputPdf = await window.PDFLib.PDFDocument.create();
+
+    const mergedCanvas = document.createElement("canvas");
+    mergedCanvas.width = exportWidth;
+    mergedCanvas.height = exportHeight;
+    const mergedContext = mergedCanvas.getContext("2d", { alpha: false });
+    if (!mergedContext) {
+      throw new Error("Could not create output context.");
+    }
+
+    const annotationCanvas = document.createElement("canvas");
+    annotationCanvas.width = exportWidth;
+    annotationCanvas.height = exportHeight;
+    const annotationContext = annotationCanvas.getContext("2d", { alpha: true });
+    if (!annotationContext) {
+      throw new Error("Could not create annotation context.");
+    }
+
+    for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+      setDocumentStatus(`${statusName}: exporting ${pageNumber}/${totalPages}...`);
+
+      mergedContext.setTransform(1, 0, 0, 1, 0, 0);
+      mergedContext.globalCompositeOperation = "source-over";
+      mergedContext.clearRect(0, 0, exportWidth, exportHeight);
+      mergedContext.fillStyle = boardColor;
+      mergedContext.fillRect(0, 0, exportWidth, exportHeight);
+
+      if (hasPdf) {
+        await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
+      }
+
+      annotationContext.setTransform(1, 0, 0, 1, 0, 0);
+      annotationContext.globalCompositeOperation = "source-over";
+      annotationContext.clearRect(0, 0, exportWidth, exportHeight);
+      annotationContext.lineJoin = "round";
+      annotationContext.lineCap = "round";
+
+      const pageStrokes = hasPdf
+        ? (pdfPageStrokeSnapshots.get(pageNumber) || [])
+        : boardStrokeSnapshot;
+      for (const stroke of pageStrokes) {
+        drawStrokePath(stroke, annotationContext);
+      }
+
+      annotationContext.globalCompositeOperation = "source-over";
+      mergedContext.drawImage(annotationCanvas, 0, 0);
+
+      const pageImageBytes = await canvasToJpegBytes(mergedCanvas);
+      const embeddedImage = await outputPdf.embedJpg(pageImageBytes);
+      const outputPage = outputPdf.addPage([exportWidth, exportHeight]);
+      outputPage.drawImage(embeddedImage, {
+        x: 0,
+        y: 0,
+        width: exportWidth,
+        height: exportHeight
+      });
+    }
+
+    const outputBytes = await outputPdf.save();
+    const outputBlob = new Blob([outputBytes], { type: "application/pdf" });
+    downloadBlobFile(outputBlob, outputFileName);
+    setDocumentStatus(`${outputFileName} saved.`, "success");
+  } catch (error) {
+    setDocumentStatus("Failed to save annotated PDF.", "error");
+  } finally {
+    pdfExportInProgress = false;
+    updatePdfNavigationUI();
+  }
+}
+
+function schedulePdfPageRerender() {
+  if (!hasLoadedPdfDocument()) {
+    return;
+  }
+
+  clearPdfRenderDebounce();
+  pdfRenderDebounceTimer = window.setTimeout(() => {
+    pdfRenderDebounceTimer = null;
+    renderPdfPage(pdfPageNumber);
+  }, 120);
+}
+
+async function loadPdfFromFile(file) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    return;
+  }
+
+  if (!(await configurePdfWorker())) {
+    return;
+  }
+
+  const token = ++pdfLoadingToken;
+  const fileName = file.name || "PDF";
+  setDocumentStatus(`${fileName}: loading...`);
+  queueRuntimeLog("pdf.load.start", {
+    fileName,
+    fileSize: Number.isFinite(file.size) ? file.size : null,
+    fileType: trimRuntimeLogValue(file.type || "", 120),
+    token
+  });
+
+  try {
+    const source = await file.arrayBuffer();
+    if (token !== pdfLoadingToken) {
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-before-open" });
+      return;
+    }
+
+    let nextDocument = null;
+    let usedCompatibilityMode = false;
+    const sourceBytes = new Uint8Array(source);
+    let lastLoadError = null;
+
+    const loadAttempts = [
+      {},
+      { disableWorker: true },
+      { disableWorker: true, useWorkerFetch: false, isEvalSupported: false }
+    ];
+
+    for (let index = 0; index < loadAttempts.length; index += 1) {
+      try {
+        // pdf.js may detach transferred buffers, so each attempt gets a fresh copy.
+        const loadingTask = window.pdfjsLib.getDocument({
+          ...loadAttempts[index],
+          data: sourceBytes.slice()
+        });
+        nextDocument = await loadingTask.promise;
+        usedCompatibilityMode = index > 0;
+        break;
+      } catch (attemptError) {
+        lastLoadError = attemptError;
+        queueRuntimeLog("pdf.load.attempt.failed", {
+          fileName,
+          attempt: index + 1,
+          options: sanitizeRuntimeLogDetails(loadAttempts[index]),
+          error: toRuntimeLogError(attemptError)
+        });
+      }
+    }
+
+    if (!nextDocument) {
+      throw lastLoadError || new Error("PDF load failed.");
+    }
+
+    if (token !== pdfLoadingToken) {
+      await releasePdfDocument(nextDocument);
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-after-open" });
+      return;
+    }
+
+    saveCurrentStrokeState();
+    const previousDocument = pdfDocument;
+    clearPdfRenderDebounce();
+    stopPdfRenderTask();
+
+    pdfPageStrokeSnapshots.clear();
+    pdfDocument = nextDocument;
+    pdfPageNumber = 1;
+    pdfPageRasterCanvas = null;
+    loadedDocumentName = fileName;
+    loadedPdfBytes = sourceBytes.slice();
+    sessionPdfBytesDirty = true;
+    restoreCurrentStrokeState();
+
+    await renderPdfPage(1);
+    queueRuntimeLog("pdf.load.success", {
+      fileName,
+      pages: Number.isFinite(nextDocument.numPages) ? nextDocument.numPages : null,
+      compatibilityMode: usedCompatibilityMode
+    });
+    if (usedCompatibilityMode) {
+      setDocumentStatus(`${fileName}: loaded (compatibility mode).`, "warning");
+    }
+    if (pdfPageRasterCanvas) {
+      closeDocumentPopup();
+    }
+    await releasePdfDocument(previousDocument);
+    clearAllStrokeHistory();
+    scheduleSessionAutosave();
+  } catch (error) {
+    if (token !== pdfLoadingToken) {
+      queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-on-error" });
+      return;
+    }
+
+    const reason = error && typeof error.message === "string"
+      ? error.message.trim()
+      : "";
+    if (reason && /password/i.test(reason)) {
+      setDocumentStatus("Password-protected PDF is not supported.", "warning");
+    } else {
+      const detail = reason ? ` (${reason.slice(0, 80)})` : "";
+      setDocumentStatus(`Unable to open this PDF file. Try another file.${detail}`, "error");
+    }
+    queueRuntimeLog("pdf.load.failed", {
+      fileName,
+      error: toRuntimeLogError(error),
+      reason: trimRuntimeLogValue(reason || "")
+    });
+  } finally {
+    updatePdfNavigationUI();
+  }
+}
+
+async function handleDocumentInputChange(event) {
+  if (pdfExportInProgress) {
+    setDocumentStatus("Wait until export finishes.", "warning");
+    event.target.value = "";
+    return;
+  }
+
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) {
+    return;
+  }
+
+  if (isPdfFile(file)) {
+    await loadPdfFromFile(file);
+    return;
+  }
+
+  if (isPptFile(file)) {
+    setDocumentStatus("PPT/PPTX cannot be rendered directly. Convert to PDF and load again.", "warning");
+    return;
+  }
+
+  setDocumentStatus("Unsupported file type. Choose PDF or PPT/PPTX.", "error");
+}
+
+function goToPreviousPdfPage() {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber - 1);
+}
+
+function goToNextPdfPage() {
+  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
+    return;
+  }
+
+  renderPdfPage(pdfPageNumber + 1);
+}
+
+async function requestDocumentFileSelection() {
+  if (pdfExportInProgress || sessionRestoreInProgress) {
+    return;
+  }
+
+  if (!(await configurePdfWorker())) {
+    return;
+  }
+
+  documentInput.value = "";
+
+  try {
+    documentInput.click();
+    return;
+  } catch (error) {
+    // Fallback for runtimes that block synthetic click.
+  }
+
+  if (typeof documentInput.showPicker === "function") {
+    try {
+      documentInput.showPicker();
+      return;
+    } catch (error) {
+      // ignore and surface unified error below.
+    }
+  }
+
+  setDocumentStatus("Unable to open file picker. Try again.", "error");
+}
+
+function isEditableEventTarget(target) {
+  if (!target) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = String(target.tagName || "").toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select";
+}
+
+function setCanvasSize() {
+  const rect = canvas.getBoundingClientRect();
+  const previousWidth = canvas.width;
+  const previousHeight = canvas.height;
+  const previousBackgroundWidth = backgroundCanvas.width;
+  const previousBackgroundHeight = backgroundCanvas.height;
+
+  pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
+  const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
+  const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
+
+  if (
+    nextWidth === previousWidth
+    && nextHeight === previousHeight
+    && nextWidth === previousBackgroundWidth
+    && nextHeight === previousBackgroundHeight
+  ) {
+    return;
+  }
+
+  backgroundCanvas.width = nextWidth;
+  backgroundCanvas.height = nextHeight;
+  canvas.width = nextWidth;
+  canvas.height = nextHeight;
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  if (previousWidth > 0 && previousHeight > 0) {
+    scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
+    redrawAllStrokes();
+    scheduleSessionAutosave();
+  }
+
+  renderBoardBackground();
+  schedulePdfPageRerender();
+}
+
+function getCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY
+  };
+}
+
+function getMidpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
+  };
+}
+
+function applyCurrentBrush() {
+  ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
+  ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
+  ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
+  const width = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
+  ctx.lineWidth = Math.max(1, width * pixelRatio);
+}
+
+function smoothInputPoint(point, forceFull) {
+  if (!filteredPoint || forceFull) {
+    filteredPoint = point;
+    return point;
+  }
+
+  const distance = Math.hypot(point.x - filteredPoint.x, point.y - filteredPoint.y);
+  const speedBoost = Math.min(0.25, distance / (24 * pixelRatio));
+  const alpha = Math.min(0.72, quality.inputSmoothing + speedBoost);
+
+  filteredPoint = {
+    x: filteredPoint.x + ((point.x - filteredPoint.x) * alpha),
+    y: filteredPoint.y + ((point.y - filteredPoint.y) * alpha)
+  };
+
+  return filteredPoint;
+}
+
+function appendSmoothSegment(rawPoint, forceFull = false) {
+  if (!lastPoint) {
+    lastPoint = smoothInputPoint(rawPoint, forceFull);
+    lastMidPoint = lastPoint;
+    return false;
+  }
+
+  const targetPoint = smoothInputPoint(rawPoint, forceFull);
+  const dx = targetPoint.x - lastPoint.x;
+  const dy = targetPoint.y - lastPoint.y;
+  const distance = Math.hypot(dx, dy);
+
+  if (distance < 0.01) {
+    return false;
+  }
+
+  if (!forceFull && distance < quality.minSegmentLength * pixelRatio) {
+    return false;
+  }
+
+  const mid = getMidpoint(lastPoint, targetPoint);
+  ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y);
+  lastPoint = targetPoint;
+  lastMidPoint = mid;
+  if (activeStroke) {
+    appendPointToStroke(activeStroke, targetPoint);
+  }
+  return true;
+}
+
+function requestDrawFrame() {
+  if (frameRequested) {
+    return;
+  }
+
+  frameRequested = true;
+  window.requestAnimationFrame(processDrawFrame);
+}
+
+function enqueueEventPoints(event, forceFull) {
+  const sourceEvents = typeof event.getCoalescedEvents === "function"
+    ? event.getCoalescedEvents()
+    : [event];
+
+  for (const sourceEvent of sourceEvents) {
+    pendingPoints.push({
+      point: getCanvasPoint(sourceEvent),
+      forceFull
+    });
+  }
+
+  const pendingCount = pendingPoints.length - pendingHead;
+  if (pendingCount > MAX_QUEUE_POINTS) {
+    const overflow = pendingCount - MAX_QUEUE_POINTS;
+    pendingHead += overflow;
+  }
+
+  requestDrawFrame();
+}
+
+function clearPendingPoints() {
+  pendingPoints.length = 0;
+  pendingHead = 0;
+}
+
+function processPendingPoints(maxPoints, frameBudgetMs) {
+  if (pendingHead >= pendingPoints.length) {
+    clearPendingPoints();
+    return false;
+  }
+
+  applyCurrentBrush();
+
+  let didStroke = false;
+  let processedCount = 0;
+  const startedAt = performance.now();
+
+  ctx.beginPath();
+  if (lastMidPoint) {
+    ctx.moveTo(lastMidPoint.x, lastMidPoint.y);
+  } else if (lastPoint) {
+    ctx.moveTo(lastPoint.x, lastPoint.y);
+  }
+
+  while (pendingHead < pendingPoints.length && processedCount < maxPoints) {
+    const item = pendingPoints[pendingHead];
+    pendingHead += 1;
+    processedCount += 1;
+
+    if (appendSmoothSegment(item.point, item.forceFull)) {
+      didStroke = true;
+      hasStrokeMoved = true;
+    }
+
+    if ((performance.now() - startedAt) >= frameBudgetMs) {
+      break;
+    }
+  }
+
+  if (didStroke) {
+    ctx.stroke();
+  }
+
+  if (pendingHead >= pendingPoints.length) {
+    clearPendingPoints();
+  }
+
+  const elapsed = performance.now() - startedAt;
+  frameCostAverage = frameCostAverage === 0
+    ? elapsed
+    : ((frameCostAverage * 0.9) + (elapsed * 0.1));
+
+  return pendingHead < pendingPoints.length;
+}
+
+function processDrawFrame() {
+  frameRequested = false;
+
+  if (!drawing) {
+    clearPendingPoints();
+    return;
+  }
+
+  const hasMore = processPendingPoints(quality.maxPointsPerFrame, quality.frameBudgetMs);
+
+  if (qualityLevel === "normal" && frameCostAverage > 7.5) {
+    qualityLevel = "low";
+    quality = QUALITY_PRESETS.low;
+    if (!drawing) {
+      setCanvasSize();
+    } else {
+      pendingQualityResize = true;
+    }
+    updateToolUI();
+  }
+
+  if (hasMore) {
+    requestDrawFrame();
+  }
+}
+
+function flushPendingPoints() {
+  if (pendingHead >= pendingPoints.length) {
+    clearPendingPoints();
+    frameRequested = false;
+    return;
+  }
+
+  processPendingPoints(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+  frameRequested = false;
+}
+
+function startDrawing(event) {
+  const point = getCanvasPoint(event);
+  drawing = true;
+  hasStrokeMoved = false;
+  lastPoint = point;
+  lastMidPoint = point;
+  filteredPoint = point;
+  clearPendingPoints();
+  frameRequested = false;
+  activeStroke = createStrokeRecord(tool === "eraser" ? "pixel-eraser" : "pen", point);
+
+  applyCurrentBrush();
+  canvas.setPointerCapture(event.pointerId);
+  updateUndoRedoUI();
+}
+
+function draw(event) {
+  if (!drawing) {
+    return;
+  }
+
+  enqueueEventPoints(event, false);
+}
+
+function stopDrawing(event) {
+  if (!drawing) {
+    return;
+  }
+
+  if (event.type !== "pointercancel") {
+    enqueueEventPoints(event, true);
+  }
+  flushPendingPoints();
+
+  if (!hasStrokeMoved && lastPoint) {
+    applyCurrentBrush();
+    const dotWidth = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
+    ctx.beginPath();
+    ctx.arc(lastPoint.x, lastPoint.y, Math.max(1, (dotWidth * pixelRatio) / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  if (activeStroke && activeStroke.points.length > 0) {
+    saveUndoSnapshotForCurrentContext();
+    strokes.push(activeStroke);
+    finalizeStrokeMutation();
+  }
+
+  drawing = false;
+  hasStrokeMoved = false;
+  lastPoint = null;
+  lastMidPoint = null;
+  filteredPoint = null;
+  activeStroke = null;
+  clearPendingPoints();
+  frameRequested = false;
+
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+
+  if (pendingQualityResize) {
+    setCanvasSize();
+    pendingQualityResize = false;
+  }
+
+  updateUndoRedoUI();
+}
+
+function handlePointerDown(event) {
+  if (overlayMousePassthrough) {
+    return;
+  }
+
+  if (tool === "strokeEraser") {
+    startStrokeErasing(event);
+    return;
+  }
+
+  startDrawing(event);
+}
+
+function handlePointerMove(event) {
+  if (strokeEraserActive) {
+    continueStrokeErasing(event);
+    return;
+  }
+
+  if (drawing) {
+    draw(event);
+  }
+}
+
+function handlePointerEnd(event) {
+  if (strokeEraserActive) {
+    stopStrokeErasing(event);
+  }
+
+  if (drawing) {
+    stopDrawing(event);
+  }
+}
+
+function clearBoard() {
+  if (strokes.length <= 0) {
+    return;
+  }
+
+  saveUndoSnapshotForCurrentContext();
+  strokes.length = 0;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  finalizeStrokeMutation();
+}
+
+function setBoardColor(color) {
+  canvas.style.backgroundColor = "transparent";
+  const normalized = normalizeHexColor(color);
+  if (overlayMode) {
+    backgroundCanvas.style.backgroundColor = "transparent";
+    return;
+  }
+  backgroundCanvas.style.backgroundColor = normalized || color || "transparent";
+}
+
+penToolButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
+  tool = "pen";
+  closeEraserToolPopup();
+  updateToolUI();
+});
+
+eraserToolButton.addEventListener("click", async (event) => {
+  event.stopPropagation();
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
+  if (tool === "eraser" || tool === "strokeEraser") {
+    setEraserToolPopupOpen(!isEraserToolPopupOpen());
+    return;
+  }
+
+  tool = eraserMode;
+  closeEraserToolPopup();
+  updateToolUI();
+});
+
+pixelEraserModeButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
+  applyEraserMode("eraser", true);
+  tool = eraserMode;
+  closeEraserToolPopup();
+  updateToolUI();
+});
+
+strokeEraserModeButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
+  applyEraserMode("strokeEraser", true);
+  tool = eraserMode;
+  closeEraserToolPopup();
+  updateToolUI();
+});
+
+if (undoButton) {
+  undoButton.addEventListener("click", () => {
+    undoStrokeAction();
+  });
+}
+
+if (redoButton) {
+  redoButton.addEventListener("click", () => {
+    redoStrokeAction();
+  });
+}
+
+clearButton.addEventListener("click", clearBoard);
+fullscreenToggleButton.addEventListener("click", toggleFullscreen);
+if (overlayModeToggleButton) {
+  overlayModeToggleButton.addEventListener("click", () => {
+    toggleOverlayMode();
+  });
+}
+if (overlayMouseModeToggleButton) {
+  overlayMouseModeToggleButton.addEventListener("click", () => {
+    toggleOverlayMouseMode();
+  });
+}
+openDocumentPopupButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = !isDocumentPopupOpen();
+  setDocumentPopupOpen(open);
+
+  if (open) {
+    closeBoardColorPopup();
+    closeEraserToolPopup();
+    closePresetHelp();
+  }
+});
+
+documentLoadButton.addEventListener("click", requestDocumentFileSelection);
+pdfPrevPageButton.addEventListener("click", goToPreviousPdfPage);
+pdfNextPageButton.addEventListener("click", goToNextPdfPage);
+if (exportAnnotatedPdfButton) {
+  exportAnnotatedPdfButton.addEventListener("click", () => {
+    exportAnnotatedPdf();
+  });
+}
+removeDocumentButton.addEventListener("click", () => {
+  unloadPdfDocument(true);
+});
+
+documentInput.addEventListener("change", handleDocumentInputChange);
+openBoardColorPopupButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setBoardColorPopupOpen(!isBoardColorPopupOpen());
+});
+
+documentPopup.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+});
+
+documentPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+boardColorPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+toolbarDragHandle.addEventListener("pointerdown", startToolbarDrag);
+toolbarDragHandle.addEventListener("pointermove", moveToolbarDrag);
+toolbarDragHandle.addEventListener("pointerup", endToolbarDrag);
+toolbarDragHandle.addEventListener("pointercancel", endToolbarDrag);
+
+eraserToolPopup.addEventListener("pointerdown", (event) => {
+  event.stopPropagation();
+});
+
+eraserToolPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+presetHelpButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setPresetHelpOpen(!isPresetHelpOpen());
+});
+
+presetHelpPopup.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+penColorInput.addEventListener("input", () => {
+  applyPenColor(penColorInput.value, true);
+});
+
+lineWidthInput.addEventListener("input", () => {
+  if (lineWidthInput.value === "") {
+    return;
+  }
+  applyPenWidth(lineWidthInput.value, true);
+});
+
+lineWidthInput.addEventListener("change", () => {
+  applyPenWidth(lineWidthInput.value, true);
+});
+
+lineWidthInput.addEventListener("blur", () => {
+  applyPenWidth(lineWidthInput.value, true);
+});
+
+lineWidthDecButton.addEventListener("click", () => {
+  stepPenWidth(-1);
+});
+
+lineWidthIncButton.addEventListener("click", () => {
+  stepPenWidth(1);
+});
+
+eraserWidthInput.addEventListener("input", () => {
+  if (eraserWidthInput.value === "") {
+    return;
+  }
+  applyEraserWidth(eraserWidthInput.value, true);
+});
+
+eraserWidthInput.addEventListener("change", () => {
+  applyEraserWidth(eraserWidthInput.value, true);
+});
+
+eraserWidthInput.addEventListener("blur", () => {
+  applyEraserWidth(eraserWidthInput.value, true);
+});
+
+eraserWidthDecButton.addEventListener("click", () => {
+  stepEraserWidth(-1);
+});
+
+eraserWidthIncButton.addEventListener("click", () => {
+  stepEraserWidth(1);
+});
+
+boardColorInput.addEventListener("input", (event) => {
+  applyBoardColor(event.target.value, true);
+});
+
+canvas.addEventListener("pointerdown", handlePointerDown);
+canvas.addEventListener("pointermove", handlePointerMove);
+canvas.addEventListener("pointerup", handlePointerEnd);
+canvas.addEventListener("pointercancel", handlePointerEnd);
+canvas.addEventListener("pointerleave", (event) => {
+  if (drawing && !canvas.hasPointerCapture(event.pointerId)) {
+    stopDrawing(event);
+  }
+  if (strokeEraserActive && !canvas.hasPointerCapture(event.pointerId)) {
+    stopStrokeErasing(event);
+  }
+});
+document.addEventListener("mousemove", (event) => {
+  syncOverlayMouseBypassWithPointerEvent(event);
+}, { passive: true });
+
+window.addEventListener("resize", () => {
+  handleViewportResize();
+  syncFullscreenUiFromNativeWindow();
+});
+window.addEventListener("focus", () => {
+  syncFullscreenUiFromNativeWindow();
+});
+document.addEventListener("fullscreenchange", () => {
+  updateFullscreenButtons();
+  handleViewportResize();
+});
+document.addEventListener("webkitfullscreenchange", () => {
+  updateFullscreenButtons();
+  handleViewportResize();
+});
+document.addEventListener("MSFullscreenChange", () => {
+  updateFullscreenButtons();
+  handleViewportResize();
+});
+document.addEventListener("pointerdown", (event) => {
+  syncOverlayMouseBypassWithPointerEvent(event);
+  if (isDocumentPopupOpen() && !documentEditor.contains(event.target)) {
+    closeDocumentPopup();
+  }
+  if (isBoardColorPopupOpen() && !boardColorEditor.contains(event.target)) {
+    closeBoardColorPopup();
+  }
+  if (isEraserToolPopupOpen() && !eraserToolEditor.contains(event.target)) {
+    closeEraserToolPopup();
+  }
+  if (isPresetHelpOpen() && !presetHelp.contains(event.target)) {
+    closePresetHelp();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  const editableTarget = isEditableEventTarget(event.target);
+  const hasMeta = event.ctrlKey || event.metaKey;
+
+  if (!editableTarget && hasMeta && !event.altKey && !event.repeat) {
+    const key = String(event.key || "").toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redoStrokeAction();
+      } else {
+        undoStrokeAction();
+      }
+      return;
+    }
+
+    if (key === "y") {
+      event.preventDefault();
+      redoStrokeAction();
+      return;
+    }
+  }
+
+  if (!editableTarget && event.key === "F8" && isOverlayModeSupported()) {
+    event.preventDefault();
+    toggleOverlayMode();
+    return;
+  }
+
+  if (!editableTarget && event.key === "F7" && isOverlayMouseModeSupported()) {
+    event.preventDefault();
+    toggleOverlayMouseMode();
+    return;
+  }
+
+  if (!editableTarget && hasLoadedPdfDocument()) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      goToPreviousPdfPage();
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      goToNextPdfPage();
+      return;
+    }
+  }
+
+  if (event.key === "Escape") {
+    if (isDocumentPopupOpen()) {
+      closeDocumentPopup();
+    }
+    if (isBoardColorPopupOpen()) {
+      closeBoardColorPopup();
+    }
+    if (isEraserToolPopupOpen()) {
+      closeEraserToolPopup();
+    }
+    if (isPresetHelpOpen()) {
+      closePresetHelp();
+    }
+  }
+});
+
+setupRuntimeErrorLogging();
+void primeRuntimeLogPath();
+void installOverlayWindowClosedListener();
+queueRuntimeLog("runtime.start", {
+  runtimePlatform,
+  protocol: String((window.location && window.location.protocol) || ""),
+  tauriDetected: Boolean(window.__TAURI__),
+  buildTag: RUNTIME_BUILD_TAG
+});
+
+initToolbarLayout();
+setCanvasSize();
+initPresets();
+initLastUsedSettings();
+app.dataset.runtimePlatform = runtimePlatform;
+closeDocumentPopup();
+closeBoardColorPopup();
+closeEraserToolPopup();
+closePresetHelp();
+setDocumentStatus("No document");
+updatePdfNavigationUI();
+updateFullscreenButtons();
+syncFullscreenUiFromNativeWindow();
+updateToolUI();
+updateUndoRedoUI();
+updateOverlayModeButton();
+bootstrapRuntimeBridgeSync();
+if (isLikelyTauriProtocol() && !isDesktopAppRuntime()) {
+  setDocumentStatus("Desktop bridge not detected. Running in compatibility mode.", "warning");
+}
+queueRuntimeLog("runtime.ui.ready", {
+  desktopRuntime: isDesktopAppRuntime(),
+  overlaySupported: isOverlayModeSupported()
+});
+restoreSessionState();
+
+if (isDedicatedOverlayWindow()) {
+  window.setTimeout(() => {
+    if (!overlayMode && !overlayTransitionInProgress && isOverlayModeSupported()) {
+      void enterOverlayMode();
+    }
+  }, 40);
+}
+
+window.addEventListener("beforeunload", () => {
+  if (isDedicatedOverlayWindow()) {
+    void emitTauriRuntimeEvent(OVERLAY_WINDOW_CLOSED_EVENT, {
+      source: OVERLAY_WINDOW_LABEL,
+      reason: "beforeunload"
+    });
+  }
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") {
+    return;
+  }
+
+  if (sessionAutosaveTimer !== null) {
+    window.clearTimeout(sessionAutosaveTimer);
+    sessionAutosaveTimer = null;
+  }
+  persistSessionState();
+});
+
