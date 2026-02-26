@@ -1269,8 +1269,7 @@ function isOverlayModeSupported() {
 }
 
 function isOverlayMouseModeSupported() {
-  // Mouse pass-through mode depends on native click-through support.
-  return isOverlayModeSupported() && overlayMode && runtimePlatform === "windows";
+  return isOverlayModeSupported() && overlayMode && isDesktopAppRuntime();
 }
 
 function updateOverlayMouseModeButton() {
@@ -1371,14 +1370,42 @@ async function setOverlayNativeIgnoreState(nextIgnore) {
     return true;
   }
 
-  overlayMouseForwardOptionAvailable = false;
-  const fallbackResult = await setDesktopWindowClickThrough(desiredIgnore);
-  if (!fallbackResult) {
-    return false;
+  if (runtimePlatform === "windows") {
+    overlayMouseForwardOptionAvailable = false;
+    const fallbackResult = await setDesktopWindowClickThrough(desiredIgnore);
+    if (!fallbackResult) {
+      return false;
+    }
+
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
   }
 
-  overlayMouseNativeIgnoreState = desiredIgnore;
-  return true;
+  const withForwardResult = await callWindowMethod(
+    appWindowRef,
+    "setIgnoreCursorEvents",
+    desiredIgnore,
+    { forward: true }
+  );
+  if (withForwardResult !== null) {
+    overlayMouseForwardOptionAvailable = true;
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
+  }
+
+  const withoutForwardResult = await callWindowMethod(
+    appWindowRef,
+    "setIgnoreCursorEvents",
+    desiredIgnore
+  );
+  if (withoutForwardResult !== null) {
+    overlayMouseForwardOptionAvailable = false;
+    queueRuntimeLog("overlay.mousemode.forward-unavailable", null);
+    overlayMouseNativeIgnoreState = desiredIgnore;
+    return true;
+  }
+
+  return false;
 }
 
 function queueOverlayNativeIgnoreState(nextIgnore) {
