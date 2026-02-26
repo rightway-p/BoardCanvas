@@ -96,19 +96,26 @@ jobs:
 
       - name: Locate build outputs
         run: |
-          find . -type f \( -name "BoardCanvas" -o -name "boardcanvas" \) -print
+          set -e
+          mkdir -p artifacts/linux
+          mapfile -t candidates < <(
+            find src-tauri/target target -type f 2>/dev/null | grep -E '(/|^)(BoardCanvas|boardcanvas|.*\.AppImage|.*\.deb|.*\.rpm)$' | grep -Ev '/deps/' || true
+          )
+
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "No Linux build outputs found."
+            exit 1
+          fi
+
+          echo "Linux build outputs:"
+          for file in "${candidates[@]}"; do
+            echo " - $file"
+            cp "$file" artifacts/linux/
+          done
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: boardcanvas-linux
-          path: |
-            src-tauri/target/release/BoardCanvas
-            src-tauri/target/release/boardcanvas
-            src-tauri/target/*/release/BoardCanvas
-            src-tauri/target/*/release/boardcanvas
-            target/release/BoardCanvas
-            target/release/boardcanvas
-            target/*/release/BoardCanvas
-            target/*/release/boardcanvas
+          path: artifacts/linux/**
           if-no-files-found: error
