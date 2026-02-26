@@ -932,16 +932,16 @@ body.overlay-mode,
 .app.overlay-mode .board-wrapper,
 .app.overlay-mode #boardBackground,
 .app.overlay-mode #board {
-  background: transparent !important;
+  background: var(--overlay-surface-color, transparent) !important;
 }
 
 .app.overlay-mode {
-  background-color: transparent !important;
+  background-color: var(--overlay-surface-color, transparent) !important;
   background-image: none !important;
 }
 
 .app.overlay-mode .board-wrapper {
-  background-color: transparent !important;
+  background-color: var(--overlay-surface-color, transparent) !important;
   background-image: none !important;
 }
 

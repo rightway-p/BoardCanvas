@@ -10,6 +10,10 @@
     "dev": "tauri dev",
     "build": "tauri build"
   },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "3.11.174"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^1.6.0"
   }

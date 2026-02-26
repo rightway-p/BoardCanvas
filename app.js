@@ -83,7 +83,7 @@ const SESSION_AUTOSAVE_DELAY_MS = 500;
 const SESSION_DB_NAME = "boardcanvas.session.db";
 const SESSION_DB_STORE = "session-files";
 const SESSION_DB_PDF_KEY = "last-pdf";
-const PDF_WORKER_SRC = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const PDF_WORKER_SRC = "./vendor/pdf.worker.min.js";
 
 const QUALITY_PRESETS = {
   normal: {
@@ -181,15 +181,20 @@ let overlayMouseForwardOptionAvailable = null;
 const runtimePlatform = detectRuntimePlatform();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
-const OVERLAY_MOUSE_HIT_PADDING_PX = 64;
-const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 420;
-const OVERLAY_MOUSE_RECOVERY_HOLD_MS = 900;
-const RUNTIME_BUILD_TAG = "overlay-host-mouselane-2";
+const OVERLAY_MOUSE_HIT_PADDING_PX = 32;
+const OVERLAY_MOUSE_RECOVERY_ZONE_PX = 96;
+const OVERLAY_MOUSE_RECOVERY_HOLD_MS = 180;
+const OVERLAY_HIDE_HOST_WITH_TOOLBAR_FALLBACK = false;
+const RUNTIME_BUILD_TAG = "overlay-monitor-mouse-fallback-3";
+const OVERLAY_WINDOW_LABEL = "overlay-canvas-window";
+const OVERLAY_WINDOW_QUERY_KEY = "overlayWindow";
+const OVERLAY_WINDOW_CLOSED_EVENT = "overlay-window-closed";
 const MAX_RUNTIME_LOG_VALUE_LENGTH = 220;
 const missingNativeWindowMethods = new Set();
 let runtimeLogPathCache = "";
 let runtimeLogPathRequested = false;
 let runtimeLogQueue = Promise.resolve();
+let overlayWindowListenerUnsubscribe = null;
 
 function trimRuntimeLogValue(value, limit = MAX_RUNTIME_LOG_VALUE_LENGTH) {
   const text = String(value ?? "");
@@ -345,6 +350,30 @@ async function setDesktopOverlaySurface(enabled) {
     enabled: Boolean(enabled)
   });
   return true;
+}
+
+async function setDesktopWindowClickThrough(enabled) {
+  const result = await invokeDesktopCommand("set_window_click_through", {
+    enabled: Boolean(enabled)
+  }, {
+    logError: true
+  });
+
+  if (!result || typeof result !== "object") {
+    queueRuntimeLog("overlay.clickthrough.unavailable", {
+      enabled: Boolean(enabled),
+      result: result ?? null
+    });
+    return false;
+  }
+
+  const expected = Boolean(enabled);
+  const applied = Boolean(result.has_transparent);
+  queueRuntimeLog("overlay.clickthrough.applied", {
+    enabled: expected,
+    hasTransparent: applied
+  });
+  return applied === expected;
 }
 
 function queueRuntimeLog(message, details = null) {
@@ -610,31 +639,6 @@ async function requestNativeOverlayLike(appWindowRef) {
     nativeFullscreenActive,
     nativeWindowMaximized
   });
-  await callWindowMethod(appWindowRef, "setFullscreen", false);
-  await callWindowMethod(appWindowRef, "unmaximize");
-
-  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
-  await refreshNativeFullscreenState();
-  if (nativeFullscreenActive || nativeWindowMaximized) {
-    queueRuntimeLog("overlay.native.enter.success", {
-      step: "maximize-state",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-
-  if (maximizeResult !== null) {
-    nativeFullscreenActive = false;
-    nativeWindowMaximized = true;
-    queueRuntimeLog("overlay.native.enter.success", {
-      step: "maximize-result",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-
   const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
   await refreshNativeFullscreenState();
   if (nativeWindowMaximized || nativeFullscreenActive) {
@@ -651,6 +655,30 @@ async function requestNativeOverlayLike(appWindowRef) {
     nativeWindowMaximized = false;
     queueRuntimeLog("overlay.native.enter.success", {
       step: "setFullscreen-result",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  await callWindowMethod(appWindowRef, "setFullscreen", false);
+  await callWindowMethod(appWindowRef, "unmaximize");
+  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
+  await refreshNativeFullscreenState();
+  if (nativeFullscreenActive || nativeWindowMaximized) {
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-state",
+      nativeFullscreenActive,
+      nativeWindowMaximized
+    });
+    return true;
+  }
+
+  if (maximizeResult !== null) {
+    nativeFullscreenActive = false;
+    nativeWindowMaximized = true;
+    queueRuntimeLog("overlay.native.enter.success", {
+      step: "maximize-result",
       nativeFullscreenActive,
       nativeWindowMaximized
     });
@@ -903,14 +931,187 @@ async function callWindowMethod(targetWindow, methodName, ...args) {
   }
 }
 
+function getTauriEventApi() {
+  if (!window.__TAURI__ || !window.__TAURI__.event) {
+    return null;
+  }
+
+  return window.__TAURI__.event;
+}
+
+function isDedicatedOverlayWindow() {
+  try {
+    const params = new URLSearchParams(String((window.location && window.location.search) || ""));
+    return params.get(OVERLAY_WINDOW_QUERY_KEY) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+async function emitTauriRuntimeEvent(eventName, payload = {}) {
+  const eventApi = getTauriEventApi();
+  if (!eventApi || typeof eventApi.emit !== "function") {
+    return false;
+  }
+
+  try {
+    await eventApi.emit(eventName, payload);
+    return true;
+  } catch (error) {
+    queueRuntimeLog("event.emit.error", {
+      eventName,
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  }
+}
+
+async function installOverlayWindowClosedListener() {
+  if (overlayWindowListenerUnsubscribe !== null) {
+    return;
+  }
+
+  const eventApi = getTauriEventApi();
+  if (!eventApi || typeof eventApi.listen !== "function") {
+    return;
+  }
+
+  try {
+    overlayWindowListenerUnsubscribe = await eventApi.listen(OVERLAY_WINDOW_CLOSED_EVENT, async () => {
+      if (isDedicatedOverlayWindow()) {
+        return;
+      }
+
+      const appWindowRef = getTauriAppWindow();
+      if (!appWindowRef) {
+        return;
+      }
+
+      await callWindowMethod(appWindowRef, "show");
+      await callWindowMethod(appWindowRef, "setFocus");
+      updateOverlayModeButton();
+    });
+  } catch (error) {
+    queueRuntimeLog("event.listen.error", {
+      eventName: OVERLAY_WINDOW_CLOSED_EVENT,
+      error: toRuntimeLogError(error)
+    });
+  }
+}
+
+async function openDedicatedOverlayWindow() {
+  if (isDedicatedOverlayWindow()) {
+    return false;
+  }
+
+  const tauriWindowApi = getTauriWindowApi();
+  const appWindowRef = getTauriAppWindow();
+  if (!tauriWindowApi || !appWindowRef || typeof tauriWindowApi.WebviewWindow !== "function") {
+    return false;
+  }
+
+  try {
+    if (typeof tauriWindowApi.WebviewWindow.getByLabel === "function") {
+      const existing = tauriWindowApi.WebviewWindow.getByLabel(OVERLAY_WINDOW_LABEL);
+      if (existing) {
+        await callWindowMethod(existing, "setFocus");
+        await callWindowMethod(appWindowRef, "hide");
+        return true;
+      }
+    }
+
+    const [monitorInfo, outerPosition, outerSize] = await Promise.all([
+      callWindowMethod(appWindowRef, "currentMonitor"),
+      callWindowMethod(appWindowRef, "outerPosition"),
+      callWindowMethod(appWindowRef, "outerSize")
+    ]);
+
+    const monitorX = Number(monitorInfo?.position?.x);
+    const monitorY = Number(monitorInfo?.position?.y);
+    const monitorWidth = Number(monitorInfo?.size?.width);
+    const monitorHeight = Number(monitorInfo?.size?.height);
+
+    const fallbackX = Number(outerPosition?.x);
+    const fallbackY = Number(outerPosition?.y);
+    const fallbackWidth = Number(outerSize?.width);
+    const fallbackHeight = Number(outerSize?.height);
+
+    const launchX = Number.isFinite(monitorX) ? Math.round(monitorX) : (Number.isFinite(fallbackX) ? Math.round(fallbackX) : 0);
+    const launchY = Number.isFinite(monitorY) ? Math.round(monitorY) : (Number.isFinite(fallbackY) ? Math.round(fallbackY) : 0);
+    const launchWidth = Number.isFinite(monitorWidth) && monitorWidth > 100
+      ? Math.round(monitorWidth)
+      : (Number.isFinite(fallbackWidth) && fallbackWidth > 100 ? Math.round(fallbackWidth) : 1280);
+    const launchHeight = Number.isFinite(monitorHeight) && monitorHeight > 100
+      ? Math.round(monitorHeight)
+      : (Number.isFinite(fallbackHeight) && fallbackHeight > 100 ? Math.round(fallbackHeight) : 720);
+
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set(OVERLAY_WINDOW_QUERY_KEY, "1");
+    const overlayWindow = new tauriWindowApi.WebviewWindow(OVERLAY_WINDOW_LABEL, {
+      url: nextUrl.toString(),
+      x: launchX,
+      y: launchY,
+      width: launchWidth,
+      height: launchHeight,
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      fullscreen: false,
+      resizable: false,
+      focus: true,
+      skipTaskbar: true
+    });
+    queueRuntimeLog("overlay.window.create.bounds", {
+      x: launchX,
+      y: launchY,
+      width: launchWidth,
+      height: launchHeight,
+      monitorDetected: Boolean(Number.isFinite(monitorX) && Number.isFinite(monitorY))
+    });
+
+    if (overlayWindow && typeof overlayWindow.once === "function") {
+      overlayWindow.once("tauri://created", async () => {
+        const logicalSize = (typeof tauriWindowApi.LogicalSize === "function")
+          ? new tauriWindowApi.LogicalSize(launchWidth, launchHeight)
+          : null;
+        const logicalPosition = (typeof tauriWindowApi.LogicalPosition === "function")
+          ? new tauriWindowApi.LogicalPosition(launchX, launchY)
+          : null;
+        if (logicalSize) {
+          await callWindowMethod(overlayWindow, "setSize", logicalSize);
+        }
+        if (logicalPosition) {
+          await callWindowMethod(overlayWindow, "setPosition", logicalPosition);
+        }
+        await callWindowMethod(overlayWindow, "setAlwaysOnTop", true);
+        await callWindowMethod(appWindowRef, "hide");
+      });
+      overlayWindow.once("tauri://error", (error) => {
+        queueRuntimeLog("overlay.window.create.error", {
+          error: toRuntimeLogError(error)
+        });
+      });
+    } else {
+      await callWindowMethod(appWindowRef, "hide");
+    }
+    return true;
+  } catch (error) {
+    queueRuntimeLog("overlay.window.create.exception", {
+      error: toRuntimeLogError(error)
+    });
+    return false;
+  }
+}
+
 async function captureOverlayWindowSnapshot(appWindowRef) {
-  const [position, size, decorated, alwaysOnTop, fullscreen, maximized] = await Promise.all([
+  const [position, size, decorated, alwaysOnTop, fullscreen, maximized, resizable] = await Promise.all([
     callWindowMethod(appWindowRef, "outerPosition"),
     callWindowMethod(appWindowRef, "outerSize"),
     callWindowMethod(appWindowRef, "isDecorated"),
     callWindowMethod(appWindowRef, "isAlwaysOnTop"),
     callWindowMethod(appWindowRef, "isFullscreen"),
-    callWindowMethod(appWindowRef, "isMaximized")
+    callWindowMethod(appWindowRef, "isMaximized"),
+    callWindowMethod(appWindowRef, "isResizable")
   ]);
 
   return {
@@ -923,7 +1124,8 @@ async function captureOverlayWindowSnapshot(appWindowRef) {
     decorated: typeof decorated === "boolean" ? decorated : null,
     alwaysOnTop: typeof alwaysOnTop === "boolean" ? alwaysOnTop : null,
     fullscreen: typeof fullscreen === "boolean" ? fullscreen : null,
-    maximized: typeof maximized === "boolean" ? maximized : null
+    maximized: typeof maximized === "boolean" ? maximized : null,
+    resizable: typeof resizable === "boolean" ? resizable : null
   };
 }
 
@@ -953,6 +1155,11 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
   } else {
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", false);
   }
+  if (typeof snapshot.resizable === "boolean") {
+    await callWindowMethod(appWindowRef, "setResizable", snapshot.resizable);
+  } else {
+    await callWindowMethod(appWindowRef, "setResizable", true);
+  }
 
   if (snapshot.maximized === true) {
     await callWindowMethod(appWindowRef, "maximize");
@@ -979,6 +1186,46 @@ async function restoreOverlayWindowSnapshot(appWindowRef, snapshot) {
     nativeFullscreenActive,
     nativeWindowMaximized
   });
+}
+
+async function hideOverlayHostWindowBehindToolbar(appWindowRef) {
+  if (!OVERLAY_HIDE_HOST_WITH_TOOLBAR_FALLBACK || !appWindowRef || !toolbar) {
+    return false;
+  }
+
+  const tauriWindowApi = getTauriWindowApi();
+  if (!tauriWindowApi
+    || typeof tauriWindowApi.LogicalSize !== "function"
+    || typeof tauriWindowApi.LogicalPosition !== "function") {
+    return false;
+  }
+
+  const rect = toolbar.getBoundingClientRect();
+  if (!Number.isFinite(rect.left)
+    || !Number.isFinite(rect.top)
+    || !Number.isFinite(rect.width)
+    || !Number.isFinite(rect.height)) {
+    return false;
+  }
+
+  const padding = 6;
+  const nextWidth = Math.max(220, Math.round(rect.width + (padding * 2)));
+  const nextHeight = Math.max(48, Math.round(rect.height + (padding * 2)));
+  const nextX = Math.max(0, Math.round(rect.left - padding));
+  const nextY = Math.max(0, Math.round(rect.top - padding));
+
+  const nextSize = new tauriWindowApi.LogicalSize(nextWidth, nextHeight);
+  const nextPosition = new tauriWindowApi.LogicalPosition(nextX, nextY);
+  await callWindowMethod(appWindowRef, "setSize", nextSize);
+  await callWindowMethod(appWindowRef, "setPosition", nextPosition);
+
+  queueRuntimeLog("overlay.host-window.toolbar-shield.applied", {
+    x: nextX,
+    y: nextY,
+    width: nextWidth,
+    height: nextHeight
+  });
+  return true;
 }
 
 function isOverlayModeSupported() {
@@ -1087,32 +1334,13 @@ async function setOverlayNativeIgnoreState(nextIgnore) {
     return true;
   }
 
-  if (!desiredIgnore) {
-    const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", false);
-    if (result === null) {
-      return false;
-    }
-    overlayMouseNativeIgnoreState = false;
-    return true;
-  }
-
-  if (overlayMouseForwardOptionAvailable !== false) {
-    const forwardResult = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true, { forward: true });
-    if (forwardResult !== null) {
-      overlayMouseForwardOptionAvailable = true;
-      overlayMouseNativeIgnoreState = true;
-      return true;
-    }
-
-    overlayMouseForwardOptionAvailable = false;
-    queueRuntimeLog("overlay.mousemode.forward-unavailable");
-  }
-
-  const result = await callWindowMethod(appWindowRef, "setIgnoreCursorEvents", true);
-  if (result === null) {
+  overlayMouseForwardOptionAvailable = false;
+  const fallbackResult = await setDesktopWindowClickThrough(desiredIgnore);
+  if (!fallbackResult) {
     return false;
   }
-  overlayMouseNativeIgnoreState = true;
+
+  overlayMouseNativeIgnoreState = desiredIgnore;
   return true;
 }
 
@@ -1181,6 +1409,50 @@ async function readWindowCursorPositionCss() {
   };
 }
 
+async function readWindowCursorPositionWithFallback() {
+  const directPoint = await readWindowCursorPositionCss();
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || Number(document.documentElement.clientWidth) || 1);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || Number(document.documentElement.clientHeight) || 1);
+  const tolerance = 240;
+
+  if (directPoint
+    && Number.isFinite(directPoint.x)
+    && Number.isFinite(directPoint.y)
+    && directPoint.x >= -tolerance
+    && directPoint.y >= -tolerance
+    && directPoint.x <= (viewportWidth + tolerance)
+    && directPoint.y <= (viewportHeight + tolerance)) {
+    return directPoint;
+  }
+
+  const [globalPoint, windowRect] = await Promise.all([
+    readGlobalCursorPosition(),
+    invokeDesktopCommand("get_window_rect")
+  ]);
+  if (!globalPoint
+    || !windowRect
+    || !Number.isFinite(windowRect.left)
+    || !Number.isFinite(windowRect.top)) {
+    return directPoint;
+  }
+
+  const fallbackPoint = {
+    x: Number(globalPoint.x) - Number(windowRect.left),
+    y: Number(globalPoint.y) - Number(windowRect.top),
+    rawX: Number(globalPoint.x),
+    rawY: Number(globalPoint.y),
+    scaleFactor: Number(window.devicePixelRatio) || 1
+  };
+
+  queueRuntimeLog("overlay.mousemode.cursor-fallback", {
+    x: Math.round(fallbackPoint.x),
+    y: Math.round(fallbackPoint.y),
+    rawX: Math.round(fallbackPoint.rawX),
+    rawY: Math.round(fallbackPoint.rawY)
+  });
+  return fallbackPoint;
+}
+
 function isToolbarHitByCursorPosition(cursorPosition) {
   if (!cursorPosition) {
     return false;
@@ -1238,7 +1510,7 @@ async function pollOverlayMouseTracker() {
   overlayMousePollInFlight = true;
 
   try {
-    const cursorPosition = await readWindowCursorPositionCss();
+    const cursorPosition = await readWindowCursorPositionWithFallback();
 
     if (!cursorPosition) {
       overlayMousePollFailureCount += 1;
@@ -1494,7 +1766,7 @@ function updateOverlayModeButton() {
   updateOverlayMouseModeButton();
 }
 
-function applyOverlayModeUI(active) {
+async function applyOverlayModeUI(active) {
   const nextActive = Boolean(active);
   if (nextActive) {
     boardColorBeforeOverlay = normalizeHexColor(boardColorInput.value) || boardColorBeforeOverlay || "#ffffff";
@@ -1560,8 +1832,14 @@ function applyOverlayModeUI(active) {
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
-      void setDesktopOverlaySurface(true);
-      void setDesktopWebviewBackgroundAlpha(0);
+      await waitShortDelay(16);
+      const surfaceApplied = await setDesktopOverlaySurface(true);
+      const alphaApplied = await setDesktopWebviewBackgroundAlpha(0);
+      if (!surfaceApplied || !alphaApplied) {
+        await waitShortDelay(80);
+        await setDesktopOverlaySurface(true);
+        await setDesktopWebviewBackgroundAlpha(0);
+      }
     }
   } else if (overlaySurfaceStyleSnapshot) {
     document.documentElement.style.background = overlaySurfaceStyleSnapshot.htmlBackground;
@@ -1588,8 +1866,9 @@ function applyOverlayModeUI(active) {
 
     const appWindowRef = getTauriAppWindow();
     if (appWindowRef) {
-      void setDesktopWebviewBackgroundAlpha(255);
-      void setDesktopOverlaySurface(false);
+      await waitShortDelay(16);
+      await setDesktopWebviewBackgroundAlpha(255);
+      await setDesktopOverlaySurface(false);
     }
   }
   app.classList.toggle("overlay-mode", overlayMode);
@@ -1646,11 +1925,21 @@ async function enterOverlayMode() {
 
     if (!appWindowRef) {
       await enterFullscreen();
-      applyOverlayModeUI(true);
+      await applyOverlayModeUI(true);
       updateFullscreenButtons();
       setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
       queueRuntimeLog("overlay.enter.browser-fallback");
       return;
+    }
+
+    if (!isDedicatedOverlayWindow()) {
+      const dedicatedOpened = await openDedicatedOverlayWindow();
+      if (dedicatedOpened) {
+        queueRuntimeLog("overlay.window.opened", {
+          label: OVERLAY_WINDOW_LABEL
+        });
+        return;
+      }
     }
 
     overlayWindowSnapshot = await captureOverlayWindowSnapshot(appWindowRef);
@@ -1659,6 +1948,7 @@ async function enterOverlayMode() {
     });
     await callWindowMethod(appWindowRef, "setDecorations", false);
     await callWindowMethod(appWindowRef, "setAlwaysOnTop", true);
+    await callWindowMethod(appWindowRef, "setResizable", false);
     const entered = await requestNativeOverlayLike(appWindowRef);
     await callWindowMethod(appWindowRef, "setFocus");
     if (!entered) {
@@ -1670,10 +1960,11 @@ async function enterOverlayMode() {
       });
       await restoreOverlayWindowSnapshot(appWindowRef, overlayWindowSnapshot);
       overlayWindowSnapshot = null;
-      applyOverlayModeUI(false);
+      await applyOverlayModeUI(false);
       return;
     }
-    applyOverlayModeUI(true);
+    await applyOverlayModeUI(true);
+    window.dispatchEvent(new Event("resize"));
     updateFullscreenButtons();
     setDocumentStatus("Overlay mode enabled. Press F8 to return.", "success");
     queueRuntimeLog("overlay.enter.success", {
@@ -1712,6 +2003,20 @@ async function exitOverlayMode() {
 
   try {
     const appWindowRef = getTauriAppWindow();
+    if (isDedicatedOverlayWindow() && appWindowRef) {
+      if (overlayMousePassthrough) {
+        await setOverlayMousePassthrough(false, {
+          announce: false,
+          restoreFocus: false
+        });
+      }
+      await emitTauriRuntimeEvent(OVERLAY_WINDOW_CLOSED_EVENT, {
+        source: OVERLAY_WINDOW_LABEL
+      });
+      await callWindowMethod(appWindowRef, "close");
+      return;
+    }
+
     if (appWindowRef) {
       if (overlayMousePassthrough) {
         await setOverlayMousePassthrough(false, {
@@ -1725,7 +2030,7 @@ async function exitOverlayMode() {
       await exitFullscreen();
     }
 
-    applyOverlayModeUI(false);
+    await applyOverlayModeUI(false);
     updateFullscreenButtons();
     setDocumentStatus("Board mode enabled.", "success");
     queueRuntimeLog("overlay.exit.success", {
@@ -3569,14 +3874,17 @@ function stopStrokeErasing(event) {
 }
 
 function updateToolUI() {
-  penToolButton.classList.toggle("is-active", tool === "pen");
+  const mouseModeActive = overlayMousePassthrough;
+  penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen");
   const eraserSelected = tool === "eraser" || tool === "strokeEraser";
-  eraserToolButton.classList.toggle("is-active", eraserSelected);
+  eraserToolButton.classList.toggle("is-active", !mouseModeActive && eraserSelected);
   pixelEraserModeButton.classList.toggle("is-active", eraserMode === "eraser");
   strokeEraserModeButton.classList.toggle("is-active", eraserMode === "strokeEraser");
-  const modeText = tool === "pen"
-    ? "Pen"
-    : (tool === "eraser" ? "Eraser" : "StrokeEraser");
+  const modeText = mouseModeActive
+    ? "Mouse"
+    : (tool === "pen"
+      ? "Pen"
+      : (tool === "eraser" ? "Eraser" : "StrokeEraser"));
   modeLabel.textContent = `Mode: ${modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
   if (overlayMousePassthrough) {
     canvas.style.cursor = "default";
@@ -4375,6 +4683,10 @@ function stopDrawing(event) {
 }
 
 function handlePointerDown(event) {
+  if (overlayMousePassthrough) {
+    return;
+  }
+
   if (tool === "strokeEraser") {
     startStrokeErasing(event);
     return;
@@ -4425,14 +4737,26 @@ function setBoardColor(color) {
   backgroundCanvas.style.backgroundColor = normalized || color || "transparent";
 }
 
-penToolButton.addEventListener("click", () => {
+penToolButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
   tool = "pen";
   closeEraserToolPopup();
   updateToolUI();
 });
 
-eraserToolButton.addEventListener("click", (event) => {
+eraserToolButton.addEventListener("click", async (event) => {
   event.stopPropagation();
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
   if (tool === "eraser" || tool === "strokeEraser") {
     setEraserToolPopupOpen(!isEraserToolPopupOpen());
     return;
@@ -4443,14 +4767,26 @@ eraserToolButton.addEventListener("click", (event) => {
   updateToolUI();
 });
 
-pixelEraserModeButton.addEventListener("click", () => {
+pixelEraserModeButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
   applyEraserMode("eraser", true);
   tool = eraserMode;
   closeEraserToolPopup();
   updateToolUI();
 });
 
-strokeEraserModeButton.addEventListener("click", () => {
+strokeEraserModeButton.addEventListener("click", async () => {
+  if (overlayMousePassthrough) {
+    await setOverlayMousePassthrough(false, {
+      announce: false,
+      restoreFocus: true
+    });
+  }
   applyEraserMode("strokeEraser", true);
   tool = eraserMode;
   closeEraserToolPopup();
@@ -4716,6 +5052,7 @@ document.addEventListener("keydown", (event) => {
 
 setupRuntimeErrorLogging();
 void primeRuntimeLogPath();
+void installOverlayWindowClosedListener();
 queueRuntimeLog("runtime.start", {
   runtimePlatform,
   protocol: String((window.location && window.location.protocol) || ""),
@@ -4749,7 +5086,21 @@ queueRuntimeLog("runtime.ui.ready", {
 });
 restoreSessionState();
 
+if (isDedicatedOverlayWindow()) {
+  window.setTimeout(() => {
+    if (!overlayMode && !overlayTransitionInProgress && isOverlayModeSupported()) {
+      void enterOverlayMode();
+    }
+  }, 40);
+}
+
 window.addEventListener("beforeunload", () => {
+  if (isDedicatedOverlayWindow()) {
+    void emitTauriRuntimeEvent(OVERLAY_WINDOW_CLOSED_EVENT, {
+      source: OVERLAY_WINDOW_LABEL,
+      reason: "beforeunload"
+    });
+  }
   if (sessionAutosaveTimer !== null) {
     window.clearTimeout(sessionAutosaveTimer);
     sessionAutosaveTimer = null;
