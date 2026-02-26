@@ -1710,17 +1710,21 @@ async function setOverlayMousePassthrough(active, options = {}) {
 
   try {
     if (nextActive) {
-      const cursorProbe = await readWindowCursorPositionCss();
-      if (!cursorProbe) {
-        stopOverlayMouseTracker();
-        if (announce) {
-          setDocumentStatus("Mouse mode requires desktop cursor tracking support.", "warning");
+      // Cursor tracking command is currently Windows-only.
+      // Linux should still allow mouse mode when native forward is supported.
+      if (runtimePlatform === "windows") {
+        const cursorProbe = await readWindowCursorPositionCss();
+        if (!cursorProbe) {
+          stopOverlayMouseTracker();
+          if (announce) {
+            setDocumentStatus("Mouse mode requires desktop cursor tracking support.", "warning");
+          }
+          queueRuntimeLog("overlay.mousemode.unsupported", {
+            active: nextActive,
+            reason: "cursor-tracking-unavailable"
+          });
+          return false;
         }
-        queueRuntimeLog("overlay.mousemode.unsupported", {
-          active: nextActive,
-          reason: "cursor-tracking-unavailable"
-        });
-        return false;
       }
     }
 
@@ -1738,9 +1742,26 @@ async function setOverlayMousePassthrough(active, options = {}) {
       return false;
     }
 
+    if (nextActive && runtimePlatform !== "windows" && overlayMouseForwardOptionAvailable === false) {
+      stopOverlayMouseTracker();
+      if (announce) {
+        setDocumentStatus("Mouse mode requires pointer forwarding support on Linux.", "warning");
+      }
+      queueRuntimeLog("overlay.mousemode.unsupported", {
+        active: nextActive,
+        reason: "forwarding-unavailable-linux"
+      });
+      void queueOverlayNativeIgnoreState(false);
+      return false;
+    }
+
     applyOverlayMouseModeUI(nextActive);
     if (nextActive) {
-      startOverlayMouseTracker();
+      if (runtimePlatform === "windows") {
+        startOverlayMouseTracker();
+      } else {
+        stopOverlayMouseTracker();
+      }
     } else {
       stopOverlayMouseTracker();
     }
