@@ -25,3 +25,5 @@ windows = "0.39.0"
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
+[patch.crates-io]
+wry = { path = "../vendor/wry-0.24.11" }
