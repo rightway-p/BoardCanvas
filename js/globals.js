@@ -116,7 +116,11 @@ const MAX_QUEUE_POINTS = 320;
 const TOOLBAR_DOCK_THRESHOLD = 48;
 const HISTORY_STACK_LIMIT = 120;
 
-let qualityLevel = detectLowSpecDevice() ? "low" : "normal";
+const cpuCores = Number((window.navigator && window.navigator.hardwareConcurrency) || 0);
+const memoryEstimate = Number((window.navigator && window.navigator.deviceMemory) || 0);
+let qualityLevel = (cpuCores > 0 && cpuCores <= 4) || (memoryEstimate > 0 && memoryEstimate <= 4)
+  ? "low"
+  : "normal";
 let quality = QUALITY_PRESETS[qualityLevel];
 
 let drawing = false;
@@ -189,7 +193,25 @@ let overlaySurfaceStyleSnapshot = null;
 let nativeFullscreenActive = false;
 let nativeWindowMaximized = false;
 let overlayMouseForwardOptionAvailable = null;
-const runtimePlatform = detectRuntimePlatform();
+const runtimePlatform = (() => {
+  const userAgent = String((window.navigator && window.navigator.userAgent) || "").toLowerCase();
+  const platform = String((window.navigator && window.navigator.platform) || "").toLowerCase();
+  const source = `${userAgent} ${platform}`;
+
+  if (source.includes("win")) {
+    return "windows";
+  }
+
+  if (source.includes("mac")) {
+    return "macos";
+  }
+
+  if (source.includes("linux")) {
+    return "linux";
+  }
+
+  return "unknown";
+})();
 const OVERLAY_MOUSE_POLL_INTERVAL_MS = 20;
 const OVERLAY_MOUSE_POLL_MAX_FAILURES = 5;
 const OVERLAY_MOUSE_HIT_PADDING_PX = 32;
@@ -207,4 +229,3 @@ let runtimeLogPathRequested = false;
 let runtimeLogQueue = Promise.resolve();
 let overlayWindowListenerUnsubscribe = null;
 const externalScriptLoadPromises = new Map();
-
