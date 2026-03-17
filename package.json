@@ -8,7 +8,8 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "ical:server": "node scripts/ical-server.js"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",

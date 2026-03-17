@@ -200,6 +200,7 @@ canvas.addEventListener("pointerdown", handlePointerDown);
 canvas.addEventListener("pointermove", handlePointerMove);
 canvas.addEventListener("pointerup", handlePointerEnd);
 canvas.addEventListener("pointercancel", handlePointerEnd);
+
 canvas.addEventListener("pointerleave", (event) => {
   if (drawing && !canvas.hasPointerCapture(event.pointerId)) {
     stopDrawing(event);
@@ -207,6 +208,11 @@ canvas.addEventListener("pointerleave", (event) => {
   if (strokeEraserActive && !canvas.hasPointerCapture(event.pointerId)) {
     stopStrokeErasing(event);
   }
+});
+
+// Prevent default context menu on canvas (block right-click menu)
+canvas.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
 });
 document.addEventListener("mousemove", (event) => {
   syncOverlayMouseBypassWithPointerEvent(event);
