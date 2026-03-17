@@ -2,7 +2,11 @@ const APP_CHUNK_SCRIPTS = [
   "./js/globals.js",
   "./js/runtime-overlay.js",
   "./js/session-pdf-toolbar.js",
-  "./js/presets-strokes.js",
+  "./js/presets-utils.js",
+  "./js/presets-ui.js",
+  "./js/strokes-core.js",
+  "./js/strokes-history.js",
+  "./js/stroke-eraser.js",
   "./js/render-doc-draw.js",
   "./js/events-init.js"
 ];
