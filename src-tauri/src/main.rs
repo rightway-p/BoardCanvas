@@ -5,19 +5,6 @@ mod commands;
 use serde::Serialize;
 
 #[derive(Serialize)]
-struct CursorPosition {
-  x: i32,
-  y: i32,
-}
-
-#[derive(Serialize)]
-struct WindowCursorPosition {
-  x: i32,
-  y: i32,
-  scale_factor: f64,
-}
-
-#[derive(Serialize)]
 struct WindowStyleInfo {
   ex_style: usize,
   has_layered: bool,
@@ -34,75 +21,6 @@ struct WindowRectInfo {
   bottom: i32,
   width: i32,
   height: i32,
-}
-
-#[tauri::command]
-fn get_global_cursor_position() -> Result<CursorPosition, String> {
-  #[cfg(target_os = "windows")]
-  {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-    let mut point = POINT { x: 0, y: 0 };
-    let success = unsafe { GetCursorPos(&mut point) };
-    if success == 0 {
-      return Err("GetCursorPos failed".to_string());
-    }
-
-    return Ok(CursorPosition {
-      x: point.x,
-      y: point.y,
-    });
-  }
-
-  #[cfg(not(target_os = "windows"))]
-  {
-    Err("Global cursor query is only supported on Windows.".to_string())
-  }
-}
-
-#[tauri::command]
-fn get_window_cursor_position(window: tauri::Window) -> Result<WindowCursorPosition, String> {
-  #[cfg(target_os = "windows")]
-  {
-    use windows_sys::Win32::Foundation::{HWND, POINT};
-    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-    let hwnd = window
-      .hwnd()
-      .map_err(|error| format!("window handle unavailable: {error}"))?;
-    let hwnd_sys: HWND = hwnd.0 as HWND;
-
-    let mut point = POINT { x: 0, y: 0 };
-    let success = unsafe { GetCursorPos(&mut point) };
-    if success == 0 {
-      return Err("GetCursorPos failed".to_string());
-    }
-
-    let converted = unsafe { ScreenToClient(hwnd_sys, &mut point) };
-    if converted == 0 {
-      return Err("ScreenToClient failed".to_string());
-    }
-
-    let scale_factor = window
-      .scale_factor()
-      .ok()
-      .filter(|value| value.is_finite() && *value > 0.0)
-      .unwrap_or(1.0);
-
-    return Ok(WindowCursorPosition {
-      x: point.x,
-      y: point.y,
-      scale_factor,
-    });
-  }
-
-  #[cfg(not(target_os = "windows"))]
-  {
-    let _ = window;
-    Err("Window cursor query is only supported on Windows.".to_string())
-  }
 }
 
 #[tauri::command]
@@ -433,8 +351,8 @@ fn main() {
     .invoke_handler(tauri::generate_handler![
       commands::logging::get_runtime_log_path,
       commands::logging::append_runtime_log,
-      get_global_cursor_position,
-      get_window_cursor_position,
+      commands::cursor::get_global_cursor_position,
+      commands::cursor::get_window_cursor_position,
       set_webview_background_alpha,
       set_window_overlay_surface,
       verify_window_styles,
