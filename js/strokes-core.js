@@ -139,13 +139,16 @@ function drawStrokePath(stroke, targetContext = ctx) {
 }
 
 function redrawAllStrokes() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
 
   for (const stroke of strokes) {
     drawStrokePath(stroke);
   }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function scaleStrokeCollection(collection, scaleX, scaleY) {
@@ -186,7 +189,26 @@ function scaleStoredStrokes(scaleX, scaleY) {
   scaleStrokeCollection(strokes, scaleX, scaleY);
   scaleStrokeCollection(boardStrokeSnapshot, scaleX, scaleY);
 
+  if (typeof boardPageSequence !== "undefined") {
+    for (const page of boardPageSequence) {
+      scaleStrokeCollection(page.strokes, scaleX, scaleY);
+      if (page.pdfWorldSize) {
+        page.pdfWorldSize.width *= scaleX;
+        page.pdfWorldSize.height *= scaleY;
+      }
+      if (page.worldSize) {
+        page.worldSize.width *= scaleX;
+        page.worldSize.height *= scaleY;
+      }
+    }
+  }
+
   for (const snapshot of pdfPageStrokeSnapshots.values()) {
     scaleStrokeCollection(snapshot, scaleX, scaleY);
+  }
+  if (typeof strokeHistoryByContext !== "undefined") {
+    for (const entry of strokeHistoryByContext.values()) {
+      for (const snapshot of entry.undo.concat(entry.redo)) scaleStrokeCollection(snapshot, scaleX, scaleY);
+    }
   }
 }

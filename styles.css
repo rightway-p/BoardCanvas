@@ -3,8 +3,8 @@
   --line: #d0d0d0;
   --text: #1e1e1e;
   --accent: #2f6ee4;
-  --toolbar-control-size: 36px;
-  --toolbar-padding-y: 10px;
+  --toolbar-control-size: 32px;
+  --toolbar-padding-y: 8px;
   --toolbar-border-size: 1px;
   --toolbar-action-icon-size: 18px;
   --toolbar-dock-preview-size: 48px;
@@ -77,7 +77,7 @@ body {
   align-content: flex-start;
   gap: 8px;
   padding: 8px 6px;
-  overflow-y: auto;
+  overflow-y: hidden;
   overflow-x: hidden;
 }
 
@@ -91,10 +91,9 @@ body {
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 6px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  gap: 4px;
+  padding: 6px 4px;
+  overflow: visible;
 }
 
 .app.toolbar-placement-right .toolbar {
@@ -107,10 +106,9 @@ body {
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 6px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  gap: 4px;
+  padding: 6px 4px;
+  overflow: visible;
 }
 
 .app.toolbar-placement-left .toolbar > *,
@@ -162,7 +160,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .app.toolbar-placement-left .eraser-tool-editor,
@@ -217,13 +215,14 @@ body {
 .app.toolbar-placement-right .preset-list {
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
 }
 
 .app.toolbar-placement-left .color-preset,
 .app.toolbar-placement-right .color-preset {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
 }
 
 .app.toolbar-placement-left .toolbar > .control > span,
@@ -235,18 +234,27 @@ body {
   display: none;
 }
 
-.app.toolbar-placement-left label.control[for="penColor"] > span,
-.app.toolbar-placement-right label.control[for="penColor"] > span,
 .app.toolbar-placement-left #boardColorEditor > span,
 .app.toolbar-placement-right #boardColorEditor > span {
-  display: block;
-  width: 100%;
-  text-align: center;
-  font-size: 11px;
-  color: #5a5a5a;
-  line-height: 1.1;
-  white-space: nowrap;
+  display: none;
 }
+
+.app.toolbar-placement-left .toolbar,
+.app.toolbar-placement-right .toolbar { --toolbar-control-size: 28px; }
+.app.toolbar-placement-left .toolbar-drag-handle,
+.app.toolbar-placement-right .toolbar-drag-handle,
+.app.toolbar-placement-left .tool-button,
+.app.toolbar-placement-right .tool-button,
+.app.toolbar-placement-left .board-color-trigger,
+.app.toolbar-placement-right .board-color-trigger { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 4px; }
+.app.toolbar-placement-left #presetHelp,
+.app.toolbar-placement-right #presetHelp,
+.app.toolbar-placement-left .mode-label,
+.app.toolbar-placement-right .mode-label,
+.app.toolbar-placement-left .toolbar-pdf-page-indicator,
+.app.toolbar-placement-right .toolbar-pdf-page-indicator { display: none; }
+.app.toolbar-placement-left .board-color-preview,
+.app.toolbar-placement-right .board-color-preview { width: 22px; height: 22px; }
 
 .app.toolbar-is-dragging::after {
   content: "";
@@ -530,6 +538,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 
 .app.toolbar-placement-right .eraser-tool-popover,
@@ -706,6 +716,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 
 .document-popover.is-hidden {
@@ -839,6 +851,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 
 .board-color-popover.is-hidden {
@@ -895,13 +909,53 @@ body {
 }
 
 .board-wrapper {
-  position: relative;
+  position: absolute;
   padding: 0;
   margin: 0;
   min-height: 0;
-  height: 100%;
+  height: auto;
   overflow: hidden;
 }
+.icon-tool-button svg circle { fill: none; stroke: currentColor; stroke-width: 2; }
+
+.current-pen-editor { position: relative; display: inline-flex; align-items: center; }
+.current-pen-popover { position: absolute; top: calc(100% + 8px); left: 0; z-index: 40; min-width: 220px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: white; box-shadow: 0 10px 24px rgba(0,0,0,.16); display: flex; flex-direction: column; gap: 8px; }
+.current-pen-popover.is-hidden { display: none; }
+.app.toolbar-placement-left .current-pen-popover { left: calc(100% + 8px); top: 0; }
+.app.toolbar-placement-right .current-pen-popover { left: auto; right: calc(100% + 8px); top: 0; }
+
+.board-world { position: absolute; inset: 0; transform-origin: 0 0; }
+.board-world > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border: 0; border-radius: 0; }
+.zoom-cue { position: absolute; z-index: 5; transform: translate(-50%, -50%); padding: 8px 12px; border-radius: 18px; background: #202124d9; color: white; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.dev-touch-mark { position: absolute; z-index: 6; min-width: calc(var(--dev-radius, 12px) * 2); min-height: calc(var(--dev-radius, 12px) * 2); border: 2px solid #e53935; border-radius: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; color: #c62828; background: #fff8; font-size: 9px; pointer-events: none; }
+.page-manager, .developer-settings { position: fixed; z-index: 60; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px #0003; padding: 12px; }
+.page-manager header, .developer-settings header, .page-manager footer, .developer-settings footer { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.page-list { display: grid; gap: 6px; margin: 10px 0; }
+.page-entry { text-align: left; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: white; }
+.page-entry.is-active { outline: 2px solid var(--accent); }
+.page-manager button, .developer-settings button { min-height: 32px; cursor: pointer; }
+.pen-preset-editor { position: fixed; z-index: 80; display: grid; gap: 8px; min-width: 190px; padding: 10px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0003; }
+.pen-preset-editor label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pen-preset-editor > div { display: flex; justify-content: flex-end; gap: 6px; }
+.developer-settings label { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 10px 0; }
+.sequence-actions { display: flex; gap: 6px; }
+.sequence-actions .document-action-button { flex: 1; }
+.app-info-popup { position: fixed; z-index: 70; right: 12px; top: 60px; display: grid; gap: 8px; min-width: 150px; padding: 12px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0002; }
+.page-manager.is-hidden, .app-info-popup.is-hidden { display: none !important; }
+.app-info-popup button { border: 0; background: transparent; text-align: left; cursor: pointer; }
+.work-dialog { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #0005; }
+.work-dialog.is-hidden { display: none !important; }
+.work-dialog-card { width: min(420px, calc(100vw - 32px)); padding: 18px; border-radius: 12px; background: white; box-shadow: 0 10px 36px #0003; }
+.work-dialog-card > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.work-dialog-card .export-options { display: grid; gap: 8px; margin: 12px 0; }
+.export-options label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.export-options input { width: 20px; height: 20px; flex: 0 0 auto; }
+.drive-dialog-card { width: min(480px, calc(100vw - 32px)); max-height: min(80vh, 680px); overflow: auto; text-align: left; }
+.drive-dialog-card > header,.drive-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.drive-file-list { display: flex; flex-direction: column; gap: 5px; max-height: 280px; overflow: auto; margin: 10px 0; }
+.drive-file-list button { padding: 8px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: white; cursor: pointer; }
+.drive-dialog-card label { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.drive-dialog-card label input { flex-basis: 100%; }
 
 #boardBackground,
 #board {

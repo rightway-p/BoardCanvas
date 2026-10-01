@@ -20,6 +20,7 @@ eraserToolButton.addEventListener("click", async (event) => {
   }
   if (tool === "eraser" || tool === "strokeEraser") {
     setEraserToolPopupOpen(!isEraserToolPopupOpen());
+    placeToolbarPopup(eraserToolButton, eraserToolPopup);
     return;
   }
 
@@ -87,25 +88,20 @@ openDocumentPopupButton.addEventListener("click", (event) => {
     closeBoardColorPopup();
     closeEraserToolPopup();
     closePresetHelp();
+    placeToolbarPopup(openDocumentPopupButton, documentPopup);
   }
 });
 
 documentLoadButton.addEventListener("click", requestDocumentFileSelection);
-pdfPrevPageButton.addEventListener("click", goToPreviousPdfPage);
-pdfNextPageButton.addEventListener("click", goToNextPdfPage);
-if (exportAnnotatedPdfButton) {
-  exportAnnotatedPdfButton.addEventListener("click", () => {
-    exportAnnotatedPdf();
-  });
-}
 removeDocumentButton.addEventListener("click", () => {
-  unloadPdfDocument(true);
+  void unloadPdfDocument(true).then(() => clearActiveDrivePin());
 });
 
 documentInput.addEventListener("change", handleDocumentInputChange);
 openBoardColorPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   setBoardColorPopupOpen(!isBoardColorPopupOpen());
+  placeToolbarPopup(openBoardColorPopupButton, boardColorPopup);
 });
 
 documentPopup.addEventListener("pointerdown", (event) => {
@@ -251,6 +247,10 @@ document.addEventListener("pointerdown", (event) => {
   if (isPresetHelpOpen() && !presetHelp.contains(event.target)) {
     closePresetHelp();
   }
+  if (!document.getElementById("currentPenEditor").contains(event.target)) {
+    currentPenPopup.classList.add("is-hidden");
+    currentPenButton.setAttribute("aria-expanded", "false");
+  }
 });
 document.addEventListener("keydown", (event) => {
   const editableTarget = isEditableEventTarget(event.target);
@@ -287,7 +287,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (!editableTarget && hasLoadedPdfDocument()) {
+  if (!editableTarget && typeof boardPageSequence !== "undefined" && boardPageSequence.length > 1) {
     if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
       event.preventDefault();
       goToPreviousPdfPage();
@@ -351,7 +351,7 @@ queueRuntimeLog("runtime.ui.ready", {
   desktopRuntime: isDesktopAppRuntime(),
   overlaySupported: isOverlayModeSupported()
 });
-restoreSessionState();
+window.boardRestorePromise = restoreSessionState();
 
 if (isDedicatedOverlayWindow()) {
   window.setTimeout(() => {

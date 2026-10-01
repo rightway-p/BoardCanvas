@@ -103,6 +103,9 @@
         </button>
         <div id="documentPopup" class="document-popover is-hidden" role="dialog" aria-label="문서 배경 설정">
           <button id="documentLoadButton" class="document-action-button" type="button">PDF/PPT 불러오기</button>
+          <button id="saveBoardWorkButton" class="document-action-button" type="button">작업 저장</button>
+          <button id="openBoardWorkButton" class="document-action-button" type="button">작업 열기</button>
+          <input id="boardWorkInput" class="document-file-input" type="file" accept=".boardwork,.boardjson,application/json" />
           <input id="documentInput" class="document-file-input" type="file"
             accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" />
           <div class="document-page-control" role="group" aria-label="문서 페이지 이동">
@@ -110,11 +113,19 @@
             <span id="pdfPageIndicator" class="pdf-page-indicator">- / -</span>
             <button id="pdfNextPage" class="stepper-button" type="button" aria-label="다음 페이지">▶</button>
           </div>
+          <div class="sequence-actions"><button id="pageManagerButton" class="document-action-button" type="button">페이지 관리</button><button id="fitPageButton" class="document-action-button" type="button">페이지 맞춤</button></div>
+          <button id="remoteSettingsButton" class="document-action-button" type="button">리모컨 입력 설정</button>
+          <button id="driveSettingsButton" class="document-action-button" type="button">Google Drive PDF</button>
           <button id="exportAnnotatedPdfButton" class="document-action-button" type="button">판서 포함 PDF 저장</button>
           <button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서
             제거</button>
           <p id="documentStatus" class="document-status">문서 없음</p>
         </div>
+      </div>
+      <div id="pageManager" class="page-manager is-hidden" role="dialog" aria-label="페이지 관리">
+        <header><strong>페이지 관리</strong><button id="closePageManager" type="button" aria-label="닫기">×</button></header>
+        <div id="pageList" class="page-list"></div>
+        <footer><button id="addBlankPage" type="button">현재 뒤에 칠판 추가</button><button id="deleteBlankPage" type="button">칠판 삭제</button><button id="pageStructureUndo" type="button" aria-label="페이지 변경 취소">↶</button><button id="pageStructureRedo" type="button" aria-label="페이지 변경 다시 실행">↷</button></footer>
       </div>
       <button id="undoButton" class="tool-button icon-tool-button" type="button" aria-label="실행 취소"
         title="실행 취소 (Ctrl/Cmd+Z)">
@@ -130,10 +141,15 @@
           <path d="M20 12h-8a6 6 0 1 0 0 12"></path>
         </svg>
       </button>
-      <label class="control" for="penColor">
-        <span>펜 색</span>
-        <input id="penColor" type="color" value="#111111" />
-      </label>
+      <div id="currentPenEditor" class="current-pen-editor">
+        <button id="currentPenButton" class="tool-button icon-tool-button" type="button" aria-label="현재 펜 색과 굵기 설정" aria-expanded="false" title="현재 펜 설정">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path><circle cx="9" cy="6" r="2"></circle><circle cx="15" cy="12" r="2"></circle><circle cx="8" cy="18" r="2"></circle></svg>
+        </button>
+        <div id="currentPenPopup" class="current-pen-popover is-hidden" role="dialog" aria-label="현재 펜 설정">
+          <label class="control" for="penColor"><span>현재 펜 색</span><input id="penColor" type="color" value="#111111" /></label>
+          <label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label>
+        </div>
+      </div>
 
       <div id="boardColorEditor" class="control board-color-editor">
         <span>배경색</span>
@@ -166,27 +182,33 @@
           저장</div>
       </div>
 
-      <label class="control" for="lineWidth">
-        <span>굵기</span>
-        <div class="width-stepper">
-          <button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button>
-          <input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" />
-          <button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button>
-        </div>
-      </label>
 
       <span id="modeLabel" class="mode-label">모드: 펜</span>
+      <button id="appInfoButton" class="tool-button icon-tool-button app-info-button" type="button" aria-label="앱 정보"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button>
+      <div id="appInfoPopup" class="app-info-popup is-hidden"><strong>BoardCanvas</strong><button id="appVersion" type="button">버전 2.0.1</button><button id="checkUpdateButton" type="button">업데이트 확인</button><span id="updateStatus" aria-live="polite"></span></div>
       <span id="toolbarPdfPageIndicator" class="toolbar-pdf-page-indicator is-empty" aria-live="polite">- / -</span>
     </header>
 
     <main class="board-wrapper">
-      <canvas id="boardBackground" aria-hidden="true"></canvas>
-      <canvas id="board" aria-label="전자칠판"></canvas>
+      <div id="boardWorld" class="board-world">
+        <canvas id="boardBackground" aria-hidden="true"></canvas>
+        <canvas id="board" aria-label="전자칠판"></canvas>
+      </div>
     </main>
+  </div>
+  <div id="replaceWorkDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="현재 작업 저장">
+    <div class="work-dialog-card"><strong>현재 작업을 바꿀까요?</strong><p>현재 PDF와 필기를 작업 파일로 저장하거나, 저장하지 않고 새 작업을 열 수 있습니다.</p><div><button id="saveAndReplaceButton" type="button">저장하고 열기</button><button id="discardAndReplaceButton" type="button">저장 없이 열기</button><button id="cancelReplaceButton" type="button">취소</button></div></div>
+  </div>
+  <div id="driveDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="Google Drive PDF">
+    <div class="work-dialog-card drive-dialog-card"><header><strong>Google Drive PDF</strong><button id="closeDriveDialog" type="button" aria-label="닫기">×</button></header><p>데스크톱 앱에서 Google 계정으로 연결합니다.</p><div class="drive-actions"><button id="driveConnectButton" type="button">연결 / 목록 새로고침</button><button id="driveSignOutButton" type="button">연결 해제</button></div><p id="driveStatus" aria-live="polite">연결되지 않음</p><div id="driveFileList" class="drive-file-list"></div><label>PDF 캐시 한도 <span id="driveCacheLabel"></span><input id="driveCacheLimit" type="range" min="64" max="16384" step="64" value="2048"></label></div>
+  </div>
+  <div id="exportDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="판서 PDF 저장">
+    <div class="work-dialog-card"><strong>판서 포함 PDF 저장</strong><p>추가 옵션</p><div class="export-options"><label><input id="exportOutsideInk" type="checkbox"> PDF 바깥 필기도 포함</label><label><input id="exportBlankPages" type="checkbox"> 추가 칠판 페이지도 포함</label></div><div><button id="confirmExportButton" type="button">저장</button><button id="cancelExportButton" type="button">취소</button></div></div>
   </div>
 
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/pdf-lib.min.js"></script>
+  <script src="./js/domain/board-state.js"></script>
   <script src="./js/globals.js"></script>
   <script src="./js/runtime-overlay.js"></script>
   <script src="./js/session-pdf-toolbar.js"></script>
@@ -195,8 +217,11 @@
   <script src="./js/strokes-core.js"></script>
   <script src="./js/strokes-history.js"></script>
   <script src="./js/stroke-eraser.js"></script>
+  <script src="./js/board-export.js"></script>
   <script src="./js/render-doc-draw.js"></script>
+  <script src="./js/remote-controls.js"></script>
   <script src="./js/events-init.js"></script>
+  <script src="./js/board-2.0.1-ui.js"></script>
 </body>
 
 </html>

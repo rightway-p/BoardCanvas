@@ -76,6 +76,9 @@ function hasLoadedPdfDocument() {
 }
 
 function getStrokeHistoryContextKey() {
+  if (typeof currentBoardPage === "function" && currentBoardPage()) {
+    return `page:${currentBoardPage().id}`;
+  }
   if (hasLoadedPdfDocument()) {
     return `pdf:${Math.max(1, Math.round(Number(pdfPageNumber) || 1))}`;
   }
@@ -147,6 +150,7 @@ function updatePdfNavigationUI() {
 
   updateUndoRedoUI();
   updateOverlayModeButton();
+  if (typeof updateBoardSequenceUI === "function") updateBoardSequenceUI();
 }
 
 function getPreferredPdfWorkerSource() {
@@ -305,14 +309,14 @@ function openSessionDatabase() {
 
 async function saveSessionPdfBytes(pdfBytes) {
   if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
-    return;
+    return false;
   }
 
   let database;
   try {
     database = await openSessionDatabase();
     if (!database) {
-      return;
+      return false;
     }
 
     await new Promise((resolve, reject) => {
@@ -324,8 +328,9 @@ async function saveSessionPdfBytes(pdfBytes) {
       const store = transaction.objectStore(SESSION_DB_STORE);
       store.put(pdfBytes, SESSION_DB_PDF_KEY);
     });
+    return true;
   } catch (error) {
-    // Ignore persistence failures for optional PDF recovery.
+    return false;
   } finally {
     if (database) {
       database.close();
@@ -380,7 +385,7 @@ async function clearSessionPdfBytes() {
   try {
     database = await openSessionDatabase();
     if (!database) {
-      return;
+      return false;
     }
 
     await new Promise((resolve, reject) => {
@@ -392,8 +397,9 @@ async function clearSessionPdfBytes() {
       const store = transaction.objectStore(SESSION_DB_STORE);
       store.delete(SESSION_DB_PDF_KEY);
     });
+    return true;
   } catch (error) {
-    // Ignore persistence failures for optional PDF recovery.
+    return false;
   } finally {
     if (database) {
       database.close();
@@ -419,7 +425,11 @@ function serializeSessionSnapshot() {
     loadedDocumentName,
     pdfPageNumber: Math.max(1, Math.round(Number(pdfPageNumber) || 1)),
     boardStrokes,
-    pdfPages
+    pdfPages,
+    boardPageIndex,
+    pageSequence: typeof boardPageSequence !== "undefined"
+      ? boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []), view: page.view ? { ...page.view } : null, worldSize: page.worldSize ? { ...page.worldSize } : null, pdfWorldSize: page.pdfWorldSize ? { ...page.pdfWorldSize } : null }))
+      : null
   };
 }
 
@@ -474,30 +484,51 @@ function parseSessionSnapshot(rawValue) {
       : "",
     pdfPageNumber: Math.max(1, Math.round(Number(rawValue.pdfPageNumber) || 1)),
     boardStrokes,
-    pdfPageMap
+    pdfPageMap,
+    boardPageIndex: Math.max(0, Math.floor(Number(rawValue.boardPageIndex) || 0)),
+    pageSequence: Array.isArray(rawValue.pageSequence) && rawValue.pageSequence.length <= 1000
+      ? rawValue.pageSequence.filter((page) => page && (page.kind === "pdf" || page.kind === "blank"))
+        .map((page, index) => ({
+          id: typeof page.id === "string" ? page.id.slice(0, 80) : `${page.kind}:${index + 1}`,
+          kind: page.kind,
+          ...(page.kind === "pdf" ? { pdfPage: Math.max(1, Math.floor(Number(page.pdfPage) || 1)) } : { background: normalizeHexColor(page.background) || "#ffffff" }),
+          strokes: normalizeStrokeCollection(page.strokes),
+          view: page.view && Number.isFinite(Number(page.view.scale))
+            ? { x: Number(page.view.x) || 0, y: Number(page.view.y) || 0, scale: Math.max(0.2, Math.min(6, Number(page.view.scale))) }
+            : null,
+          pdfWorldSize: page.kind === "pdf" && page.pdfWorldSize && Number.isFinite(Number(page.pdfWorldSize.width)) && Number.isFinite(Number(page.pdfWorldSize.height))
+            ? { width: Math.max(1, Number(page.pdfWorldSize.width)), height: Math.max(1, Number(page.pdfWorldSize.height)) }
+            : null,
+          worldSize: page.kind === "blank" && page.worldSize && Number.isFinite(Number(page.worldSize.width)) && Number.isFinite(Number(page.worldSize.height))
+            ? { width: Math.max(1, Number(page.worldSize.width)), height: Math.max(1, Number(page.worldSize.height)) }
+            : null
+        }))
+      : null
   };
 }
 
 async function persistSessionState() {
   if (sessionRestoreInProgress) {
-    return;
+    return false;
   }
 
   try {
     const snapshot = serializeSessionSnapshot();
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+    const serialized = JSON.stringify(snapshot);
 
     if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
       if (sessionPdfBytesDirty) {
-        await saveSessionPdfBytes(loadedPdfBytes);
+        if (!(await saveSessionPdfBytes(loadedPdfBytes))) return false;
         sessionPdfBytesDirty = false;
       }
     } else {
-      await clearSessionPdfBytes();
+      if (!(await clearSessionPdfBytes())) return false;
       sessionPdfBytesDirty = false;
     }
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    return window.localStorage.getItem(SESSION_STORAGE_KEY) === serialized;
   } catch (error) {
-    // localStorage/IndexedDB can be unavailable; skip recovery persistence.
+    return false;
   }
 }
 
@@ -520,6 +551,11 @@ async function restoreSessionState() {
     pdfPageStrokeSnapshots.clear();
     for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
       pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
+    }
+    if (!snapshot.hasPdf) {
+      if (snapshot.pageSequence && snapshot.pageSequence.length) boardPageSequence = snapshot.pageSequence;
+      else boardPageSequence = BoardState.createPageSequence(0);
+      boardPageIndex = Math.min(snapshot.boardPageIndex, boardPageSequence.length - 1);
     }
     restoreCurrentStrokeState();
 
@@ -558,13 +594,35 @@ async function restoreSessionState() {
       pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
     }
 
+    if (snapshot.pageSequence && snapshot.pageSequence.length) {
+      const pageCount = Number(pdfDocument.numPages) || 1;
+      boardPageSequence = snapshot.pageSequence.filter((page) => page.kind !== "pdf" || page.pdfPage <= pageCount);
+      boardPageSequence.forEach((page) => { if (page.kind === "pdf" && !page.pdfWorldSize) page.pdfWorldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; if (page.kind === "blank" && !page.worldSize) page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; });
+      if (!boardPageSequence.some((page) => page.kind === "pdf")) boardPageSequence.unshift(...BoardState.createPageSequence(pageCount));
+      boardPageIndex = Math.min(snapshot.boardPageIndex, boardPageSequence.length - 1);
+    } else {
+      for (const page of boardPageSequence) {
+        if (page.kind === "pdf") page.strokes = cloneStrokeCollection(snapshot.pdfPageMap.get(page.pdfPage) || []);
+      }
+    }
+
     const targetPage = Math.min(
       Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
       snapshot.pdfPageNumber
     );
-    await renderPdfPage(targetPage);
+    if (snapshot.pageSequence && snapshot.pageSequence.length) {
+      const active = boardPageSequence[boardPageIndex];
+      boardPageIndex = active ? boardPageIndex : 0;
+      renderBoardPage(boardPageIndex);
+    } else {
+      const pageIndex = boardPageSequence.findIndex((page) => page.kind === "pdf" && page.pdfPage === targetPage);
+      boardPageIndex = Math.max(0, pageIndex);
+      await renderPdfPage(targetPage);
+    }
     setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
     clearAllStrokeHistory();
+    pageStructureUndo.length = 0;
+    pageStructureRedo.length = 0;
     updateUndoRedoUI();
   } catch (error) {
     // Ignore recovery failures and continue with a clean runtime state.
@@ -850,6 +908,7 @@ function setToolbarFloatingPosition(x, y, persist = true) {
 function setToolbarPlacement(placement, persist = true) {
   toolbarLayout.placement = normalizeToolbarPlacement(placement, toolbarLayout.placement);
   applyToolbarPlacementClass();
+  if (typeof updateBoardViewport === "function") requestAnimationFrame(updateBoardViewport);
 
   if (persist) {
     saveToolbarLayout();

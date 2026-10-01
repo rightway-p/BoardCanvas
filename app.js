@@ -1,4 +1,5 @@
 const APP_CHUNK_SCRIPTS = [
+  "./js/domain/board-state.js",
   "./js/globals.js",
   "./js/runtime-overlay.js",
   "./js/session-pdf-toolbar.js",
@@ -7,8 +8,11 @@ const APP_CHUNK_SCRIPTS = [
   "./js/strokes-core.js",
   "./js/strokes-history.js",
   "./js/stroke-eraser.js",
+  "./js/board-export.js",
   "./js/render-doc-draw.js",
-  "./js/events-init.js"
+  "./js/remote-controls.js",
+  "./js/events-init.js",
+  "./js/board-2.0.1-ui.js"
 ];
 
 function loadScriptSequentially(source) {

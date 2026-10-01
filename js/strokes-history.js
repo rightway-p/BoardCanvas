@@ -87,6 +87,12 @@ function savePdfPageStrokeSnapshot(pageNumber) {
 }
 
 function saveCurrentStrokeState() {
+  if (typeof currentBoardPage === "function" && currentBoardPage()) {
+    currentBoardPage().strokes = cloneStrokeCollection(strokes);
+    saveBoardPageView();
+    if (hasLoadedPdfDocument() && pdfPageNumber > 0) savePdfPageStrokeSnapshot(pdfPageNumber);
+    return;
+  }
   if (hasLoadedPdfDocument()) {
     savePdfPageStrokeSnapshot(pdfPageNumber);
     return;
@@ -96,6 +102,10 @@ function saveCurrentStrokeState() {
 }
 
 function restoreCurrentStrokeState() {
+  if (typeof currentBoardPage === "function" && currentBoardPage()) {
+    replaceVisibleStrokes(currentBoardPage().strokes || []);
+    return;
+  }
   if (hasLoadedPdfDocument()) {
     const numericPage = Math.round(Number(pdfPageNumber));
     const snapshot = Number.isFinite(numericPage) && numericPage >= 1

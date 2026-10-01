@@ -96,6 +96,7 @@ function applyBoardColor(color, persist = true) {
   }
 
   boardColorInput.value = normalized;
+  if (typeof currentBoardPage === "function" && currentBoardPage()?.kind === "blank") currentBoardPage().background = normalized;
   setBoardColor(normalized);
   renderBoardBackground();
   updateBoardColorTriggerPreview(normalized);
@@ -121,6 +122,30 @@ function saveCurrentPenPreset(index) {
   penPresets[index] = getCurrentPenPresetSnapshot();
   savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
   renderPenPresets();
+}
+
+function openPenPresetEditor(index, anchor) {
+  const preset = penPresets[index];
+  if (!preset) return;
+  document.querySelector(".pen-preset-editor")?.remove();
+  const editor = document.createElement("div");
+  editor.className = "pen-preset-editor";
+  editor.setAttribute("role", "dialog");
+  editor.setAttribute("aria-label", `펜 프리셋 ${index + 1} 편집`);
+  editor.innerHTML = `<label>색 <input data-color type="color" value="${preset.color}"></label><label>굵기 <input data-width type="number" min="1" max="40" step="1" value="${preset.width}"></label><div><button data-cancel type="button">취소</button><button data-save type="button">저장</button></div>`;
+  document.body.append(editor);
+  const rect = anchor.getBoundingClientRect();
+  const box = editor.getBoundingClientRect();
+  editor.style.left = `${Math.max(8, Math.min(window.innerWidth - box.width - 8, rect.left))}px`;
+  editor.style.top = `${Math.max(8, Math.min(window.innerHeight - box.height - 8, rect.bottom + 6))}px`;
+  editor.querySelector("[data-cancel]").onclick = () => editor.remove();
+  editor.querySelector("[data-save]").onclick = () => {
+    const width = Math.max(1, Math.min(40, Math.round(Number(editor.querySelector("[data-width]").value) || preset.width)));
+    const color = normalizeHexColor(editor.querySelector("[data-color]").value) || preset.color;
+    penPresets[index] = { ...preset, color, width };
+    savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+    editor.remove(); renderPenPresets();
+  };
 }
 
 function saveCurrentBoardColorToPreset(index) {
@@ -153,9 +178,31 @@ function renderPenPresets() {
     button.style.setProperty("--pen-line-size", `${Math.max(2, Math.min(12, preset.width))}px`);
     button.style.setProperty("--pen-line-color", getContrastColor(preset.color));
     button.setAttribute("aria-label", `pen preset ${index + 1}`);
-    button.title = `Click: apply (${preset.color}, ${preset.width}px) | Right-click/Shift+Click: save current`;
+    button.title = `탭: 적용 · 3초 누르기: 색/굵기 편집`;
+    let holdTimer = null;
+    let held = false;
+    let holdStart = null;
+    button.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary) return;
+      held = false;
+      holdStart = { x: event.clientX, y: event.clientY };
+      if (button.setPointerCapture) button.setPointerCapture(event.pointerId);
+      holdTimer = window.setTimeout(() => { held = true; button.classList.add("is-hold-editing"); openPenPresetEditor(index, button); }, (typeof devSettings === "object" ? devSettings.presetHoldMs : 3000));
+    });
+    button.addEventListener("pointermove", (event) => {
+      if (!holdTimer || !holdStart || Math.hypot(event.clientX - holdStart.x, event.clientY - holdStart.y) <= ((typeof devSettings === "object" && devSettings.movementThreshold) || 12)) return;
+      window.clearTimeout(holdTimer); holdTimer = null;
+    });
+    const finishHold = (event) => {
+      window.clearTimeout(holdTimer); holdTimer = null; holdStart = null;
+      if (button.hasPointerCapture && button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      window.setTimeout(() => { button.classList.remove("is-hold-editing"); held = false; }, 0);
+    };
+    button.addEventListener("pointerup", finishHold);
+    button.addEventListener("pointercancel", (event) => { finishHold(event); held = false; });
 
     button.addEventListener("click", (event) => {
+      if (held) { held = false; return; }
       if (event.shiftKey) {
         saveCurrentPenPreset(index);
         return;
@@ -187,7 +234,7 @@ function renderBoardPresets() {
     button.className = "color-preset";
     button.style.backgroundColor = color;
     button.setAttribute("aria-label", `board preset ${index + 1}`);
-    button.title = "Click: apply | Right-click/Shift+Click: save current";
+    button.title = "탭: 적용 · Shift+탭/우클릭: 현재 배경색 저장";
 
     button.addEventListener("click", (event) => {
       if (event.shiftKey) {
