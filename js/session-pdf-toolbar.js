@@ -46,11 +46,28 @@ function isDocumentPopupOpen() {
 }
 
 function setDocumentPopupOpen(open) {
+  const wasOpen = isDocumentPopupOpen();
   documentPopup.classList.toggle("is-hidden", !open);
   openDocumentPopupButton.setAttribute("aria-expanded", String(open));
+  boardWrapper.inert = open;
+  document.querySelectorAll(".presentation-page-nav").forEach((nav) => { nav.inert = open; });
+  [...toolbar.children].forEach((child) => { if (child !== documentEditor) child.inert = open; });
+  if (open) {
+    const rect = openDocumentPopupButton.getBoundingClientRect();
+    const width = Math.min(960, window.innerWidth - 24);
+    const height = Math.min(window.innerHeight * 0.84, window.innerHeight - 24);
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right + 12));
+    const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top));
+    documentPopup.style.setProperty("--settings-left", `${left}px`);
+    documentPopup.style.setProperty("--settings-top", `${top}px`);
+    document.getElementById("closeSettingsButton").focus();
+  } else if (wasOpen) {
+    openDocumentPopupButton.focus();
+  }
 }
 
 function closeDocumentPopup() {
+  if (window.BoardRemote) window.BoardRemote.closeSettings();
   setDocumentPopupOpen(false);
 }
 
@@ -428,7 +445,7 @@ function serializeSessionSnapshot() {
     pdfPages,
     boardPageIndex,
     pageSequence: typeof boardPageSequence !== "undefined"
-      ? boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []), view: page.view ? { ...page.view } : null, worldSize: page.worldSize ? { ...page.worldSize } : null, pdfWorldSize: page.pdfWorldSize ? { ...page.pdfWorldSize } : null }))
+      ? boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []), view: page.view ? { ...page.view } : null, worldSize: page.worldSize ? { ...page.worldSize } : null, pdfWorldSize: page.pdfWorldSize ? { ...page.pdfWorldSize } : null, pdfContentBounds: page.pdfContentBounds ? { ...page.pdfContentBounds } : null }))
       : null
   };
 }
@@ -498,6 +515,9 @@ function parseSessionSnapshot(rawValue) {
             : null,
           pdfWorldSize: page.kind === "pdf" && page.pdfWorldSize && Number.isFinite(Number(page.pdfWorldSize.width)) && Number.isFinite(Number(page.pdfWorldSize.height))
             ? { width: Math.max(1, Number(page.pdfWorldSize.width)), height: Math.max(1, Number(page.pdfWorldSize.height)) }
+            : null,
+          pdfContentBounds: page.kind === "pdf" && page.pdfContentBounds && [page.pdfContentBounds.x, page.pdfContentBounds.y, page.pdfContentBounds.width, page.pdfContentBounds.height].every((value) => Number.isFinite(Number(value))) && Number(page.pdfContentBounds.width) > 0 && Number(page.pdfContentBounds.height) > 0
+            ? { x: Number(page.pdfContentBounds.x), y: Number(page.pdfContentBounds.y), width: Number(page.pdfContentBounds.width), height: Number(page.pdfContentBounds.height) }
             : null,
           worldSize: page.kind === "blank" && page.worldSize && Number.isFinite(Number(page.worldSize.width)) && Number.isFinite(Number(page.worldSize.height))
             ? { width: Math.max(1, Number(page.worldSize.width)), height: Math.max(1, Number(page.worldSize.height)) }
@@ -899,6 +919,7 @@ function setToolbarFloatingPosition(x, y, persist = true) {
   toolbarLayout.floatX = clamped.x;
   toolbarLayout.floatY = clamped.y;
   applyToolbarFloatingPositionVariables();
+  if (typeof updatePanFitButton === "function") requestAnimationFrame(updatePanFitButton);
 
   if (persist) {
     saveToolbarLayout();

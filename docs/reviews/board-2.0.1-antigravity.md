@@ -194,3 +194,359 @@ Session 9d006361-fbab-47c0-9215-be441bdcf3f6 identified pending OAuth restoring 
 
 **최종 결론:**
 작업 직렬화나 문자열 변환 시 발생하는 순간적인 메모리 할당 구조는 유지되나, 모든 데이터 송수신(IPC) 진입점과 I/O 처리 과정에 명확한 상수 상한(256MiB/512MiB)을 강제하고 있습니다. 따라서 새로운 파일 시스템 통신 프로토콜을 도입하지 않고도, 무제한적인 메모리 전송과 기하급수적인 데이터 팽창 시도를 완벽히 통제하는 현재의 최소 가드(Minimal guards) 설계는 충분하고 적합합니다.
+
+## 2026-10-03 scoped inline-control follow-up
+
+Independent executor: Codex subagent `/root/policy_review`; official AGY `gemini-3.1-pro-high`, high effort, plan mode. Session `6c66c309-56d2-4028-a8d9-c101404f19e3`, SUCCESS, exit 0, 105.7407598 seconds, zero tool calls. Baseline `6ae595028b0cfc37e9c933bb195ab7bbfa122a82`; uncommitted inline pen controls/background-menu changes, prior pen-toggle edits preserved. Raw output `%TEMP%/board-inline-controls-agy-review.jsonl`, supplied snapshot `%TEMP%/board-inline-controls-agy-snapshot.txt`, stderr `%TEMP%/board-inline-controls-agy-stderr.txt`.
+
+Dispositions: top/bottom mismatched width was actionable and corrected by the final generic square-control CSS, independently rechecked by Codex after the AGY snapshot. Popup outside-viewport claim is a false positive: `placeToolbarPopup` clamps both axes against viewport dimensions, and coordinator live UI check confirmed background menu/presets accessible. Overlap alone is not a demonstrated regression. The identical test branch is a valid small Ponytail cleanup. Later cache query versions and final CSS sizing are source-reviewed follow-ups, not falsely claimed part of the earlier AGY snapshot.
+
+### Scoped response (verbatim)
+
+제공된 요구 사항과 변경 사항(diff)을 바탕으로 분석한 독립적 코드 리뷰 결과입니다.
+
+### 1. 실행 가능한 회귀 (Actionable Regression) 및 요구사항 누락
+
+**[경로/라인]** `js/events-init.js` (약 109-112라인)
+*   **문제점:** `#boardColorEditor`가 동적인 메인 툴바에서 고정된 메뉴(`#appInfoPopup`) 내부로 이동했음에도 불구하고, 이벤트 리스너에서 여전히 `placeToolbarPopup(openBoardColorPopupButton, boardColorPopup);` 함수를 호출하고 있습니다.
+*   **영향:** `placeToolbarPopup` 함수는 **메인 툴바의 배치 상태**(`toolbar-placement-left` 등)를 기준으로 팝업의 열림 방향을 계산합니다. 배경색 버튼이 이제 툴바 위치와 무관하게 우측 상단 고정 메뉴 안에 있으므로, 메인 툴바가 어디 있느냐에 따라 팝업이 화면 바깥쪽을 향해 열리거나 메뉴를 가리는 등 위치 계산이 엉뚱하게 동작하는 회귀가 발생합니다.
+
+**[경로/라인]** `styles.css` (약 925-940라인 추가분)
+*   **문제점:** "콤팩트하고 일치하는 형태(compact matching shapes)"에 대한 크기 강제 스타일(버튼 및 인풋 너비/높이 28px)이 `.toolbar-placement-left`, `.toolbar-placement-right`, `.toolbar-placement-floating` 클래스에만 지정되어 있습니다.
+*   **영향:** 앱이 가로 툴바 모드인 `.toolbar-placement-top` 또는 `.toolbar-placement-bottom` 상태일 경우, 해당 스타일이 적용되지 않아 `lineWidth` 입력칸 등이 예전의 넓은 크기(너비 56px)로 표시됩니다. 이는 툴바 위치에 상관없이 항상 일관된 콤팩트 UI를 보여주어야 하는 요구 사항에서 누락된 부분입니다.
+
+### 2. 과도한 엔지니어링 (Overengineering) / 오탐 (False Positives)
+
+**[경로/라인]** `tests/board-state.test.js` (추가된 `vm` 환경 테스트 블록 내부, 약 54-55라인)
+*   **문제점:**
+    ```javascript
+    if (name === "eraser") await click(name);
+    else await click(name);
+    ```
+*   **영향:** `if` 분기와 `else` 분기가 정확히 동일한 코드(`await click(name);`)를 실행하고 있습니다. 이는 테스트 코드 작성 시 발생한 불필요한 분기(과도한 엔지니어링)이며 단일 호출로 통합해야 합니다.
+
+### 3. 성공적으로 반영된 주요 사항 (참조용)
+*   **접근성 보존 및 시각적 숨김:** `styles.css` 내 `.current-pen-editor .control > span` 속성에 `clip: rect(0, 0, 0, 0)` 등 `sr-only` 패턴을 적용하여 요구 사항인 "시각적인 설명 레이블은 없애되 접근성 이름(accessible names)은 유지"를 완벽히 충족했습니다.
+*   **데드 코드 정리:** 더 이상 사용되지 않는 `#currentPenPopup` 관련 HTML 구조 및 `js/board-2.0.1-ui.js` 내부의 팝업 토글 로직, 윈도우 리사이즈 이벤트 리스너가 깔끔하게 제거되었습니다.
+*   **이전 미커밋 픽스 공존:** `events-init.js`에서 도구가 이미 'pen'일 때 펜 버튼을 다시 누르면 패닝 모드가 토글되도록 처리된 부분은 다른 의도된 요구 사항을 방해하지 않고 잘 통합되었습니다.
+
+Final scoped closure: floating color/number min-width and min-height are explicitly 28px, matching the stepper buttons; redundant test branch reduced to a single call. Independent source recheck confirms both corrections. Worker reran 24 tests successfully. No remaining actionable scoped finding; Codex + AGY review complete with the above snapshot/follow-up distinction. No commit or push.
+
+## 2026-10-04 initial scoped zoom feedback snapshot (superseded UX pending)
+
+Executor: independent Codex subagent `/root/policy_review`; reviewer official AGY gemini-3.1-pro-high, high effort, plan mode. Session `b2b27ca0-2d6d-4191-9252-a31fced58b77`, SUCCESS, exit 0, 130.024247 seconds, zero tool calls. Raw `%TEMP%/board-zoom-cue-agy-review.jsonl`, snapshot sibling `board-zoom-cue-agy-snapshot.txt`.
+
+Triage: eraser spinner is outside the requested current-pen number change; SVG color claim is false positive because existing `.icon-tool-button svg path` sets `fill:none;stroke:currentColor`; developer cancel/close missing-default merge exists unchanged at HEAD and no new keys were introduced here, so preexisting partial-storage robustness debt, not a new regression. No implementation change requested for these claims. User subsequently changed desired hold cue to delayed shrinking circle; this earlier execution does not approve that newer UX. Final scoped review remains pending latest implementation.
+
+### Response (verbatim)
+
+제공된 소스 코드를 데이터로만 취급하여, 도구/명령어/에이전트 실행 없이 요청하신 범위에 맞춰 집중 리뷰를 진행했습니다. 분석 결과 발견된 **구체적인 잔여 문제(Concrete Issues)**와 버그처럼 보일 수 있으나 의도된 **오탐(False Positives)**을 아래와 같이 구분하여 정리했습니다.
+
+### 🚨 구체적인 잔여 문제 (Concrete Issues)
+
+1. **지우개 두께(Eraser Width) 스피너 숨김 누락 (`styles.css`)**
+   - **문제:** "Width number centered via native spinner removal" 요구사항에서 `#lineWidth`는 `display: none; -webkit-appearance: none;`으로 네이티브 스피너를 완벽히 숨겼으나, `#eraserWidth`는 `margin: 0;`만 지정되어 있어 브라우저에 따라 스피너가 여전히 노출됩니다.
+   - **위치:** `styles.css` 523-526번째 줄
+   - **해결 방안:** `#eraserWidth` 스피너 관련 CSS 블록을 지우고, `#lineWidth` 블록에 선택자를 병합하거나 동일하게 `display: none; -webkit-appearance: none;`을 적용해야 합니다.
+
+2. **SVG 아이콘 색상 변경 불가 (`js/board-2.0.1-ui.js`)**
+   - **문제:** "Pen blue/pan orange existing shapes" 요구사항을 위해 `styles.css`에는 `#penTool`의 모드에 따라 색상을 변경하는 올바른 규칙(`color: #1976d2`, `color: #ef6c00`)이 존재합니다. 하지만 `setPanMode`에서 주입하는 SVG 문자열(`<svg ...><path ...></path></svg>`)에 `fill="currentColor"` 속성이 누락되어 있어 CSS의 `color` 속성이 도형 색상에 반영되지 않고 기본색(검정)으로 렌더링됩니다.
+   - **위치:** `js/board-2.0.1-ui.js` 386-387번째 줄
+   - **해결 방안:** 주입되는 두 SVG 태그에 `fill="currentColor"` 속성을 추가해야 합니다.
+
+3. **개발자 설정 취소/닫기 시 설정값 병합 누락 (`js/board-2.0.1-ui.js`)**
+   - **문제:** "preserving stored custom devSettings" 규칙에 따라 초기화(`initBoard201Ui`) 시에는 `{ ...DEV_DEFAULTS, ...JSON.parse(...) }`를 통해 이전 버전 스토리지에 없던 새 키(예: `presetHoldMs`)를 기본값으로 안전하게 병합합니다. 하지만 개발자 설정 패널의 취소(`[data-dev-cancel]`) 및 닫기(`[data-dev-close]`) 버튼 핸들러에서는 `DEV_DEFAULTS`와의 병합 과정 없이 저장된 객체를 그대로 덮어씁니다. 이로 인해 취소를 누를 경우 새 속성들이 `undefined`로 유실되는 문제가 발생합니다.
+   - **위치:** `js/board-2.0.1-ui.js` 496, 498번째 줄
+   - **해결 방안:** 취소/닫기 핸들러에서도 초기화 시와 동일하게 스프레드 문법을 활용한 기본값 병합(`{ ...DEV_DEFAULTS, ...(JSON.parse(...) || {}) }`)을 수행해야 합니다.
+
+---
+
+### 🛡️ 오탐 / 정상 동작 (False Positives)
+
+1. **이동(Movement) 하드코딩 `0` 전달 (`BoardState.canActivateZoomHold`)**
+   - **의심점:** `setTimeout` 콜백 내부에서 `canActivateZoomHold`를 호출할 때 실제 이동 거리를 전달하지 않고 `0`을 하드코딩하여 전달하고 있습니다.
+   - **정상인 이유:** 줌 홀드 2000ms 대기 중에 `continuePanOrZoom`에서 이동 거리가 임계값(`movementThreshold`)을 초과하면 즉시 `window.clearTimeout(devTouchTimer)`가 호출되어 타이머 자체가 취소됩니다. 따라서 콜백이 실행되었다는 것 자체가 이미 허용 반경 내에 있었음을 보장하므로 `0`을 전달하는 것은 논리적으로 타당한 구조입니다.
+
+2. **줌 제스처 기준 카메라(`zoomGesture.baseCamera`)의 미세 이동분 포함**
+   - **의심점:** 홀드 대기 시간 동안 손가락이 임계값 내에서 미세하게 움직이면 `boardCamera`가 먼저 이동(Pan)하며, 이후 줌 활성화 시 원래 터치했던 시점의 카메라가 아닌 약간 이동된 현재 상태를 `baseCamera`로 캡처합니다.
+   - **정상인 이유:** 줌이 시작될 때 원래의 터치 위치로 화면이 튕기는(Snapping) 현상을 방지하기 위함입니다. 줌 앵커(`anchor`)는 원래 터치 픽셀을 기준으로 하되, 기준 카메라를 현재의 미세 이동된 카메라로 잡음으로써 부드러운 "Anchored Zoom"이 달성되므로 올바른 동작입니다.
+
+3. **줌 큐 슬라이더 좌표 계산 (`showZoomCue`)**
+   - **의심점:** `showZoomCue(start.x + 30, start.y)` 호출 시 `start.x`는 브라우저 `clientX` 기준인데 다시 30을 더하고, `showZoomCue` 함수 내부에서는 또다시 컨테이너의 `rect.left`를 빼는 과정이 복잡하고 잘못된 것처럼 보일 수 있습니다.
+   - **정상인 이유:** `showZoomCue` 함수는 인자로 `clientX, clientY`와 동일한 화면 절대 좌표를 기대하도록 설계되어 있습니다. 터치 지점의 절대 좌표에 30px을 더해 넘겨주고, 내부에서 컨테이너 기준 상대 좌표로 올바르게 변환하므로 요구사항인 "touch-adjacent vertical plus/minus slider"가 터치 우측에 정확히 렌더링 됩니다.
+
+
+## 2026-10-04 final draft-preview review
+
+Independent executor `/root/policy_review`; official AGY gemini-3.1-pro-high, high effort, plan mode; session `73b806ef-ac05-4b06-9df5-684bb332a447`, SUCCESS, exit 0, 134.8458316 seconds, zero tool calls. Snapshot44948 characters, `%TEMP%/board-dev-preview-final-agy-snapshot.txt`; raw `%TEMP%/board-dev-preview-final-agy-review.jsonl`; stderr sibling `board-dev-preview-final-agy-stderr.txt`. Latest no-slider, delayed shrinking-circle/magnifier and isolated draft-modal implementation reviewed.
+
+Actionable triage: normalize stored settings to whitelisted finite numbers/strict booleans rather than spreading untyped values. String delay500 plus numeric shrink1500 concatenates to5001500; malformed storage can therefore break timing. The raw report overstates exploit evidence: a script element inserted through innerHTML does not by itself execute, and a malicious extension already has privileges. Treat this as concrete malformed-storage/type robustness and unsafe interpolation prevention, not a demonstrated remote exploit. Fix requested; final closure pending this normalization. Other latest stage, modal and cleanup checks passed source review.
+
+### Response (verbatim)
+
+제공해주신 코드를 바탕으로 보안, 데이터 무결성 및 기능 결함에 초점을 맞춰 최종 검토를 진행했습니다. 요구하신 UI 변경 사항 및 엣지 케이스 처리(이벤트 캡처, 타이머 초기화, 키보드 이벤트 버블링 차단 등)가 훌륭하게 반영되었습니다.
+
+다만, `localStorage`에서 데이터를 읽어오는 로직에서 **데이터 무결성 훼손 및 XSS(크로스 사이트 스크립팅) 보안 취약점**으로 이어질 수 있는 단 하나의 중대한 이슈가 발견되었습니다.
+
+### ⚠️ 단일 발견 사항: `normalizeDevSettings`의 데이터 타입 검증 누락
+
+**문제 설명:**
+현재 `normalizeDevSettings` 함수는 `localStorage`에서 파싱한 JSON 객체(`value`)를 타입 검사 없이 `DEV_DEFAULTS` 객체에 그대로 병합(`{ ...DEV_DEFAULTS, ...value }`)하고 있습니다. 이로 인해 다음과 같은 심각한 문제가 발생할 수 있습니다.
+
+1. **기능 마비 (String Concatenation):**
+   만약 외부 요인으로 인해 `localStorage`에 `{"zoomCueDelayMs": "500"}`과 같이 숫자가 아닌 문자열로 저장된다면, 이 값은 그대로 `draft`에 할당됩니다. 터치 줌 활성화 시 타이머 계산 로직인 `devSettings.zoomCueDelayMs + devSettings.zoomCueShrinkMs`가 덧셈 연산이 아닌 문자열 결합(`"5001500"`)으로 처리되어, `setTimeout`의 지연 시간이 약 5,000,000ms(83분)로 설정됩니다. 결과적으로 줌 홀드 기능이 완전히 고장납니다.
+2. **보안 취약점 (Stored XSS):**
+   병합된 데이터는 `renderDeveloperSettings()`에서 아무런 이스케이프(Escape) 없이 템플릿 리터럴을 통해 DOM에 직접 삽입됩니다 (`value="${draft.zoomCueDelayMs}"`). 악의적인 스크립트나 서드파티 확장에 의해 저장소 값이 `{"zoomCueDelayMs": "100\"><script>alert(1)</script>"}`로 변조될 경우, 개발자 설정을 여는 순간 임의의 스크립트가 실행되는 XSS 공격의 통로가 됩니다.
+
+**해결 방안:**
+입력 객체를 그대로 스프레드 연산자로 병합하지 말고, `DEV_DEFAULTS`에 정의된 속성만 허용하면서 명시적인 타입 캐스팅(`Number`, `Boolean`)을 수행해야 합니다.
+
+```javascript
+function normalizeDevSettings(saved) {
+  const value = saved && typeof saved === "object" ? saved : {};
+  const result = { ...DEV_DEFAULTS };
+
+  if (Number.isFinite(value.zoomHoldMs) && value.zoomCueDelayMs == null && value.zoomCueShrinkMs == null) {
+    const total = Math.max(1000, Number(value.zoomHoldMs));
+    result.zoomCueDelayMs = 500;
+    result.zoomCueShrinkMs = total - 500;
+  }
+
+  for (const key of Object.keys(DEV_DEFAULTS)) {
+    if (value[key] !== undefined) {
+      if (typeof DEV_DEFAULTS[key] === "number") {
+        const num = Number(value[key]);
+        if (Number.isFinite(num)) result[key] = num;
+      } else if (typeof DEV_DEFAULTS[key] === "boolean") {
+        result[key] = Boolean(value[key]);
+      }
+    }
+  }
+  return result;
+}
+```
+
+### ✅ 검토 완료 항목 (안전함)
+나머지 핵심 로직들은 매우 견고하게 설계되었습니다.
+- **개발자 모달 샌드박싱**: `devSettingsDraft`를 활용하여 원본 보드 뷰의 카메라나 터치 상태를 간섭하지 않고 독립적으로 동작하는 미리보기가 잘 구현되었습니다.
+- **메모리/타입 누수 방지**: `endPanOrZoom` 및 `cancelDeveloperTrial`에서 `devTicker`, `zoomCueTimer`, `devTouchTimer` 등이 누락 없이 정확히 `clearTimeout` / `clearInterval` 되며 Pointer Capture 반환 상태도 완벽합니다.
+- **키보드 단축키 충돌**: `remote-controls.js`와 글로벌 `keydown` 리스너에서 모달 창 개방 여부를 이중으로 확인하여, 설정 모달 내부에서의 입력(Tab, Esc)이 다른 액션을 유발하지 않도록 정확히 방어되었습니다.
+- **마이그레이션**: 기존 `zoomHoldMs` 설정이 있던 사용자들의 값을 가져와 `total`을 보장하면서 새로운 지연 구조(500ms 시작)로 마이그레이션하는 로직이 정상 동작합니다.
+
+위의 `normalizeDevSettings` 타입 방어 로직만 추가하시면 데이터 무결성과 보안을 확보하여 즉시 프로덕션에 배포할 수 있는 상태입니다.
+
+Final normalizer closure (2026-10-04): independent Codex recheck confirms explicit settings-key whitelist, finite numeric bounds/step normalization and strict boolean fallback. Malformed strings/null/nonfinite values no longer reach timing addition or HTML interpolation. Supported legacy1000–5000ms total durations and valid custom values are covered by regression checks; the shrink control maximum matches the normalized range. Independent rerun:26/26 tests passed. This is the focused fix verification of final AGY finding, not a claim that AGY reran on the later tiny patch. All confirmed findings for the latest no-slider/draft-preview scope are resolved; independent Codex/Ponytail and successful AGY review complete. Physical touch hardware remains unverified. No commit or push.
+
+## 2026-10-04 directional magnifier sign review
+
+Executor: independent Codex subagent `/root/policy_review`; official AGY gemini-3.1-pro-high, high effort, plan mode. Session `3a902754-d42c-4d24-8af9-a51e13336b97`; substantive response received; CLI ultimately exited0/statusSUCCESS in 276.4251276 seconds. Snapshot23117 characters: `%TEMP%/board-zoom-sign-agy-snapshot.txt`; raw `%TEMP%/board-zoom-sign-agy-review.jsonl`; stderr sibling `board-zoom-sign-agy-stderr.txt`.
+
+Execution deviation: despite the source-only/no-tools request, AGY attempted an internal plan write, first failed on missing Overwrite then wrote its own brain Implementation_Plan.md. Final result also lists denied write_file/ReplaceFileContent. This was NOT a clean zero-tool execution. No permission bypass or implementation approval was given; no repository edit by AGY was observed. It requested approval in prose, but the process subsequently completed naturally; no pending implementation session was approved.
+
+Substantive findings/dispositions: (1) recreating SVG nodes is a potential micro-optimization, but no demonstrated flicker or violation of fixed outer geometry; fixed outer size is independent of node identity. (2) plain idle retains a cue direction class, but there are no cue-direction style rules and the mark is hidden, so this is not a visible idle failure. (3) keeping expired timeout numeric IDs is not a timer leak; the callbacks complete and release/cancel clears active timers. No actionable defect established by these claims. Existing movement/reversal math confirmed by reviewer.
+
+Codex follow-up corrected the actual preview pointer-position issue and font-based mark geometry: preview follows current pointer, and SVG sign scales around lens center with bounded arms while outer geometry stays fixed. These changes occurred after the AGY snapshot and were independently source/test verified, not falsely claimed present in its input. Latest26 tests pass; no remaining confirmed scoped Codex finding. AGY review substance is received and triaged; execution deviation remains explicitly recorded rather than called a clean source-only PASS. No commit/push.
+
+### Response (verbatim, whitespace normalized)
+
+요청하신 내용과 제공해주신 소스 코드 데이터를 바탕으로, 외부 명령어 체계 없이 줌 피드백 로직의 문제점들을 식별하고 해결책을 담은 구현 계획(Implementation Plan)을 작성하여 아티팩트로 제공해 드렸습니다.
+
+코드 분석 결과를 통해 확인한 주요 이슈는 다음과 같습니다:
+
+1. **외부 돋보기 고정(Fixed Outer Magnifier) 문제:** `showZoomCue`가 포인터 이동마다 `innerHTML`을 완전히 덮어써서 SVG 렌더링에 DOM 스래싱(DOM Thrashing)이 발생합니다. 조건부 삽입을 통해 UI를 고정하는 방식으로 수정안을 제시했습니다.
+2. **완전한 유휴 상태 초기화(Plain Idle Reset) 실패:** 방향이 `undefined`로 전달될 때(예: 유휴 타이머 발동 시), 삼항 연산자 논리의 오류로 인해 줌인(Zoom-in) 클래스가 강제로 부여되는 것을 확인하여 중립 상태를 올바르게 처리하도록 로직을 수정했습니다.
+3. **타이머 클린업(Timer Cleanup):** 기존 코드에서 `zoomCueTimer` 일부만 콜백 내부에서 `null` 처리되고 있었으며, 나머지 제스처 및 유휴 타이머들은 발동 이후에도 숫자 ID를 방치하고 있었습니다. 관련 콜백 내에 클린업 처리를 일관성 있게 추가했습니다.
+(작업자가 수정 중인 초기 `trial.x/y` 이슈는 계획대로 검토 범위에서 제외했습니다.)
+
+우측의 아티팩트 창에서 [Implementation_Plan.md](file:///C:/Users/pjd01/.gemini/antigravity-cli/brain/3a902754-d42c-4d24-8af9-a51e13336b97/Implementation_Plan.md)의 세부 내용을 확인하시고 피드백을 주시거나 **승인(Proceed)** 버튼을 눌러주시면 후속 작업을 진행하도록 하겠습니다!
+
+
+### Internal plan evidence (review data, not approved instructions)
+
+## Independent Narrow Delta Review
+
+This plan addresses the concrete UI logic issues within the new two-stage zoom gesture feedback mechanics, strictly scoped to the provided `js/board-2.0.1-ui.js` data.
+
+### Findings & Scope Alignment
+- **Plus/Minus Growth & Reversal:** Mathematics for zoom-in (`Math.exp`, `Math.log`) and zoom-out are logically sound. The immediate switch on reversal successfully resets the anchor and correctly bases the amount on the new delta, matching requirements.
+- **Preview Active Cue Movement (Worker Fixing):** Acknowledged that the worker is fixing the `trial.x/y` usage in `initDeveloperTrial`, omitting this from the plan.
+- **Actionable Findings:**
+  1. **Fixed Outer Magnifier (DOM Thrashing):** `showZoomCue` destructively overwrites `cue.innerHTML` on every `pointermove`, causing severe DOM thrashing and breaking the "fixed" structural requirement of the outer magnifier UI.
+  2. **Plain Idle Reset:** When `showZoomCue` is triggered with an `undefined` direction by the idle timer, the ternary expression `direction === "out" ? ... : "is-zooming-in"` incorrectly forces the `"is-zooming-in"` class, preventing a neutral idle state.
+  3. **Timer Cleanup:** While `startPanOrZoomHold` correctly cleans up `zoomCueTimer` inside its callback, multiple other timer callbacks (`devTouchTimer`, `trial.cueTimer`, `trial.zoomTimer`, and idle timers) fail to clear their stored IDs when they execute, leaving stale numerical IDs in the state.
+
+## Proposed Changes
+
+### `js/board-2.0.1-ui.js`
+
+#### [MODIFY] `showZoomCue`
+Prevent DOM thrashing to keep the magnifier fixed, and correctly handle the idle state class.
+```javascript
+function showZoomCue(container, point, direction, amount = 0, id = "zoomCue") {
+  const cue = getZoomCue(container, id);
+  cue.classList.remove("is-holding", "is-zooming-in", "is-zooming-out");
+  cue.classList.add("is-zooming");
+  if (direction) {
+    cue.classList.add(direction === "out" ? "is-zooming-out" : "is-zooming-in");
+  }
+  cue.style.left = `${point.x}px`; cue.style.top = `${point.y}px`;
+
+  if (!cue.querySelector("svg")) {
+    cue.innerHTML = '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="13" cy="13" r="8"></circle><path d="m19 19 8 8"></path></svg><span class="zoom-cue-mark" aria-hidden="true"></span>';
+  }
+
+  const mark = cue.querySelector(".zoom-cue-mark");
+  if (mark) { mark.textContent = direction === "in" ? "+" : direction === "out" ? "−" : ""; mark.style.fontSize = `${zoomMarkSize(amount)}px`; }
+  cue.hidden = false;
+}
+```
+
+#### [MODIFY] Timer Callbacks (Cleanup)
+Nullify stale timer IDs within their execution scopes to ensure clean state and prevent potential leaks.
+```javascript
+// In startPanOrZoomHold:
+  devTouchTimer = window.setTimeout(() => {
+    devTouchTimer = null;
+    if (pendingZoomHold !== start || !BoardState.canActivateZoomHold(performance.now() - devTouch.start, 0, devSettings.movementThreshold, devSettings.zoomCueDelayMs + devSettings.zoomCueShrinkMs)) return;
+// ...
+
+// In continuePanOrZoom:
+    zoomCueTimer = window.setTimeout(() => {
+      zoomCueTimer = null;
+      if (zoomGesture) showZoomCue(boardWrapper, canvasPointFromClient(event.clientX, event.clientY), undefined);
+    }, 150);
+
+// In initDeveloperTrial:
+    trial.cueTimer = window.setTimeout(() => {
+      trial.cueTimer = null;
+      if (developerTrial === trial) showZoomHoldCue(area, { x: trial.x, y: trial.y }, settings.zoomCueShrinkMs, "devZoomCue");
+    }, settings.zoomCueDelayMs);
+
+    trial.zoomTimer = window.setTimeout(() => {
+      trial.zoomTimer = null;
+      if (developerTrial === trial) { trial.activated = true; showZoomCue(area, { x: trial.x, y: trial.y }, undefined, 0, "devZoomCue"); }
+    }, settings.zoomCueDelayMs + settings.zoomCueShrinkMs);
+
+    // And inside the pointermove listener:
+    trial.idleTimer = window.setTimeout(() => {
+      trial.idleTimer = null;
+      if (developerTrial === trial) showZoomCue(area, { x: trial.x, y: trial.y }, undefined, 0, "devZoomCue");
+    }, 150);
+```
+
+## Verification Plan
+
+### Manual Verification
+1. **Magnifier Stability:** Zoom in/out smoothly and rapidly. Ensure the outer SVG magnifier no longer flickers or behaves poorly due to DOM thrashing.
+2. **Idle Reset:** Hold the zoom gesture completely still. Verify that the UI correctly drops the directional indicator (`+` or `-`) and class styles, resetting to a clean neutral state.
+3. **Behavior Consistency:** Confirm that the plus/minus dynamic scaling and immediate directional switch upon reversal remain completely intact and unaffected by the cleanup.
+
+## 2026-10-04 scoped pan-fit review
+
+Independent executor `/root/policy_review`; official AGY gemini-3.1-pro-high, high effort, plan mode. Session `29472f92-caa9-497e-a509-0f71815c5b56`; SUCCESS/exit0, 53.5961594 seconds, substantive response, no tool calls. Snapshot13782 characters `%TEMP%/board-pan-fit-agy-snapshot.txt`; raw `%TEMP%/board-pan-fit-agy-review.jsonl`; stderr sibling `board-pan-fit-agy-stderr.txt`.
+
+Triage: toolbar-null concern is not an actionable actual-application path: required toolbar exists in parsed index before the scripts, and the app already relies on that required DOM. Keyboard tab order is a nonblocking refinement; button remains keyboard reachable and no requested operation is missing. Coordinator explicitly retained verified markup rather than restructuring this turn. Known rail overlap was corrected and independently source/test rechecked; final27 tests pass. No remaining confirmed actionable scoped finding. Review complete, no implementation approval/commit/push.
+
+### Response (verbatim, whitespace normalized)
+
+제공해주신 코드와 요구사항을 바탕으로 리뷰한 결과입니다.
+
+**요구사항 검토 결과**
+제시된 모든 요구사항(패닝 모드에서만 표시, 핸드 버튼과 동일한 크기 확보, 레이아웃 변경 방지(`position: fixed`), `fitCurrentBoardPage` 재사용 및 상태 보존 로직 연결)이 누락 없이 올바르게 구현되어 있습니다. (알려진 이슈인 바깥 방향 축 7px 겹침 문제는 제외)
+
+**리뷰 발견 사항 (Findings)**
+
+1. **`toolbar` 널 참조(Null Reference) 에러 위험**
+   `js/board-2.0.1-ui.js`의 `updatePanFitButton()` 내부 387줄에서 `toolbar.getBoundingClientRect()`를 호출할 때 `toolbar` 객체가 존재하는지 확인하는 방어 코드가 없습니다. 직후에 실행되는 `updateBoardViewport()`(371줄)에서는 `!toolbar`를 예외 처리하고 있는 것으로 보아, 툴바가 초기화되기 전이거나 없는 상태에서 `panMode`가 활성화되면 치명적인 TypeError 크래시가 발생할 수 있습니다.
+
+2. **DOM 선언 순서에 따른 키보드 접근성(Tab Order) 문제**
+   `index.html`에서 화면 맞춤 버튼(`<button id="panFitButton">`)이 툴바(`<header class="toolbar">`)보다 먼저 마크업되어 있습니다. 사용자가 툴바 내의 핸드 툴 토글 버튼에서 키보드 스페이스/엔터로 패닝 모드를 켤 경우, 새 버튼이 시각적으로는 바로 옆에 나타나지만 DOM 구조상으로는 뒤에 위치합니다. 따라서 이후 `Tab` 키를 누르면 화면 맞춤 버튼이 아닌 툴바 내의 다음 도구로 포커스가 넘어가 버리며, `Shift+Tab`을 눌러야만 접근할 수 있는 동선 문제가 있습니다. 마크업 위치를 툴바 내부 또는 적절한 포커스 순서에 맞게 배치하는 것을 권장합니다.
+
+## 2026-10-04 scoped PDF fit and fullscreen review
+
+Independent executor `/root/policy_review` ran official Antigravity CLI, model `gemini-3.1-pro-high`, high effort, plan mode with supplied source text only. Session `d97ac727-db73-4fda-8003-76e200f0ed0e` completed SUCCESS, exit0,174.6 seconds; no tool calls appeared in its stream. Raw local artifacts: `%TEMP%/board-fit-fullscreen-agy-snapshot.txt`, `board-fit-fullscreen-agy-review.jsonl`, `board-fit-fullscreen-agy-stderr.txt`. Scope is current fit/DPR/session-bound persistence and fullscreen changes; unrelated prototype HTML is excluded.
+
+Actionable: fractional CSS viewport dimensions are lost when prior geometry is reconstructed from integer canvas backing dimensions. Independent actual-helper VM reproduced fit640.5x900.5 becoming falsely non-fitted against640x900. Sent to implementation worker through coordinator; pending fix/recheck. Do not use a scale tolerance of1 as suggested by the external reviewer.
+
+False positive #2: no demonstrated material PDF/ink drift from recomputing bounds. Rendering derives bounds from the same stored world frame/aspect ratio that scales with ink; recomputation tracks actual rendered geometry. Speculative floating-point noise alone does not substantiate a user-visible defect, and suppressing bounds updates could preserve stale geometry.
+
+False positive #3: the only production caller immediately synchronously JSON-stringifies `boardWorkSnapshot()` before its first await. No retained mutable snapshot/history path exists through that function; session serialization independently clones bounds. Therefore the claimed asynchronous snapshot contamination is not reachable in current code.
+
+Fullscreen source review raised no finding. Mock tests/browser checks/release build are distinct from installed native UI validation; titlebar/maximize/fullscreen interaction remains unverified. Review is not closed while the confirmed fractional-resize finding remains pending.
+
+### Raw reviewer response
+제공해주신 코드와 요구사항을 바탕으로 검토한 결과, 구체적으로 도입된 3가지 버그를 발견했습니다. 네이티브 전체화면(Fullscreen) 관련 요구사항은 버그 없이 의도대로 구현되었습니다.
+
+### 🔍 코드 리뷰 결과 (버그 리포트)
+
+**1. 소수점 리사이즈 시 Auto-fit 풀림 버그 (`js/board-2.0.1-ui.js`)**
+*   **원인:** `isCurrentBoardPageFitted`의 오차 허용값(`tolerance`)이 `0.01`로 너무 엄격합니다. `setCanvasSize`에서 `previousRect`를 복원할 때 정수형인 `canvas.width`에서 DPR을 나누어 역산하므로, 원래 CSS 뷰포트(`getBoundingClientRect`)가 가졌던 소수점 이하 픽셀 데이터가 유실됩니다.
+*   **결과:** 윈도우 크기가 소수점 단위로 조정되거나 DPR이 변경될 때 역산 오차가 `0.01` CSS 픽셀을 초과하여, 실제로는 딱 맞춰져 있음에도 불구하고 `wasFitted`가 `false`로 잘못 평가되어 자동 맞춤(Auto-fit) 유지가 풀립니다. 정수형 절삭 오차를 흡수할 수 있도록 `tolerance` 값을 `1.0` 수준으로 늘려야 합니다.
+
+**2. 렌더링 덮어쓰기로 인한 PDF-잉크 싱크 어긋남 (`js/render-doc-draw.js`)**
+*   **원인:** 172번 줄에서 PDF 페이지가 렌더링될 때마다 `boardPage.pdfContentBounds`를 무조건 새로 계산하여 덮어씁니다.
+*   **결과:** DPR이 변경될 때 `scaleStoredStrokes`가 잉크와 함께 기존 Bounds를 정확하게 스케일링하지만, 직후에 실행되는 렌더링 태스크가 `baseViewport`를 기반으로 Bounds를 다시 계산해버립니다. 이때 발생하는 부동소수점 비율 오차로 인해, 스케일링된 잉크와 새로 렌더링된 PDF 사이의 미세한 위치 어긋남이 발생합니다. 덮어쓰기를 방지하기 위해 `&& !boardPage.pdfContentBounds` 조건이 추가되어야 합니다.
+
+**3. 스냅샷 참조 무결성(Deep-clone) 누락 (`js/board-2.0.1-ui.js`)**
+*   **원인:** 238번 줄의 `boardWorkSnapshot` 함수에서 `pdfWorldSize` 등은 깊은 복사(deep clone)를 수행하지만, 새로 도입된 `pdfContentBounds`에 대한 깊은 복사 로직이 누락되어 얕은 복사(`...page`)로 전달됩니다.
+*   **결과:** 메모리에 스냅샷(히스토리 또는 자동저장 캐시)이 생성된 후 윈도우를 이동해 DPR이 변경되면, `scaleStoredStrokes` 로직이 라이브 페이지의 Bounds를 직접 수정(`*= scaleX`)할 때 메모리 상의 이전 스냅샷 데이터까지 함께 변형되어 상태가 오염됩니다. `pdfContentBounds: page.pdfContentBounds ? { ...page.pdfContentBounds } : null` 매핑이 추가되어야 합니다.
+
+---
+**💡 부가 검토 사항 (Fullscreen Scope)**
+요구하신 두 번째 스코프인 네이티브 전체화면 동작은 모두 올바르게 도입되었습니다.
+*   `requestNativeExitFullscreenLike`에서 `unmaximize`를 강제 호출하지 않아 창 크기 상태가 정상적으로 보존됩니다.
+*   `fullscreenToggleInProgress` 플래그를 통해 빠른 토글(Rapid toggle) 방어 가드가 올바르게 작동합니다.
+*   `requestNativeOverlayLike`에서 전체화면 실패 시 `maximize`로 전환되는 오버레이 전용 폴백 로직이 별도로 잘 분리되어 유지되고 있습니다.
+Final independent fix recheck: resolved. `setCanvasSize` retains the exact prior CSS viewport rectangle in both unchanged-backing and resized-backing paths. Independently exercised the production function through integer640x900 -> fractional640.5x900.5 ->700.25x950.75; camera remains fitted, including the second transition that exposed the original defect. Existing focused tests passed21/21 (full suite34/34 reported by worker). Requested the second transition be retained in the repository regression because integer-to-fractional alone would pass the previous code. No remaining confirmed implementation finding in this scope. Exact-rectangle reuse avoids widening scale tolerance and remains a minimal fix. Native installed-app interactive acceptance remains unverified; no claim of native runtime completion.
+
+Repository regression follow-up verified: the same fractional test now includes the second resize to700.25x950.75 and asserts fitted state. Independent targeted run passed1/1; the test enhancement request is closed.
+
+## 2026-10-04 scoped remote per-action removal review
+
+Independent executor `/root/policy_review` ran official AGY CLI `gemini-3.1-pro-high`, high effort, plan mode, provided source only/no commands or edits. Session `efc1f73c-98bc-45f8-8c2a-e081b42dc721` completed SUCCESS, exit0,68.45 seconds. Local snapshot/raw log/stderr: `%TEMP%/board-remote-clear-agy-snapshot.txt`, `board-remote-clear-agy.jsonl`, `board-remote-clear-agy-stderr.txt`. Scope limited to selected-action mapping removal and surrounding persistence/rendering/tests; prototype excluded.
+
+Actionable findings: none. False positives: none requiring triage. Fix/defer reasons: no correction required. Independent Codex inspected the same narrow scope and ran remote tests8/8. Native runtime, physical remote hardware and screen-reader announcement behavior were not validated by this source review. In particular AGY's aria-live assertion is a source-level expectation, not a screen-reader test result.
+
+### Raw reviewer response
+제공된 코드를 검토한 결과, 추가된 `clearActionMapping` 함수와 개별 동작 해제 버튼 논리에서 발견된 버그나 문제점은 없습니다. (No findings)
+
+요구 사항에 맞춰 모두 정상적으로 구현되었습니다:
+* **선택한 동작의 매핑만 제거:** `mappings.filter((item) => item.actionId !== actionId)`를 사용하여 선택한 대상만 안전하게 제거합니다.
+* **UI 반영 및 지속성 유지:** `setMappings()`를 호출함으로써 상태가 즉시 `localStorage`에 저장(`saveMappings`)되고 설정 창 UI가 갱신(`renderSettings`)됩니다.
+* **공유된 단축키 등 다른 동작 보존:** 필터링 기준이 `actionId`로만 제한되어 있으므로 동일한 키를 공유하는 다른 동작의 매핑은 그대로 보존됩니다.
+* **키 입력 대기 상태 취소 로직:** 사용자가 특정 동작에 대해 '키 입력 대기' 중일 때 '입력 해제'를 누르는 엣지 케이스에서도 `pendingAction`을 올바르게 초기화하여 버그를 방지합니다.
+* **접근성 지원:** DOM이 재생성된 직후에 `message.textContent`를 업데이트하므로 `aria-live` 속성을 통한 스크린 리더 안내도 의도대로 동작합니다.
+
+발견된 구체적이고 조치 가능한 버그가 없음을 확인했습니다.
+
+## 2026-10-04 unified settings and PDF zoom floor review
+
+Independent executor `/root/policy_review` used official AGY CLI, `gemini-3.1-pro-high`, high effort, plan mode, supplied source text/no tools or edits. Session `5c34cb77-c97e-4bf6-b1f7-cc30eedf70da` completed SUCCESS, exit0,82.36 seconds. Artifacts: `%TEMP%/board-unified-settings-agy-snapshot.txt`, `board-unified-settings-agy.jsonl`, `board-unified-settings-agy-stderr.txt`. Snapshot scoped to actual unified settings routing/remote/focus/CSS/PDF zoom functions and relevant tests; no unrelated prototype assessment.
+
+Actionable external findings: none after source verification. False positive: Drive button lacks an inline close wrapper. `openDriveDialog` itself calls `closeDocumentPopup()` before revealing the Drive dialog (current UI source line90), so adding another wrapper duplicates existing behavior. Snapshot included the call but not this helper body; explicit prompt context already said nested workflows close settings. Independent reviewer checked the actual helper and rejected the finding. No fix required.
+
+Independent Codex separately found the sub0.2 PDF-fit floor error that AGY missed; it remains pending worker recheck at this report entry. Coordinator clarified final implementation policy: OFF uses exact positive fit; ON uses min(0.2,fit.scale*0.2) so enabling never enlarges a tiny fitted PDF; blank retains0.2. The20% choice is an implementation default, not an explicit user-selected numeric requirement. This final numeric correction is outside the earlier AGY snapshot and will receive focused independent fix verification.
+
+Browser coordinator verified category routing, seven-tap developer entry, F9 sandbox changing trial page only, Tab/Shift+Tab, export dialog transition and checkbox persistence. Installed native interactive behavior remains unverified. No implementation edits or commit/push by reviewer.
+
+### Raw reviewer response
+**Actionable Scoped Bugs**
+
+1. **Drive Settings Dialog Fails to Close Main Settings (Scope Violation)**
+   In `UI full init` (`events-init.js` / `board-2.0.1-ui.js` equivalent block), the `driveSettingsButton` click listener violates the requirement that nested dialogs close the main settings before opening.
+
+   Unlike `pageManagerButton` and `exportAnnotatedPdfButton` which explicitly call `closeDocumentPopup()` before their respective actions, the Drive button directly calls `openDriveDialog` without closing the unified settings panel:
+   ```javascript
+   // Current
+   document.getElementById("driveSettingsButton").addEventListener("click", openDriveDialog);
+
+   // Expected
+   document.getElementById("driveSettingsButton").addEventListener("click", () => {
+     closeDocumentPopup();
+     openDriveDialog();
+   });
+   ```
+   This causes the `driveDialog` to open on top of or concurrently with the `documentPopup` overlay, and closing the Drive dialog will later incorrectly attempt to focus `openDocumentPopupButton` while the inert settings structure is in an invalid state.
+
+*(No other findings. All other scope requirements—including PDF minimum zoom logic clamping/anchoring, remote sandbox/mappings, keyboard isolation, and preserved functions—are correctly implemented in the provided code.)*
+Final numeric-fix recheck: resolved. Exact positive fit is now the OFF floor; ON uses min(0.2,fit.scale*0.2); blank/missing-fit fallback remains0.2. Independent targeted regression3/3 passed, including fit0.15 staying0.15 and opt-in floor0.03, preference persistence and modal Tab containment. Worker full suite41/41 passed. No remaining confirmed scoped Codex finding; AGY completed successfully with its sole finding rejected against the helper implementation. Final numeric correction was independently source/test reviewed after that AGY snapshot. Native installed-app acceptance remains unverified. No implementation edits or commit/push by reviewer.

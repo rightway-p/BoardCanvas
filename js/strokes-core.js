@@ -196,6 +196,12 @@ function scaleStoredStrokes(scaleX, scaleY) {
         page.pdfWorldSize.width *= scaleX;
         page.pdfWorldSize.height *= scaleY;
       }
+      if (page.pdfContentBounds) {
+        page.pdfContentBounds.x *= scaleX;
+        page.pdfContentBounds.y *= scaleY;
+        page.pdfContentBounds.width *= scaleX;
+        page.pdfContentBounds.height *= scaleY;
+      }
       if (page.worldSize) {
         page.worldSize.width *= scaleX;
         page.worldSize.height *= scaleY;

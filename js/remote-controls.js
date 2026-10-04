@@ -6,6 +6,11 @@
   let pendingAction = "";
   let testPage = 1;
   let dialog = null;
+  let settingsHost = null;
+  let settingsOpen = false;
+  let remoteSettingsActive = false;
+  let lastInput = { name: "미입력", code: "—" };
+  let focusActionId = "";
   let message = null;
   const settingsEvents = new WeakSet();
 
@@ -50,6 +55,7 @@
   function beginKeyRegistration(actionId) {
     if (!actionFor(actionId)) return false;
     pendingAction = actionId;
+    focusActionId = actionId;
     renderSettings();
     if (message) message.textContent = `${actionFor(actionId).label} 동작을 지정합니다. 실제 키를 눌러 주세요. Ctrl, Alt, Shift, Meta 조합도 가능합니다. Esc는 취소입니다.`;
     return true;
@@ -66,6 +72,16 @@
   }
 
   function getMappings() { return mappings.map((item) => ({ ...item })); }
+
+  function clearActionMapping(actionId) {
+    const action = actionFor(actionId);
+    if (!action || !mappings.some((item) => item.actionId === actionId)) return false;
+    if (pendingAction === actionId) pendingAction = "";
+    focusActionId = actionId;
+    setMappings(mappings.filter((item) => item.actionId !== actionId));
+    if (message) message.textContent = `${action.label}: 키 설정을 해제했습니다.`;
+    return true;
+  }
 
   function registerKey(chosen) {
     const actionId = pendingAction;
@@ -89,10 +105,13 @@
   }
 
   function renderTestPage() {
-    if (!dialog) return;
-    const label = dialog.querySelector("[data-remote-test-page]");
-    if (label) label.textContent = `시험 페이지 ${testPage} / 5`;
-    dialog.querySelectorAll("[data-remote-test-number]").forEach((button) => {
+    const root = settingsHost || dialog;
+    if (!root) return;
+    const label = root.querySelector("[data-remote-test-page]");
+    if (label) label.textContent = String(testPage);
+    const summary = root.querySelector("[data-remote-test-summary]");
+    if (summary) summary.textContent = `시험 페이지 ${testPage} / 5`;
+    root.querySelectorAll("[data-remote-test-number]").forEach((button) => {
       button.setAttribute("aria-current", String(Number(button.dataset.remoteTestNumber) === testPage));
     });
   }
@@ -106,9 +125,12 @@
   }
 
   function handleKeyEvent(event) {
+    const developerSettings = document.getElementById("developerSettings");
+    if (developerSettings && !developerSettings.hidden) return false;
     const pressed = chord(event);
     const code = pressed.code;
-    const inSettings = Boolean(dialog && dialog.open);
+    const inSettings = settingsOpen && remoteSettingsActive;
+    if (settingsOpen && !remoteSettingsActive) return false;
     if (pendingAction) {
       if (event.repeat) { consume(event); return true; }
       consume(event);
@@ -121,19 +143,29 @@
     }
 
     if (inSettings && code === "Escape" && !pressed.ctrlKey && !pressed.altKey && !pressed.metaKey && !pressed.shiftKey) {
+      if (settingsHost) return false;
       consume(event);
       closeSettings();
       return true;
     }
 
     if (inSettings) {
+      lastInput = { name: String(event.key || pressed.code || "Unknown"), code: pressed.code || "Unknown" };
+      const root = settingsHost || dialog;
+      if (root) {
+        const name = root.querySelector("[data-remote-last-name]");
+        const codeValue = root.querySelector("[data-remote-last-code]");
+        if (name) name.textContent = lastInput.name;
+        if (codeValue) codeValue.textContent = lastInput.code;
+      }
       if (!code || event.repeat || isEditable(event.target) || isModifierCode(code)) {
-        settingsEvents.add(event);
+        if (code !== "Tab") settingsEvents.add(event);
         return false;
       }
+      if (code === "Tab") return false;
       const matches = mappings.filter((item) => sameChord(item, pressed));
       if (!matches.length) {
-        settingsEvents.add(event);
+        if (code !== "Tab") settingsEvents.add(event);
         return false;
       }
       runTestActions(matches.map((item) => actionFor(item.actionId)).filter(Boolean));
@@ -166,8 +198,18 @@
     return element;
   }
 
-  function openSettings() {
+  function openSettings(host) {
     if (!document) return;
+    if (host) {
+      settingsHost = host;
+      settingsOpen = true;
+      remoteSettingsActive = true;
+      renderSettings();
+      return;
+    }
+    settingsHost = null;
+    settingsOpen = true;
+    remoteSettingsActive = true;
     if (!dialog) {
       dialog = document.createElement("dialog");
       dialog.setAttribute("aria-labelledby", "remoteSettingsTitle");
@@ -182,6 +224,16 @@
   function closeSettings() {
     if (dialog && dialog.open) dialog.close();
     pendingAction = "";
+    settingsHost = null;
+    settingsOpen = false;
+    remoteSettingsActive = false;
+  }
+
+  function setSettingsContext(context = {}) {
+    settingsOpen = Boolean(context.open);
+    remoteSettingsActive = settingsOpen && Boolean(context.remote);
+    if (!settingsOpen || !remoteSettingsActive) pendingAction = "";
+    if (!settingsOpen) settingsHost = null;
   }
 
   function isolateSettingsKey(event) {
@@ -189,8 +241,9 @@
   }
 
   function renderSettings() {
-    if (!dialog) return;
-    dialog.replaceChildren();
+    const root = settingsHost || dialog;
+    if (!root) return;
+    root.replaceChildren();
     const heading = document.createElement("h2");
     heading.id = "remoteSettingsTitle";
     heading.textContent = "원격 입력 설정";
@@ -199,39 +252,86 @@
     const close = button("닫기", closeSettings, { "aria-label": "원격 입력 설정 닫기" });
     const header = document.createElement("header");
     header.append(heading, close);
-    dialog.append(header, intro);
+    if (!settingsHost) root.append(header, intro);
+    else {
+      intro.className = "remote-settings-intro";
+      root.append(intro);
+    }
 
+    const actionsContainer = document.createElement("div");
+    actionsContainer.className = settingsHost ? "remote-action-list" : "";
     for (const action of actions) {
       const row = document.createElement("div");
+      row.className = "remote-action-row";
+      if (pendingAction === action.id) row.classList.add("is-pending");
       const label = document.createElement("span");
+      label.className = "remote-action-name";
       label.textContent = action.label;
       const assigned = mappings.find((item) => item.actionId === action.id);
       const key = document.createElement("code");
+      key.className = "remote-key-badge";
       key.textContent = keyName(assigned);
-      const register = button(pendingAction === action.id ? "키 입력 대기 중…" : "키 지정", () => beginKeyRegistration(action.id));
+      const register = button(pendingAction === action.id ? "키 입력 대기 중…" : "키 지정", () => beginKeyRegistration(action.id), { "data-remote-register": action.id });
       row.append(label, key, register);
-      Object.assign(row.style, { display: "grid", gridTemplateColumns: "1fr auto auto", gap: "10px", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #ddd" });
-      dialog.appendChild(row);
+      if (assigned) row.appendChild(button("입력 해제", () => clearActionMapping(action.id), { "aria-label": `${action.label} 입력 해제` }));
+      Object.assign(row.style, { display: "grid", gridTemplateColumns: assigned ? "1fr auto auto auto" : "1fr auto auto", gap: "10px", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #ddd" });
+      actionsContainer.appendChild(row);
     }
+    if (settingsHost) {
+      const layout = document.createElement("div");
+      layout.className = "remote-settings-layout";
+      const side = document.createElement("aside");
+      side.className = "remote-settings-side";
+      const previewLabel = document.createElement("strong");
+      previewLabel.textContent = "최근 입력";
+      const inputName = document.createElement("span");
+      inputName.dataset.remoteLastName = "";
+      inputName.textContent = lastInput.name;
+      const inputCode = document.createElement("code");
+      inputCode.dataset.remoteLastCode = "";
+      inputCode.textContent = lastInput.code;
+      side.append(previewLabel, inputName, inputCode);
+      layout.append(actionsContainer, side);
+      root.appendChild(layout);
+    } else root.appendChild(actionsContainer);
 
     const test = document.createElement("section");
+    test.className = "remote-test-card";
     const testTitle = document.createElement("h3");
-    testTitle.textContent = "시험 입력 · 설정 창이 열린 동안 실제 작업은 실행되지 않습니다";
+    testTitle.textContent = "시험 입력";
     const page = document.createElement("p");
+    page.className = "remote-test-page-number";
     page.dataset.remoteTestPage = "";
+    const pageSummary = document.createElement("span");
+    pageSummary.className = "remote-test-page-summary";
+    pageSummary.dataset.remoteTestSummary = "";
+    const previewCaption = document.createElement("span");
+    previewCaption.className = "remote-test-caption";
+    previewCaption.textContent = "이 설정 창 안에서만 동작합니다";
     const pageButtons = document.createElement("div");
+    pageButtons.className = "remote-test-page-buttons";
     for (let number = 1; number <= 5; number += 1) {
       pageButtons.appendChild(button(String(number), () => { testPage = number; renderTestPage(); }, { "data-remote-test-number": String(number) }));
     }
-    Object.assign(test.style, { marginTop: "18px", padding: "12px", background: "#f1f4f7", borderRadius: "8px" });
-    test.append(testTitle, page, pageButtons);
-    dialog.appendChild(test);
+    test.append(testTitle, previewCaption, page, pageSummary, pageButtons);
+    if (settingsHost) {
+      const side = root.querySelector(".remote-settings-side");
+      side.appendChild(test);
+    } else root.appendChild(test);
 
     message = document.createElement("p");
     message.setAttribute("role", "status");
     message.setAttribute("aria-live", "polite");
-    dialog.appendChild(message);
+    message.className = "remote-settings-status";
+    message.textContent = "시험 입력을 확인합니다. 실제 보드 동작은 실행되지 않습니다.";
+    if (settingsHost) root.querySelector(".remote-settings-side").appendChild(message);
+    else root.appendChild(message);
     renderTestPage();
+    if (focusActionId) {
+      const focusTarget = [...root.querySelectorAll("[data-remote-register]")].find((element) => element.dataset.remoteRegister === focusActionId);
+      if (focusTarget) focusTarget.focus();
+      focusActionId = "";
+    }
   }
 
   function configure(options = {}) {
@@ -245,7 +345,7 @@
 
   function getTestPage() { return testPage; }
 
-  window.BoardRemote = { configure, openSettings, closeSettings, beginKeyRegistration, getMappings, setMappings, handleKeyEvent, getTestPage };
+  window.BoardRemote = { configure, openSettings, closeSettings, setSettingsContext, beginKeyRegistration, getMappings, setMappings, handleKeyEvent, getTestPage };
   window.addEventListener("keydown", handleKeyEvent, true);
   document.addEventListener("keydown", isolateSettingsKey);
 })();

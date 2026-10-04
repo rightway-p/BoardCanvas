@@ -1,3 +1,5 @@
+let lastCanvasCssViewport = null;
+
 function updateToolUI() {
   const mouseModeActive = overlayMousePassthrough;
   penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen" && !panMode);
@@ -169,7 +171,16 @@ async function renderPdfPage(pageNumber) {
     if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage && !boardPage.pdfWorldSize) {
       boardPage.pdfWorldSize = { width: maxWidth, height: maxHeight };
     }
-    renderBoardBackground();
+    if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage) {
+      boardPage.pdfContentBounds = {
+        x: (maxWidth - viewport.width) / 2,
+        y: (maxHeight - viewport.height) / 2,
+        width: viewport.width,
+        height: viewport.height
+      };
+    }
+    const zoomAdjusted = typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
+    if (!zoomAdjusted) renderBoardBackground();
     updatePdfNavigationUI();
     setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
   } catch (error) {
@@ -500,7 +511,10 @@ function setCanvasSize() {
   const previousBackgroundHeight = backgroundCanvas.height;
 
   const previousPixelRatio = pixelRatio;
+  const previousRect = lastCanvasCssViewport || { width: previousWidth / previousPixelRatio, height: previousHeight / previousPixelRatio };
   pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
+  const wasFitted = typeof isCurrentBoardPageFitted === "function"
+    && isCurrentBoardPageFitted(previousRect, previousPixelRatio);
   const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
   const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
 
@@ -509,7 +523,13 @@ function setCanvasSize() {
     && nextHeight === previousHeight
     && nextWidth === previousBackgroundWidth
     && nextHeight === previousBackgroundHeight
+    && pixelRatio === previousPixelRatio
   ) {
+    lastCanvasCssViewport = { width: rect.width, height: rect.height };
+    if (typeof refitBoardPageAfterViewportResize === "function") {
+      refitBoardPageAfterViewportResize(previousRect, previousPixelRatio);
+    }
+    if (typeof enforcePdfZoomMinimum === "function") enforcePdfZoomMinimum();
     return;
   }
 
@@ -533,6 +553,13 @@ function setCanvasSize() {
 
   renderBoardBackground();
   schedulePdfPageRerender();
+  lastCanvasCssViewport = { width: rect.width, height: rect.height };
+  if (previousPixelRatio !== pixelRatio) {
+    if (wasFitted && typeof fitCurrentBoardPage === "function") fitCurrentBoardPage(false);
+  } else if (typeof refitBoardPageAfterViewportResize === "function") {
+    refitBoardPageAfterViewportResize(previousRect, previousPixelRatio);
+  }
+  if (typeof enforcePdfZoomMinimum === "function") enforcePdfZoomMinimum();
 }
 
 function getCanvasPoint(event) {

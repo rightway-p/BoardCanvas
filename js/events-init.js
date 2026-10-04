@@ -5,8 +5,13 @@ penToolButton.addEventListener("click", async () => {
       restoreFocus: true
     });
   }
-  tool = "pen";
   closeEraserToolPopup();
+  if (tool === "eraser" || tool === "strokeEraser") {
+    setPanMode(false);
+    tool = "pen";
+  } else {
+    setPanMode(!panMode);
+  }
   updateToolUI();
 });
 
@@ -24,6 +29,7 @@ eraserToolButton.addEventListener("click", async (event) => {
     return;
   }
 
+  setPanMode(false);
   tool = eraserMode;
   closeEraserToolPopup();
   updateToolUI();
@@ -36,6 +42,7 @@ pixelEraserModeButton.addEventListener("click", async () => {
       restoreFocus: true
     });
   }
+  setPanMode(false);
   applyEraserMode("eraser", true);
   tool = eraserMode;
   closeEraserToolPopup();
@@ -49,6 +56,7 @@ strokeEraserModeButton.addEventListener("click", async () => {
       restoreFocus: true
     });
   }
+  setPanMode(false);
   applyEraserMode("strokeEraser", true);
   tool = eraserMode;
   closeEraserToolPopup();
@@ -88,8 +96,12 @@ openDocumentPopupButton.addEventListener("click", (event) => {
     closeBoardColorPopup();
     closeEraserToolPopup();
     closePresetHelp();
-    placeToolbarPopup(openDocumentPopupButton, documentPopup);
+    selectSettingsCategory("documents");
   }
+});
+document.getElementById("closeSettingsButton").addEventListener("click", closeDocumentPopup);
+documentPopup.addEventListener("click", (event) => {
+  if (event.target === documentPopup) closeDocumentPopup();
 });
 
 documentLoadButton.addEventListener("click", requestDocumentFileSelection);
@@ -102,10 +114,6 @@ openBoardColorPopupButton.addEventListener("click", (event) => {
   event.stopPropagation();
   setBoardColorPopupOpen(!isBoardColorPopupOpen());
   placeToolbarPopup(openBoardColorPopupButton, boardColorPopup);
-});
-
-documentPopup.addEventListener("pointerdown", (event) => {
-  event.stopPropagation();
 });
 
 documentPopup.addEventListener("click", (event) => {
@@ -247,12 +255,29 @@ document.addEventListener("pointerdown", (event) => {
   if (isPresetHelpOpen() && !presetHelp.contains(event.target)) {
     closePresetHelp();
   }
-  if (!document.getElementById("currentPenEditor").contains(event.target)) {
-    currentPenPopup.classList.add("is-hidden");
-    currentPenButton.setAttribute("aria-expanded", "false");
-  }
 });
 document.addEventListener("keydown", (event) => {
+  const developerSettings = document.getElementById("developerSettings");
+  if (developerSettings && !developerSettings.hidden) return;
+  if (isDocumentPopupOpen()) {
+    if (event.key === "Tab") {
+      const focusable = [...documentPopup.querySelectorAll("button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+        .filter((element) => !element.hidden && !element.closest("[hidden], .is-hidden")
+          && element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (!first) { event.preventDefault(); document.getElementById("closeSettingsButton").focus(); return; }
+      if (!focusable.includes(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); return; }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); return; }
+    }
+    const key = String(event.key || "").toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && ["z", "y"].includes(key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    if (["F7", "F8", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+  }
   const editableTarget = isEditableEventTarget(event.target);
   const hasMeta = event.ctrlKey || event.metaKey;
 
@@ -302,8 +327,11 @@ document.addEventListener("keydown", (event) => {
   }
 
   if (event.key === "Escape") {
+    if (typeof pageManagerOpen !== "undefined" && pageManagerOpen) { event.preventDefault(); openPageManager(false); return; }
     if (isDocumentPopupOpen()) {
+      event.preventDefault();
       closeDocumentPopup();
+      return;
     }
     if (isBoardColorPopupOpen()) {
       closeBoardColorPopup();

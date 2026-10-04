@@ -11,19 +11,24 @@ function setup() {
   const calls = [];
   const documentListeners = {};
   const documentChildren = [];
+  const modalState = { developerSettings: null };
   function element(tagName) {
     const handlers = {};
+    const attributes = {};
     return {
       tagName: tagName.toUpperCase(), style: {}, dataset: {}, children: [], open: false,
-      setAttribute() {}, addEventListener(name, callback) { handlers[name] = callback; },
+      classList: { add() {}, remove() {}, contains() { return false; } },
+      setAttribute(name, value) { attributes[name] = value; }, getAttribute(name) { return attributes[name]; },
+      addEventListener(name, callback) { handlers[name] = callback; }, click() { if (handlers.click) handlers.click(); },
       append(...items) { this.children.push(...items); }, appendChild(item) { this.children.push(item); },
       replaceChildren(...items) { this.children = [...items]; },
-      querySelector() { return null; }, querySelectorAll() { return []; },
+      querySelector(selector) { return findDescendant(this, (child) => matchesSelector(child, selector)); },
+      querySelectorAll(selector) { return allDescendants(this).filter((child) => matchesSelector(child, selector)); },
       showModal() { this.open = true; }, close() { this.open = false; if (handlers.close) handlers.close(); }
     };
   }
   const context = {
-    document: { createElement: element, addEventListener: (name, callback) => { documentListeners[name] = callback; }, body: { appendChild: (child) => documentChildren.push(child) } },
+    document: { createElement: element, getElementById: (id) => id === "developerSettings" ? modalState.developerSettings : null, addEventListener: (name, callback) => { documentListeners[name] = callback; }, body: { appendChild: (child) => documentChildren.push(child) } },
     window: {
       localStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
       addEventListener: (name, callback, capture) => { listeners[name] = { callback, capture }; }
@@ -39,7 +44,7 @@ function setup() {
     ],
     showHint: (message) => hints.push(message)
   });
-  return { remote: context.window.BoardRemote, listeners, documentListeners, documentChildren, storage, hints, calls };
+  return { remote: context.window.BoardRemote, listeners, documentListeners, documentChildren, storage, hints, calls, setDeveloperSettingsOpen: (open) => { modalState.developerSettings = open ? { hidden: false } : null; } };
 }
 
 function key(code, options = {}) {
@@ -95,11 +100,50 @@ test("settings keys stay isolated from board actions; modal test actions are sim
   assert.equal(remote.handleKeyEvent(navigation), false);
   documentListeners.keydown(navigation);
   assert.equal(navigation.prevented, undefined);
-  assert.equal(navigation.stopped, true);
+  assert.notEqual(navigation.stopped, true);
   assert.deepEqual(calls, []);
   remote.closeSettings();
   remote.handleKeyEvent(key("ArrowRight"));
   assert.deepEqual(calls, ["nextPage"]);
+});
+
+test("developer settings modal blocks remote shortcuts without consuming input", () => {
+  const { remote, calls, setDeveloperSettingsOpen } = setup();
+  remote.setMappings([{ actionId: "nextPage", code: "ArrowRight" }]);
+  setDeveloperSettingsOpen(true);
+  const input = key("ArrowRight");
+  assert.equal(remote.handleKeyEvent(input), false);
+  assert.notEqual(input.stopped, true);
+  assert.deepEqual(calls, []);
+});
+
+test("unified settings host renders remote controls inline and suppresses real actions outside remote tab", () => {
+  const { remote, calls, documentChildren } = setup();
+  remote.setMappings([{ actionId: "nextPage", code: "ArrowRight" }]);
+  const host = elementForTest("section");
+  remote.setSettingsContext({ open: true, remote: false });
+  const outsideRemote = key("ArrowRight");
+  assert.equal(remote.handleKeyEvent(outsideRemote), false);
+  assert.deepEqual(calls, []);
+
+  remote.openSettings(host);
+  assert.equal(documentChildren.length, 0);
+  assert.ok(host.children.some((child) => child.textContent?.includes("동작마다 키를 지정")));
+  assert.deepEqual(JSON.parse(JSON.stringify(remote.getMappings())), [
+    { actionId: "nextPage", code: "ArrowRight", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false }
+  ]);
+  const remoteTest = key("ArrowRight");
+  assert.equal(remote.handleKeyEvent(remoteTest), true);
+  assert.equal(remote.getTestPage(), 2);
+  assert.deepEqual(calls, []);
+  const tabNavigation = key("Tab");
+  assert.equal(remote.handleKeyEvent(tabNavigation), false);
+  assert.notEqual(tabNavigation.stopped, true);
+
+  remote.setSettingsContext({ open: true, remote: false });
+  assert.equal(remote.handleKeyEvent(key("ArrowRight")), false);
+  assert.deepEqual(calls, []);
+  remote.closeSettings();
 });
 
 test("modifier chords register and match consistently; modifier-only assignments are rejected", () => {
@@ -135,8 +179,37 @@ test("settings display the full assigned chord", () => {
   remote.setMappings([{ actionId: "nextPage", code: "KeyN", ctrlKey: true, altKey: true, shiftKey: true }]);
   remote.openSettings();
   const dialog = documentChildren[0];
-  const assignedKey = dialog.children.find((child) => child.children && child.children.some((part) => part.textContent === "Next page"))?.children[1];
+  const assignedKey = findDescendant(dialog, (child) => child.children?.some((part) => part.textContent === "Next page"))?.children[1];
   assert.equal(assignedKey.textContent, "Ctrl+Alt+Shift+KeyN");
+});
+
+test("assigned mapping can be released for one action while duplicate chord mappings remain", () => {
+  const { remote, documentChildren, storage } = setup();
+  remote.setMappings([
+    { actionId: "previousPage", code: "ArrowRight" },
+    { actionId: "nextPage", code: "ArrowRight" },
+    { actionId: "undoInk", code: "KeyZ", ctrlKey: true }
+  ]);
+  remote.openSettings();
+  const dialog = documentChildren[0];
+  const rowFor = (label) => findDescendant(dialog, (child) => child.className === "remote-action-row" && child.children[0]?.textContent === label);
+  const previousRow = rowFor("Previous page");
+  const nextRow = rowFor("Next page");
+  const undoRow = rowFor("Undo");
+  assert.equal(previousRow.children.length, 4);
+  assert.equal(previousRow.children[3].textContent, "입력 해제");
+  assert.equal(previousRow.children[3].getAttribute("aria-label"), "Previous page 입력 해제");
+  assert.equal(undoRow.children.length, 4);
+
+  previousRow.children[3].click();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(remote.getMappings())), [
+    { actionId: "nextPage", code: "ArrowRight", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false },
+    { actionId: "undoInk", code: "KeyZ", ctrlKey: true, altKey: false, metaKey: false, shiftKey: false }
+  ]);
+  assert.deepEqual(JSON.parse(storage.get("board.remote.mappings.v1")), JSON.parse(JSON.stringify(remote.getMappings())));
+  assert.equal(rowFor("Previous page").children.length, 3);
+  assert.equal(rowFor("Next page").children.length, 4);
 });
 
 function setupWithStorage(storage) {
@@ -154,4 +227,33 @@ function setupWithStorage(storage) {
     { id: "undoInk", label: "Undo", run: () => calls.push("undoInk") }
   ] });
   return { remote: context.window.BoardRemote, calls, listeners };
+}
+
+function elementForTest(tagName) {
+  return { tagName: tagName.toUpperCase(), style: {}, dataset: {}, children: [], classList: { add() {}, remove() {}, contains() { return false; } },
+    setAttribute() {}, addEventListener() {}, append(...items) { this.children.push(...items); },
+    appendChild(item) { this.children.push(item); }, replaceChildren(...items) { this.children = [...items]; },
+    querySelector(selector) { return findDescendant(this, (child) => matchesSelector(child, selector)); },
+    querySelectorAll(selector) { return allDescendants(this).filter((child) => matchesSelector(child, selector)); } };
+}
+
+function findDescendant(root, predicate) {
+  for (const child of root.children || []) {
+    if (predicate(child)) return child;
+    const nested = findDescendant(child, predicate);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function allDescendants(root) {
+  return (root.children || []).flatMap((child) => [child, ...allDescendants(child)]);
+}
+
+function matchesSelector(element, selector) {
+  if (selector.startsWith(".")) return String(element.className || "").split(/\s+/).includes(selector.slice(1));
+  if (selector === "[data-remote-test-page]") return Object.hasOwn(element.dataset || {}, "remoteTestPage");
+  if (selector === "[data-remote-last-name]") return Object.hasOwn(element.dataset || {}, "remoteLastName");
+  if (selector === "[data-remote-last-code]") return Object.hasOwn(element.dataset || {}, "remoteLastCode");
+  return false;
 }

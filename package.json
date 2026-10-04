@@ -5,7 +5,7 @@
   "description": "BoardCanvas desktop wrapper using Tauri",
   "scripts": {
     "web:build": "node scripts/prepare-dist.js",
-    "test": "node --test tests/board-state.test.js tests/board-export.test.js tests/remote-controls.test.js",
+    "test": "node --test tests/board-state.test.js tests/board-export.test.js tests/remote-controls.test.js tests/runtime-fullscreen.test.js",
     "test:board-state": "node --test tests/board-state.test.js",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
