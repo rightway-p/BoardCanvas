@@ -6,7 +6,7 @@ const test = require("node:test");
 const PDFLib = require("pdf-lib");
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jv9sAAAAASUVORK5CYII=", "base64");
-const context2d = { save() {}, restore() {}, translate() {}, fillRect() {} };
+const context2d = { save() {}, restore() {}, translate() {}, fillRect(x, y, width, height) { (this.fills ||= []).push({ color: this.fillStyle, x, y, width, height }); } };
 const document = { createElement: () => ({
   width: 0, height: 0,
   getContext: () => context2d,
@@ -56,6 +56,22 @@ test("without a source PDF, every blank page is retained", async () => {
   });
   const pdf = await PDFLib.PDFDocument.load(bytes);
   assert.equal(pdf.getPageCount(), 2);
+});
+
+test("blank pages preserve outside ink while PDF pages keep the default crop", async () => {
+  context2d.fills = [];
+  const { bytes } = await sourcePdf();
+  const pages = [
+    { kind: "pdf", pdfPage: 1, pdfWorldSize: { width: 700, height: 900 }, strokes: [] },
+    { kind: "blank", worldSize: { width: 800, height: 1100 }, background: "#ffffff", strokes: [{ widthPx: 10, points: [{ x: -100, y: -100 }] }] }
+  ];
+  const exportedBytes = await exportSequence({ PDFLib, pdfBytes: bytes, pages, includeBlankPages: true, drawStrokePath: renderStroke });
+  const exported = await PDFLib.PDFDocument.load(exportedBytes);
+  assert.deepEqual(exported.getPage(0).getSize(), { width: 612, height: 792 });
+  const blankSize = exported.getPage(1).getSize();
+  assert.ok(blankSize.width > 612);
+  assert.ok(blankSize.height > 792);
+  assert.ok(context2d.fills.some(({ color, x, y, width, height }) => color === "#ffffff" && x < 0 && y < 0 && width > 800 && height > 1100));
 });
 
 test("outside-ink bounds include stroke radii while the default crop stays at the page frame", () => {

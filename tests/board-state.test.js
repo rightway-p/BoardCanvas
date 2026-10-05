@@ -643,10 +643,11 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
     window: { setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, clearInterval() {}, localStorage: { setItem(k, v) { this[k] = v; }, getItem(k) { return this[k] || null; } } },
     document: { getElementById: (id) => settingsNodes[id] || null, querySelector: () => null, createElement: makeNode, addEventListener() {}, removeEventListener() {} },
     BoardState: boardState,
+    setBoardInteractionMode(mode) { vm.runInContext(`boardInteractionMode="${mode}"`, settingsContext); },
     hideDevTouch() {},
   };
   vm.createContext(settingsContext);
-  vm.runInContext(`const DEV_SETTINGS_KEY="test"; const DEV_DEFAULTS={zoomCueDelayMs:500,zoomCueShrinkMs:1500,presetHoldMs:3000,movementThreshold:12,zoomSensitivity:.008,showTouchOverlay:true}; let devSettings={...DEV_DEFAULTS}; let devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}; let devSettingsReturnFocus={isConnected:true,focus(){this.focused=true;}}; let devMode=true; let devTicker=null; let zoomCueTimer=null; let developerCalibration=null; let developerCalibrationFrame=0; let developerCalibrationArmed=false; let developerCalibrationRecords=[]; ${settingsFns}`, settingsContext);
+  vm.runInContext(`let boardInteractionMode="single"; const DEV_SETTINGS_KEY="test"; const DEV_DEFAULTS={zoomCueDelayMs:500,zoomCueShrinkMs:1500,presetHoldMs:3000,movementThreshold:12,zoomSensitivity:.008,showTouchOverlay:true}; let devSettings={...DEV_DEFAULTS}; let devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}; let devSettingsReturnFocus={isConnected:true,focus(){this.focused=true;}}; let devMode=true; let devTicker=null; let zoomCueTimer=null; let developerCalibration=null; let developerCalibrationFrame=0; let developerCalibrationArmed=false; let developerCalibrationRecords=[]; ${settingsFns}`, settingsContext);
   const previewHandlers = {}, preview = {
     addEventListener(name, fn) { previewHandlers[name] = fn; },
     getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 100 }),
@@ -706,9 +707,19 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
   assert.equal(settingsNodes.developerSettings.hidden, true);
   assert.equal(vm.runInContext("devSettingsDraft", settingsContext), null);
   vm.runInContext("devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}", settingsContext);
+  vm.runInContext("developerSettingsTab=\"multi\"", settingsContext);
   settingsContext.saveDeveloperSettings();
   assert.equal(JSON.parse(settingsContext.window.localStorage.test).zoomCueDelayMs, 900);
   assert.equal(vm.runInContext("devSettings.zoomCueShrinkMs", settingsContext), 2100);
+  assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "multi");
+  assert.match(source, /developerSettingsTab = boardInteractionMode;/);
+  vm.runInContext("boardInteractionMode=\"multi\"", settingsContext);
+  vm.runInContext("developerSettingsTab=\"single\"", settingsContext);
+  settingsContext.discardDeveloperSettings();
+  assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "multi");
+  vm.runInContext("developerSettingsTab=\"single\"; devSettingsDraft={...devSettings}", settingsContext);
+  settingsContext.saveDeveloperSettings();
+  assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "single");
   assert.doesNotMatch(source, /getElementById\("appInfoButton"\)\.addEventListener/);
   assert.match(source, /zoomCueDelayMs: 500, zoomCueShrinkMs: 1500/);
 });

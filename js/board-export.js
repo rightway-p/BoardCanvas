@@ -46,7 +46,7 @@
     context.translate(-bounds.minX, -bounds.minY);
     if (background) {
       context.fillStyle = background;
-      context.fillRect(0, 0, frame.width, frame.height);
+      context.fillRect(bounds.minX, bounds.minY, width, height);
     }
     for (const stroke of strokes || []) drawStrokePath(stroke, context);
     context.restore();
@@ -133,7 +133,7 @@
         if (!blankWorldSize) throw new Error("This blank page has no saved drawing frame. Reopen the work file and try again.");
         const blankFrame = blankDimensions(blankWorldSize);
         const frame = { width: blankFrame.frameWidth, height: blankFrame.frameHeight };
-        const bounds = pageBounds(frame, entry.strokes, Boolean(options.includeOutsideInk));
+        const bounds = pageBounds(frame, entry.strokes, true);
         const scaleX = blankFrame.width / frame.width, scaleY = blankFrame.height / frame.height;
         const page = output.addPage(new Array((bounds.maxX - bounds.minX) * scaleX, (bounds.maxY - bounds.minY) * scaleY));
         const canvas = canvasFor(bounds, frame, entry.strokes, drawStrokePath, entry.background || "#ffffff");
