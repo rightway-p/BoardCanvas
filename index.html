@@ -71,6 +71,15 @@
         </svg>
       </button>
 
+      <div id="pageManager" class="page-manager is-hidden" role="dialog" aria-label="페이지 관리">
+        <header><strong>페이지 관리</strong><button id="closePageManager" type="button" aria-label="닫기">×</button></header><div id="pageList" class="page-list"></div><footer><button id="addBlankPage" type="button">현재 뒤에 칠판 추가</button><button id="deleteBlankPage" type="button">칠판 삭제</button><button id="pageStructureUndo" type="button" aria-label="페이지 변경 취소">↶</button><button id="pageStructureRedo" type="button" aria-label="페이지 변경 다시 실행">↷</button></footer>
+      </div>
+      <button id="undoButton" class="tool-button icon-tool-button" type="button" aria-label="실행 취소" title="실행 취소 (Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"></path><path d="M4 12h8a6 6 0 1 1 0 12"></path></svg></button>
+      <button id="redoButton" class="tool-button icon-tool-button" type="button" aria-label="다시 실행" title="다시 실행 (Ctrl/Cmd+Y 또는 Shift+Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"></path><path d="M20 12h-8a6 6 0 1 0 0 12"></path></svg></button>
+      <div id="currentPenEditor" class="current-pen-editor"><label class="control" for="penColor"><span>현재 펜 색</span><input id="penColor" type="color" value="#111111" /></label><label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label></div>
+      <div class="preset-group" aria-label="펜 프리셋"><span class="preset-title">펜 프리셋</span><div id="penPresets" class="preset-list"></div></div>
+      <div id="presetHelp" class="preset-help-wrap"><button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" title="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button><div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭) 저장</div></div>
+      <span id="modeLabel" class="mode-label">모드: 펜</span>
       <div id="documentEditor" class="document-editor">
         <button id="appInfoButton" class="tool-button icon-tool-button app-info-button" type="button" aria-label="설정" title="설정" aria-expanded="false" aria-controls="documentPopup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
         <div id="documentPopup" class="settings-overlay is-hidden" role="dialog" aria-modal="true" aria-label="설정">
@@ -103,15 +112,7 @@
           </section>
         </div>
       </div>
-      <div id="pageManager" class="page-manager is-hidden" role="dialog" aria-label="페이지 관리">
-        <header><strong>페이지 관리</strong><button id="closePageManager" type="button" aria-label="닫기">×</button></header><div id="pageList" class="page-list"></div><footer><button id="addBlankPage" type="button">현재 뒤에 칠판 추가</button><button id="deleteBlankPage" type="button">칠판 삭제</button><button id="pageStructureUndo" type="button" aria-label="페이지 변경 취소">↶</button><button id="pageStructureRedo" type="button" aria-label="페이지 변경 다시 실행">↷</button></footer>
-      </div>
-      <button id="undoButton" class="tool-button icon-tool-button" type="button" aria-label="실행 취소" title="실행 취소 (Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"></path><path d="M4 12h8a6 6 0 1 1 0 12"></path></svg></button>
-      <button id="redoButton" class="tool-button icon-tool-button" type="button" aria-label="다시 실행" title="다시 실행 (Ctrl/Cmd+Y 또는 Shift+Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"></path><path d="M20 12h-8a6 6 0 1 0 0 12"></path></svg></button>
-      <div id="currentPenEditor" class="current-pen-editor"><label class="control" for="penColor"><span>현재 펜 색</span><input id="penColor" type="color" value="#111111" /></label><label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label></div>
-      <div class="preset-group" aria-label="펜 프리셋"><span class="preset-title">펜 프리셋</span><div id="penPresets" class="preset-list"></div></div>
-      <div id="presetHelp" class="preset-help-wrap"><button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button><div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭) 저장</div></div>
-      <span id="modeLabel" class="mode-label">모드: 펜</span>
+
     </header>
 
     <main class="board-wrapper">
@@ -137,17 +138,17 @@
   <script src="./js/domain/board-state.js"></script>
   <script src="./js/globals.js?v=2.0.1-settings-sidebar-r1"></script>
   <script src="./js/runtime-overlay.js?v=2.0.1-fullscreen-state-r1"></script>
-  <script src="./js/session-pdf-toolbar.js?v=2.0.1-settings-sidebar-r2"></script>
+  <script src="./js/session-pdf-toolbar.js?v=2.0.1-reopen-view-r1"></script>
   <script src="./js/presets-utils.js"></script>
   <script src="./js/presets-ui.js"></script>
   <script src="./js/strokes-core.js?v=2.0.1-pdf-content-fit-r1"></script>
   <script src="./js/strokes-history.js"></script>
   <script src="./js/stroke-eraser.js"></script>
   <script src="./js/board-export.js?v=2.0.1-blank-ink-r2"></script>
-  <script src="./js/render-doc-draw.js?v=2.0.1-pdf-content-fit-r3"></script>
+  <script src="./js/render-doc-draw.js?v=2.0.1-reopen-view-r1"></script>
   <script src="./js/remote-controls.js?v=2.0.1-remote-clear-r3"></script>
   <script src="./js/events-init.js?v=2.0.1-settings-sidebar-r2"></script>
-  <script src="./js/board-2.0.1-ui.js?v=2.0.1-touch-calibration-r3"></script>
+  <script src="./js/board-2.0.1-ui.js?v=2.0.1-drive-login-r1"></script>
 </body>
 
 </html>

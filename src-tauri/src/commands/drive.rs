@@ -14,6 +14,7 @@ use std::{
 use tauri::{AppHandle, State};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener, sync::Mutex as AsyncMutex, time};
 use url::Url;
+use super::credentials::{persist_refresh_token, refresh_token_target, CredentialStore, SystemCredentialStore};
 
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
 const OAUTH_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -27,6 +28,8 @@ const MAX_SOURCE_PDF_BYTES: u64 = 256 * 1024 * 1024;
 #[derive(Default)]
 pub struct DriveState {
   token: Mutex<Option<TokenSet>>,
+  auth_warning: Mutex<Option<String>>,
+  auth_operation: AsyncMutex<()>,
   active_hash: Mutex<Option<String>>,
   cache_lock: AsyncMutex<()>,
   auth_generation: AtomicU64,
@@ -43,6 +46,15 @@ struct TokenSet {
 #[serde(rename_all = "camelCase")]
 pub struct AuthResult {
   connected: bool,
+  warning: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveAuthStatus {
+  connected: bool,
+  message: Option<String>,
+  warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +90,11 @@ struct TokenResponse {
 }
 
 #[derive(Deserialize)]
+struct OAuthErrorResponse {
+  error: Option<String>,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DriveFileResponse {
   id: String,
@@ -103,11 +120,6 @@ pub struct CacheStatus {
   default_limit_bytes: u64,
 }
 
-#[derive(Serialize)]
-pub struct UpdaterStatus {
-  configured: bool,
-}
-
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CacheSettings {
@@ -116,10 +128,8 @@ struct CacheSettings {
 
 #[tauri::command]
 pub async fn drive_authenticate(state: State<'_, DriveState>) -> Result<AuthResult, String> {
-  let client_id = option_env!("BOARD_GOOGLE_OAUTH_CLIENT_ID")
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .ok_or_else(|| "Google Drive is not configured. Set BOARD_GOOGLE_OAUTH_CLIENT_ID to a Google OAuth Desktop client ID, then rebuild.".to_string())?;
+  let _auth_operation = state.auth_operation.lock().await;
+  let client_id = oauth_client_id()?;
   let generation = begin_sign_in(&state)?;
   let client = http_client()?;
   let verifier = random_string(64);
@@ -154,12 +164,77 @@ pub async fn drive_authenticate(state: State<'_, DriveState>) -> Result<AuthResu
     .send().await.map_err(|error| format!("Google token exchange failed: {error}"))?
     .error_for_status().map_err(|error| format!("Google token exchange failed: {error}"))?
     .json().await.map_err(|error| format!("Google token response was invalid: {error}"))?;
+  let refresh_token = tokens.refresh_token;
+  let target = refresh_token_target(client_id);
+  let store = SystemCredentialStore;
+  let warning = match refresh_token.as_deref() {
+    Some(refresh_token) => persist_refresh_token(&store, &target, refresh_token),
+    None => {
+      store.delete(&target).err().or_else(|| Some("Google did not provide a saved sign-in. You may need to log in again after restarting BoardCanvas.".to_string()))
+    }
+  };
   install_tokens(&state, generation, TokenSet {
     access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
+    refresh_token,
     expires_at: token_expiry(tokens.expires_in),
   })?;
-  Ok(AuthResult { connected: true })
+  *state.auth_warning.lock().map_err(|_| "Google sign-in status is unavailable".to_string())? = warning.clone();
+  Ok(AuthResult { connected: true, warning })
+}
+
+#[tauri::command]
+pub async fn drive_get_auth_status(state: State<'_, DriveState>) -> Result<DriveAuthStatus, String> {
+  let _auth_operation = state.auth_operation.lock().await;
+  let client_id = match oauth_client_id() {
+    Ok(client_id) => client_id,
+    Err(message) => return Ok(DriveAuthStatus { connected: false, message: Some(message), warning: None }),
+  };
+  if state.token.lock().map_err(|_| "Google sign-in state is unavailable".to_string())?.as_ref().is_some_and(|tokens| tokens.expires_at > Instant::now()) {
+    let warning = state.auth_warning.lock().map_err(|_| "Google sign-in status is unavailable".to_string())?.clone();
+    return Ok(DriveAuthStatus { connected: true, message: None, warning });
+  }
+
+  let target = refresh_token_target(client_id);
+  let store = SystemCredentialStore;
+  let memory_tokens = state.token.lock().map_err(|_| "Google sign-in state is unavailable".to_string())?.clone();
+  let stored_refresh_token = match memory_tokens.as_ref().and_then(|tokens| tokens.refresh_token.clone()) {
+    Some(refresh_token) => Some(refresh_token),
+    None => store.load(&target)?,
+  };
+  let Some(refresh_token) = stored_refresh_token else {
+    return Ok(DriveAuthStatus { connected: false, message: None, warning: None });
+  };
+  let generation = begin_sign_in(&state)?;
+  install_tokens(&state, generation, TokenSet {
+    access_token: String::new(),
+    refresh_token: Some(refresh_token.clone()),
+    expires_at: Instant::now(),
+  })?;
+  let refreshed = match refresh_access_token(client_id, &refresh_token).await {
+    Ok(tokens) => tokens,
+    Err(RefreshError::InvalidGrant) => {
+      invalidate_tokens(&state)?;
+      let message = match store.delete(&target) {
+        Ok(()) => "저장된 Google 로그인이 만료되었습니다. 다시 로그인해 주세요.".to_string(),
+        Err(error) => format!("저장된 Google 로그인이 만료되었습니다. 로그인을 다시 진행해 주세요. {error}"),
+      };
+      return Ok(DriveAuthStatus { connected: false, message: Some(message), warning: None });
+    }
+    Err(RefreshError::Other(message)) => return Err(message),
+  };
+  let next_refresh_token = refreshed.refresh_token.unwrap_or_else(|| refresh_token.clone());
+  let warning = if next_refresh_token != refresh_token {
+    persist_refresh_token(&store, &target, &next_refresh_token)
+  } else {
+    None
+  };
+  install_tokens(&state, generation, TokenSet {
+    access_token: refreshed.access_token,
+    refresh_token: Some(next_refresh_token),
+    expires_at: token_expiry(refreshed.expires_in),
+  })?;
+  *state.auth_warning.lock().map_err(|_| "Google sign-in status is unavailable".to_string())? = warning.clone();
+  Ok(DriveAuthStatus { connected: true, message: None, warning })
 }
 
 #[tauri::command]
@@ -297,22 +372,12 @@ pub async fn drive_set_cache_limit(app: AppHandle, state: State<'_, DriveState>,
 }
 
 #[tauri::command]
-pub fn drive_sign_out(state: State<'_, DriveState>) -> Result<(), String> {
+pub async fn drive_sign_out(state: State<'_, DriveState>) -> Result<(), String> {
+  let _auth_operation = state.auth_operation.lock().await;
+  if let Ok(client_id) = oauth_client_id() {
+    SystemCredentialStore.delete(&refresh_token_target(client_id))?;
+  }
   invalidate_tokens(&state)
-}
-
-#[tauri::command]
-pub fn get_updater_status(app: AppHandle) -> UpdaterStatus {
-  let updater = &app.config().tauri.updater;
-  let has_release_endpoint = updater.endpoints.as_ref().is_some_and(|endpoints| {
-    !endpoints.is_empty() && endpoints.iter().all(|endpoint| endpoint.0.scheme() == "https" && endpoint.0.host_str().is_some())
-  });
-  UpdaterStatus { configured: updater.active && has_release_endpoint && has_public_key(&updater.pubkey) }
-}
-
-fn has_public_key(value: &str) -> bool {
-  let value = value.trim();
-  !value.is_empty() && !value.contains("YOUR_UPDATER_SIGNATURE_PUBKEY_HERE")
 }
 
 fn install_tokens(state: &DriveState, generation: u64, tokens: TokenSet) -> Result<(), String> {
@@ -333,10 +398,12 @@ fn invalidate_tokens(state: &DriveState) -> Result<(), String> {
   let mut auth = state.token.lock().map_err(|_| "Google sign-in state is unavailable".to_string())?;
   state.auth_generation.fetch_add(1, Ordering::SeqCst);
   *auth = None;
+  *state.auth_warning.lock().map_err(|_| "Google sign-in status is unavailable".to_string())? = None;
   Ok(())
 }
 
 async fn access_token(state: &DriveState) -> Result<String, String> {
+  let _auth_operation = state.auth_operation.lock().await;
   let (tokens, generation) = {
     let auth = state.token.lock().map_err(|_| "Google sign-in state is unavailable".to_string())?;
     (auth.clone(), state.auth_generation.load(Ordering::SeqCst))
@@ -344,23 +411,51 @@ async fn access_token(state: &DriveState) -> Result<String, String> {
   let tokens = tokens.ok_or_else(|| "Connect Google Drive before listing or downloading PDFs.".to_string())?;
   if tokens.expires_at > Instant::now() { return Ok(tokens.access_token); }
   let refresh_token = tokens.refresh_token.clone().ok_or_else(|| "Google Drive sign-in expired. Connect again.".to_string())?;
-  let response: TokenResponse = http_client()?.post(OAUTH_TOKEN)
-    .form(&[("client_id", oauth_client_id()?), ("refresh_token", refresh_token.as_str()), ("grant_type", "refresh_token")])
-    .send().await.map_err(|error| format!("Google token refresh failed: {error}"))?
-    .error_for_status().map_err(|error| format!("Google token refresh failed: {error}"))?
-    .json().await.map_err(|error| format!("Google token response was invalid: {error}"))?;
+  let client_id = oauth_client_id()?;
+  let response = match refresh_access_token(client_id, &refresh_token).await {
+    Ok(response) => response,
+    Err(RefreshError::InvalidGrant) => {
+      invalidate_tokens(state)?;
+      if let Ok(client_id) = oauth_client_id() { SystemCredentialStore.delete(&refresh_token_target(client_id))?; }
+      return Err("Google Drive sign-in expired. Sign in again.".to_string());
+    }
+    Err(RefreshError::Other(message)) => return Err(message),
+  };
   let access = response.access_token.clone();
-  let mut auth = state.token.lock().map_err(|_| "Google sign-in state is unavailable".to_string())?;
-  if state.auth_generation.load(Ordering::SeqCst) != generation
-    || !auth.as_ref().and_then(|current| current.refresh_token.as_deref()).is_some_and(|current| current == refresh_token) {
-    return Err("Google Drive was disconnected while refreshing the sign-in. Connect again.".to_string());
-  }
-  *auth = Some(TokenSet {
+  let refreshed_token = response.refresh_token.unwrap_or_else(|| refresh_token.clone());
+  let target = refresh_token_target(client_id);
+  let warning = if refreshed_token != refresh_token { persist_refresh_token(&SystemCredentialStore, &target, &refreshed_token) } else { None };
+  install_tokens(state, generation, TokenSet {
     access_token: response.access_token,
-    refresh_token: response.refresh_token.or(tokens.refresh_token),
+    refresh_token: Some(refreshed_token),
     expires_at: token_expiry(response.expires_in),
-  });
+  })?;
+  if warning.is_some() {
+    *state.auth_warning.lock().map_err(|_| "Google sign-in status is unavailable".to_string())? = warning;
+  }
   Ok(access)
+}
+
+enum RefreshError {
+  InvalidGrant,
+  Other(String),
+}
+
+async fn refresh_access_token(client_id: &str, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
+  let response = http_client().map_err(|_| RefreshError::Other("Google token refresh could not be started.".to_string()))?
+    .post(OAUTH_TOKEN)
+    .form(&[("client_id", client_id), ("refresh_token", refresh_token), ("grant_type", "refresh_token")])
+    .send().await.map_err(|_| RefreshError::Other("Google token refresh failed. Check your connection and try again.".to_string()))?;
+  let status = response.status();
+  if !status.is_success() {
+    let code = response.json::<OAuthErrorResponse>().await.ok().and_then(|body| body.error);
+    return if code.as_deref() == Some("invalid_grant") {
+      Err(RefreshError::InvalidGrant)
+    } else {
+      Err(RefreshError::Other(format!("Google token refresh failed (HTTP {status}).")))
+    };
+  }
+  response.json().await.map_err(|_| RefreshError::Other("Google token response was invalid.".to_string()))
 }
 
 fn oauth_client_id() -> Result<&'static str, String> {
@@ -612,13 +707,6 @@ mod tests {
     assert!(!partial.exists());
     assert!(!settings_partial.exists());
     fs::remove_dir_all(root).unwrap();
-  }
-
-  #[test]
-  fn updater_public_key_presence_rejects_empty_and_placeholder() {
-    assert!(has_public_key("untrusted comment: minisign public key\nRWQ-valid-format"));
-    assert!(!has_public_key("YOUR_UPDATER_SIGNATURE_PUBKEY_HERE"));
-    assert!(!has_public_key(""));
   }
 
   #[test]

@@ -296,6 +296,113 @@ test("PDF fit follows rendered page bounds through portrait and landscape resize
   }
 });
 
+test("session recovery drops saved camera while preserving page content and current page", () => {
+  const source = fs.readFileSync(require.resolve("../js/session-pdf-toolbar.js"), "utf8");
+  const parser = source.slice(source.indexOf("function parseSessionSnapshot"), source.indexOf("async function persistSessionState"));
+  const context = {
+    SESSION_STORAGE_VERSION: 1,
+    normalizeStrokeCollection: (value) => value || [],
+    normalizeHexColor: (value) => value,
+  };
+  vm.createContext(context);
+  vm.runInContext(parser, context);
+  const snapshot = context.parseSessionSnapshot({
+    version: 1,
+    hasPdf: true,
+    pdfPageNumber: 2,
+    boardPageIndex: 1,
+    boardStrokes: [{ id: "outside-ink" }],
+    pdfPages: [[2, [{ id: "pdf-ink" }]]],
+    pageSequence: [
+      { kind: "blank", background: "#123456", worldSize: { width: 900, height: 700 }, strokes: [{ id: "blank-ink" }], view: { x: 80, y: 90, scale: 1.7 } },
+      { kind: "pdf", pdfPage: 2, pdfWorldSize: { width: 1200, height: 1600 }, pdfContentBounds: { x: 40, y: 80, width: 1120, height: 1440 }, strokes: [{ id: "page-ink" }], view: { x: -300, y: -500, scale: 2.2 } },
+    ],
+  });
+  assert.equal(snapshot.boardPageIndex, 1);
+  assert.equal(snapshot.pageSequence[0].view, null);
+  assert.equal(snapshot.pageSequence[1].view, null);
+  assert.deepEqual({ ...snapshot.pageSequence[1].pdfWorldSize }, { width: 1200, height: 1600 });
+  assert.deepEqual({ ...snapshot.pageSequence[1].pdfContentBounds }, { x: 40, y: 80, width: 1120, height: 1440 });
+  assert.equal(snapshot.pageSequence[1].strokes[0].id, "page-ink");
+  assert.equal(snapshot.boardStrokes[0].id, "outside-ink");
+});
+
+test("work file opening ignores saved views and initially fits PDF pages without changing page data", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const opener = source.slice(source.indexOf("async function openBoardWorkFile"), source.indexOf("function updateBoardViewport"));
+  let context;
+  context = {
+    BoardState: boardState,
+    window: { pdfjsLib: { getDocument: () => ({ promise: Promise.resolve({ numPages: 1, destroy: async () => {} }) }) } },
+    atob: (value) => Buffer.from(value, "base64").toString("binary"),
+    File: class TestFile {},
+    configurePdfWorker: async () => true,
+    loadPdfFromFile: async () => true,
+    normalizeHexColor: (value) => value,
+    normalizeStrokeCollection: (value) => value || [],
+    pdfDocument: null,
+    backgroundCanvas: { width: 800, height: 600 },
+    boardPageSequence: [],
+    boardPageIndex: 0,
+    pageStructureUndo: [],
+    pageStructureRedo: [],
+    clearAllStrokeHistory() {},
+    clearActiveDrivePin: async () => true,
+    renderBoardPage(index, resetView) { context.rendered = { index, resetView, page: context.boardPageSequence[index] }; },
+    closeDocumentPopup() {},
+    scheduleSessionAutosave() {},
+    requestBoardWorkReplacement: (apply) => apply(),
+  };
+  vm.createContext(context);
+  vm.runInContext(opener, context);
+  const state = {
+    format: "boardcanvas-work", version: 1, pageIndex: 1, pdfBase64: "AA==",
+    pages: [
+      { id: "blank", kind: "blank", background: "#abcdef", worldSize: { width: 900, height: 700 }, strokes: [{ id: "blank-ink" }], view: { x: 80, y: 90, scale: 1.7 } },
+      { id: "pdf", kind: "pdf", pdfPage: 1, pdfWorldSize: { width: 1200, height: 1600 }, pdfContentBounds: { x: 40, y: 80, width: 1120, height: 1440 }, strokes: [{ id: "outside-ink" }], view: { x: -300, y: -500, scale: 2.2 } },
+    ],
+  };
+  await context.openBoardWorkFile({ size: 1, text: async () => JSON.stringify(state) });
+  assert.equal(context.boardPageIndex, 1);
+  assert.equal(context.rendered.index, 1);
+  assert.equal(context.boardPageSequence[0].view, null);
+  assert.equal(context.boardPageSequence[1].view, null);
+  assert.deepEqual({ ...context.boardPageSequence[1].pdfWorldSize }, { width: 1200, height: 1600 });
+  assert.deepEqual({ ...context.boardPageSequence[1].pdfContentBounds }, { x: 40, y: 80, width: 1120, height: 1440 });
+  assert.equal(context.boardPageSequence[1].strokes[0].id, "outside-ink");
+
+  const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  let fits = 0;
+  let renderCount = 0;
+  const pdfPage = context.boardPageSequence[1];
+  const renderContext = {
+    boardPageSequence: [pdfPage], boardPageIndex: 0, boardCamera: {}, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 },
+    pdfRenderToken: 0, pdfPageNumber: 0, pdfPageRasterCanvas: null, boardPagePendingInitialFit: null,
+    BoardState: { pageForRender: (pages, index) => ({ page: pages[index], index }) },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, restoreCurrentStrokeState() {}, renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    renderPdfPage: async () => { renderCount += 1; if (renderCount > 1) { renderContext.pdfPageRasterCanvas = {}; renderContext.fitBoardPageAfterPdfRender(pdfPage); } },
+    fitCurrentBoardPage() { fits += 1; renderContext.boardCamera = { x: -20, y: -40, scale: 0.5 }; pdfPage.view = { ...renderContext.boardCamera }; },
+    currentBoardPage: () => pdfPage,
+  };
+  vm.createContext(renderContext);
+  const fitHookSource = source.slice(source.indexOf("let boardPagePendingInitialFit"), source.indexOf("function finishActiveBoardInput"));
+  vm.runInContext(fitHookSource, renderContext);
+  vm.runInContext(renderSource, renderContext);
+  await renderContext.renderBoardPage(0);
+  assert.equal(fits, 0); // first render was canceled by viewport setup
+  pdfPage.view = { x: 11, y: 20, scale: 1 }; // resize enforcement can save a temporary camera before rerender
+  await renderContext.renderBoardPage(0);
+  assert.equal(fits, 1);
+  assert.deepEqual({ ...renderContext.boardCamera }, { x: -20, y: -40, scale: 0.5 });
+  assert.equal(pdfPage.strokes[0].id, "outside-ink");
+  pdfPage.view = { x: 18, y: -27, scale: 1.4 };
+  await renderContext.renderBoardPage(0);
+  assert.deepEqual({ ...renderContext.boardCamera }, pdfPage.view);
+  assert.equal(fits, 1);
+  const pdfRenderer = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
+  assert.match(pdfRenderer, /fitBoardPageAfterPdfRender\(boardPage\)/);
+});
+
 test("PDF minimum zoom follows fit after viewport changes and keeps the center world point", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
   const fitSource = source.slice(source.indexOf("function boardPageFitCamera"), source.indexOf("function boardWorkSnapshot"));

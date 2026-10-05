@@ -17,13 +17,14 @@ fn main() {
       commands::window::set_window_click_through,
       commands::overlay::verify_webview_background_alpha,
       commands::drive::drive_authenticate,
+      commands::drive::drive_get_auth_status,
       commands::drive::drive_list_pdfs,
       commands::drive::drive_download_pdf,
       commands::drive::drive_set_active_pdf,
       commands::drive::drive_get_cache_status,
       commands::drive::drive_set_cache_limit,
       commands::drive::drive_sign_out,
-      commands::drive::get_updater_status,
+      commands::update::get_updater_status,
       commands::files::save_document_file
     ])
     .run(tauri::generate_context!())

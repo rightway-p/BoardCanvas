@@ -510,9 +510,7 @@ function parseSessionSnapshot(rawValue) {
           kind: page.kind,
           ...(page.kind === "pdf" ? { pdfPage: Math.max(1, Math.floor(Number(page.pdfPage) || 1)) } : { background: normalizeHexColor(page.background) || "#ffffff" }),
           strokes: normalizeStrokeCollection(page.strokes),
-          view: page.view && Number.isFinite(Number(page.view.scale))
-            ? { x: Number(page.view.x) || 0, y: Number(page.view.y) || 0, scale: Math.max(0.2, Math.min(6, Number(page.view.scale))) }
-            : null,
+          view: null,
           pdfWorldSize: page.kind === "pdf" && page.pdfWorldSize && Number.isFinite(Number(page.pdfWorldSize.width)) && Number.isFinite(Number(page.pdfWorldSize.height))
             ? { width: Math.max(1, Number(page.pdfWorldSize.width)), height: Math.max(1, Number(page.pdfWorldSize.height)) }
             : null,
@@ -633,11 +631,12 @@ async function restoreSessionState() {
     if (snapshot.pageSequence && snapshot.pageSequence.length) {
       const active = boardPageSequence[boardPageIndex];
       boardPageIndex = active ? boardPageIndex : 0;
-      renderBoardPage(boardPageIndex);
+      await renderBoardPage(boardPageIndex);
     } else {
       const pageIndex = boardPageSequence.findIndex((page) => page.kind === "pdf" && page.pdfPage === targetPage);
       boardPageIndex = Math.max(0, pageIndex);
       await renderPdfPage(targetPage);
+      fitCurrentBoardPage(false);
     }
     setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
     clearAllStrokeHistory();

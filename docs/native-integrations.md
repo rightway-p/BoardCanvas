@@ -4,13 +4,14 @@
 
 The desktop OAuth client ID is a public deployment setting compiled into the app. In PowerShell, set `BOARD_GOOGLE_OAUTH_CLIENT_ID` to a Google OAuth client whose application type is **Desktop app**, then run the desktop build from the same shell. If it is missing, sign-in reports that exact configuration step; the app does not simulate a connection. Enable the Google Drive API and finish the OAuth consent setup for the requested `drive.readonly` scope before distributing the app.
 
-Google sign-in opens the system browser, listens on a random `127.0.0.1` port for at most five minutes, validates OAuth `state`, and exchanges the code with PKCE. Access and refresh tokens live only in process memory and are cleared by `drive_sign_out` or app exit. A restart requires another sign-in.
+Google sign-in opens the system browser, listens on a random `127.0.0.1` port for at most five minutes, validates OAuth `state`, and exchanges the code with PKCE. Access tokens stay in process memory. Windows saves only the refresh token in a user-scoped Credential Manager entry keyed to the BoardCanvas app identity and OAuth client ID; opening Drive silently refreshes it before loading PDFs. `drive_sign_out` clears memory and deletes only that app-owned entry. If Credential Manager cannot save a refresh token, the current session remains connected and the UI warns that another login may be needed after restart. No token is written to browser storage or a plain file.
 
 The Rust IPC contract is:
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `drive_authenticate` | none | `{ connected: true }` |
+| `drive_authenticate` | none | `{ connected: true, warning? }` |
+| `drive_get_auth_status` | none | `{ connected, message?, warning? }` |
 | `drive_list_pdfs` | `{ pageToken?: string }` | `{ files, nextPageToken? }` |
 | `drive_download_pdf` | `{ fileId }` | `{ fileId, name, size, pdfBase64 }` |
 | `drive_set_active_pdf` | `{ fileId: string \| null }` | `null` |
@@ -25,6 +26,8 @@ Work and PDF exports use the native save dialog in desktop builds. The decoded I
 
 ## Desktop updater
 
-Updater support remains disabled in `tauri.conf.json`. The read-only `get_updater_status` command reports `{ configured: false }` until the config has `active: true`, a real HTTPS release endpoint, and a non-placeholder Minisign public key. Tauri 1 requires the Cargo `updater` feature to match `active: true`, so both must be enabled together after those deployment values exist. Tauri validates the key when an update is checked and needs the matching private signing key to build signed artifacts. None of those values were provided, so the app does not advertise or simulate updates. Once the publisher supplies them, keep installation behind the user's choice and include the updater bundle target in release builds. Do not place the private key or its password in the repository.
+Updater support remains disabled in `tauri.conf.json`. The read-only `get_updater_status` command in `commands/update.rs` reports whether the updater config has `active: true`, an HTTPS release endpoint, and a non-placeholder Minisign public key. It also reports `recoveryReady: false`: there is no verified previous installer or recovery path, so the UI blocks installation even if updater configuration is supplied. GitHub Releases in `rightway-p/BoardCanvas` is the approved release destination, but no signed release assets or feed are available yet. Tauri 1 requires the Cargo `updater` feature to match `active: true`; Tauri validates the public key when checking and needs the matching private signing key to build signed artifacts. Keep updater support disabled until the publisher supplies and verifies those values and recovery readiness is implemented. Do not place the private key or its password in the repository.
+
+When recovery is ready, install still requires the user's choice and a successful session persistence step. On Windows, Tauri 1's NSIS update exits the app to run the installer; the user is told to launch the app again after installation. The settings action remains available after a declined or failed check so the user can retry manually.
 
 References: [Google OAuth for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app), [Google Drive files.list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list), [Tauri 1 updater](https://v1.tauri.app/v1/guides/distribution/updater/).

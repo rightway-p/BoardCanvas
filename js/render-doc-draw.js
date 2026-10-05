@@ -179,7 +179,8 @@ async function renderPdfPage(pageNumber) {
         height: viewport.height
       };
     }
-    const zoomAdjusted = typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
+    const initiallyFitted = typeof fitBoardPageAfterPdfRender === "function" && fitBoardPageAfterPdfRender(boardPage);
+    const zoomAdjusted = !initiallyFitted && typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
     if (!zoomAdjusted) renderBoardBackground();
     updatePdfNavigationUI();
     setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
