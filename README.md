@@ -132,6 +132,10 @@ Artifacts:
 
 The codebase is being refactored into modules for better maintainability. See [MODULES.md](MODULES.md) for details.
 
+### Touch input and developer calibration
+
+Screen settings select either single-touch or two-finger input for pan mode; pen drawing remains unchanged. Developer settings keep the single-touch timing trial and two-finger calibration in separate tabs. Calibration defaults are provisional, measured records stay in memory only until the dialog closes, and applying a result changes only the unsaved settings draft until Save is chosen.
+
 ### Quick module overview:
 
 ```javascript

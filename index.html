@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Web Board</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.1-settings-final-r4" />
+  <link rel="stylesheet" href="styles.css?v=2.0.1-touch-calibration-r2" />
 </head>
 
 <body>
@@ -93,7 +93,7 @@
                 <section data-settings-panel="screen" hidden><h3>화면</h3>
                   <div id="boardColorEditor" class="control board-color-editor"><span>배경색</span><button id="openBoardColorPopup" class="board-color-trigger" type="button" aria-label="배경색 설정" aria-expanded="false" aria-controls="boardColorPopup"><span id="boardColorPreview" class="board-color-preview" aria-hidden="true"></span></button>
                     <div id="boardColorPopup" class="board-color-popover is-hidden" role="dialog" aria-label="배경색 설정"><label class="control board-color-control" for="boardColor"><span>배경색</span><input id="boardColor" type="color" value="#ffffff" /></label><div class="preset-group board-preset-group" aria-label="배경색 프리셋"><span class="preset-title">프리셋</span><div id="boardPresets" class="preset-list"></div></div></div>
-                  </div><button id="fullscreenToggle" class="document-action-button" type="button">전체화면 전환</button><button id="fitPageButton" class="document-action-button" type="button">페이지 맞춤</button>
+                  </div><label class="settings-checkbox" for="boardInteractionMode">터치 동작 방식<select id="boardInteractionMode" aria-label="터치 동작 방식"><option value="single">단일 터치</option><option value="multi">두 손가락 멀티터치</option></select></label><p class="interaction-mode-hint">펜 그리기는 그대로 유지되며, 패닝 모드에서 선택한 터치 방식 하나만 사용합니다.</p><button id="fullscreenToggle" class="document-action-button" type="button">전체화면 전환</button><button id="fitPageButton" class="document-action-button" type="button">페이지 맞춤</button>
                   <label class="settings-checkbox"><input id="allowPdfZoomBelowFit" type="checkbox">PDF 맞춤보다 작게 축소 허용</label>
                 </section>
                 <section data-settings-panel="remote" hidden><h3>리모컨</h3><div id="remoteSettingsContent"></div></section>
@@ -147,7 +147,7 @@
   <script src="./js/render-doc-draw.js?v=2.0.1-pdf-content-fit-r3"></script>
   <script src="./js/remote-controls.js?v=2.0.1-remote-clear-r3"></script>
   <script src="./js/events-init.js?v=2.0.1-settings-sidebar-r2"></script>
-  <script src="./js/board-2.0.1-ui.js?v=2.0.1-settings-sidebar-r2"></script>
+  <script src="./js/board-2.0.1-ui.js?v=2.0.1-touch-calibration-r2"></script>
 </body>
 
 </html>

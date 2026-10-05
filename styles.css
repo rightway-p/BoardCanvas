@@ -1000,11 +1000,16 @@ body {
 .dev-touch-mark { position: absolute; z-index: 6; min-width: calc(var(--dev-radius, 12px) * 2); min-height: calc(var(--dev-radius, 12px) * 2); border: 2px solid #e53935; border-radius: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; color: #c62828; background: #fff8; font-size: 9px; pointer-events: none; }
 .page-manager, .developer-settings { position: fixed; z-index: 80; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: auto; background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px #0003; padding: 16px; }
 .page-manager header, .developer-settings header, .page-manager footer, .developer-settings footer { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-.developer-settings { width: min(680px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; display: grid; gap: 14px; }
+.developer-settings { width: min(840px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; display: grid; gap: 14px; }
 .developer-settings[hidden] { display: none; }
 .developer-settings header { position: sticky; top: -16px; z-index: 1; padding: 4px 0 10px; background: white; font-size: 17px; }
 .developer-settings .dev-close { width: 32px; min-height: 32px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); font-size: 22px; line-height: 1; }
 .dev-settings-body { display: grid; align-content: start; gap: 16px; overflow-y: auto; min-height: 0; padding: 0 2px; }
+.dev-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); }
+.dev-tabs button { min-height: 38px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); }
+.dev-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 650; }
+.dev-tab-panel[hidden] { display: none; }
+.dev-tab-panel { display: grid; align-content: start; gap: 12px; }
 .dev-timing, .dev-other { display: grid; gap: 10px; }
 .dev-timing { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
 .dev-timing h3 { margin: 0; font-size: 14px; }
@@ -1014,13 +1019,39 @@ body {
 .dev-total { margin: 0; text-align: right; font-weight: 600; font-size: 13px; }
 .dev-guidance { margin: 0; color: #475569; font-size: 12px; line-height: 1.45; }
 .dev-test-area { position: relative; display: grid; place-items: center; min-height: 104px; overflow: hidden; border: 1px dashed #94a3b8; border-radius: 10px; background: white; color: #64748b; font-size: 13px; touch-action: none; user-select: none; }
+.dev-calibration { display: grid; align-content: start; gap: 8px; }
+.dev-calibration-layout { display: grid; grid-template-columns: minmax(190px, 220px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.dev-calibration-controls, .dev-calibration-main { display: grid; align-content: start; gap: 10px; min-width: 0; }
+.dev-calibration h3, .dev-calibration h4 { margin: 0; font-size: 14px; }
+.dev-calibration-note, .dev-calibration-hint, .dev-calibration-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.dev-calibration-fields { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.dev-calibration-fields label { display: grid; grid-template-columns: minmax(0, 1fr) 58px; align-items: center; gap: 4px 8px; margin: 0; }
+.dev-calibration-fields input[type="number"] { width: 100%; min-height: 34px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.dev-calibration-fields input[type="range"] { grid-column: 1; width: 100%; }
+.dev-calibration-fields output { grid-column: 2; grid-row: 2; }
+.dev-calibration-intent { display: grid !important; grid-template-columns: 1fr !important; align-items: start; margin: 0 !important; white-space: normal; }
+.dev-calibration select { min-height: 36px; border: 1px solid var(--line); border-radius: 7px; background: white; }
+.dev-calibration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dev-calibration-actions button, .dev-calibration-records button { width: fit-content; min-height: 36px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); }
+.dev-calibration-area { position: relative; min-height: 320px; overflow: hidden; border: 1px dashed #94a3b8; border-radius: 9px; background: #fff; touch-action: none; user-select: none; }
+.dev-calibration-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; pointer-events: none; }
+.dev-calibration-anchor, .dev-calibration-point { position: absolute; z-index: 1; display: grid; place-items: center; transform: translate(-50%, -50%); pointer-events: none; font-size: 10px; }
+.dev-calibration-anchor { width: 16px; height: 16px; border: 1px dashed #e53935; border-radius: 50%; color: #e53935; white-space: nowrap; }
+.dev-calibration-point { width: 28px; height: 28px; border: 2px solid var(--accent); border-radius: 50%; background: #2f6ee422; color: var(--accent); }
+.dev-calibration-readout { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 4px 10px; margin: 0; font-size: 12px; }
+.dev-calibration-readout dt { color: var(--muted); }
+.dev-calibration-readout dd { min-width: 0; margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.dev-calibration-records { display: grid; gap: 6px; max-height: 108px; overflow-y: auto; margin: 0; padding-left: 20px; }
+.dev-calibration-records li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 11px; }
+.dev-calibration-records p { margin: 0; font-variant-numeric: tabular-nums; }
+.dev-calibration-records button { min-height: 32px; font-size: 11px; }
 .developer-settings-backdrop { position: fixed; inset: 0; z-index: 79; background: #0004; }
 .developer-settings-backdrop[hidden] { display: none; }
 .developer-settings footer { position: sticky; bottom: -16px; padding-top: 10px; background: white; }
 .developer-settings footer button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); }
 .developer-settings footer [data-dev-save] { border-color: #1976d2; background: #1976d2; color: white; }
 @media (min-width: 700px) {
-  .dev-settings-body { grid-template-columns: 1.15fr 1fr; align-items: start; }
+  .dev-settings-body { grid-template-columns: 1fr; align-items: start; }
   .dev-timing { grid-template-columns: 1fr 1fr; }
   .dev-timing h3 { grid-column: 1 / -1; }
   .dev-timing label { grid-column: 1; }
@@ -1029,6 +1060,13 @@ body {
   .dev-test-area { grid-column: 2; grid-row: 3 / span 2; min-height: 130px; }
   .dev-other { grid-template-columns: 1fr 1fr; }
   .dev-other label:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 520px) {
+  .developer-settings { width: calc(100vw - 16px); max-height: calc(100vh - 16px); padding: 10px; gap: 10px; }
+  .dev-calibration-layout { grid-template-columns: 1fr; }
+  .dev-calibration-area { min-height: 280px; }
+  .dev-calibration-readout { grid-template-columns: max-content 1fr; }
+  .dev-calibration-records li { grid-template-columns: 1fr; }
 }
 .page-list { display: grid; gap: 6px; margin: 10px 0; }
 .page-entry { text-align: left; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: white; }
@@ -1070,6 +1108,8 @@ body {
 .settings-nav button:hover { background: #ffffffb8; }
 .settings-nav button[aria-current="page"] { color: var(--pen-blue); background: #2f6ee41a; font-weight: 650; }
 .settings-checkbox { display: flex; align-items: center; gap: var(--space-3); min-height: var(--settings-control-size); padding: 0 var(--space-3); border-radius: var(--radius-card); font-size: var(--type-body); cursor: pointer; }
+.settings-checkbox select { min-height: 36px; margin-left: auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); }
+.interaction-mode-hint { margin: -8px 0 var(--space-3); color: var(--muted); font-size: var(--type-label); line-height: 1.4; }
 .settings-checkbox input { width: 18px; height: 18px; margin: 0; accent-color: var(--pen-blue); }
 .settings-content { min-width: 0; overflow: auto; padding: var(--space-5); scrollbar-gutter: stable; }
 .settings-content [data-settings-panel][hidden] { display: none !important; }

@@ -1,9 +1,20 @@
 const DEV_SETTINGS_KEY = "board.v2.dev-settings.v1";
 const PDF_ZOOM_SETTING_KEY = "board.settings.allowPdfZoomBelowFit.v1";
-const DEV_DEFAULTS = { zoomCueDelayMs: 500, zoomCueShrinkMs: 1500, presetHoldMs: 3000, movementThreshold: 12, zoomSensitivity: 0.008, showTouchOverlay: true };
+const BOARD_INTERACTION_MODE_KEY = "board.settings.interactionMode.v1";
+const DEV_DEFAULTS = { zoomCueDelayMs: 500, zoomCueShrinkMs: 1500, presetHoldMs: 3000, movementThreshold: 12, zoomSensitivity: 0.008, panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40, showTouchOverlay: true };
 let devSettings = { ...DEV_DEFAULTS };
 let devSettingsDraft = null;
 let devSettingsReturnFocus = null;
+let developerSettingsTab = "single";
+let developerCalibrationIntent = "pan";
+let developerCalibration = null;
+let developerCalibrationFrame = 0;
+let developerCalibrationArmed = false;
+let developerCalibrationRecords = [];
+let boardInteractionMode = "single";
+let multiTouchGesture = null;
+let multiTouchSuppressed = new Set();
+let multiTouchFrame = 0;
 let devMode = false;
 let devTouch = null;
 let devTouchTimer = null;
@@ -95,6 +106,7 @@ function openDriveDialog() {
 
 function currentBoardPage() { return boardPageSequence[boardPageIndex] || null; }
 function finishActiveBoardInput() {
+  if (multiTouchGesture) endMultiTouchGesture(null);
   if (activePanPointerId !== null) endPanOrZoom({ pointerId: activePanPointerId });
   if (strokeEraserActive && strokeEraserPointerId !== null) stopStrokeErasing({ pointerId: strokeEraserPointerId });
   if (drawing && currentInputPointerId !== null) stopDrawing({ type: "pointercancel", pointerId: currentInputPointerId });
@@ -482,6 +494,15 @@ function setPanMode(enabled) {
   updatePanFitButton();
   updateToolUI();
 }
+function setBoardInteractionMode(mode) {
+  const next = mode === "multi" ? "multi" : "single";
+  if (next === boardInteractionMode) return;
+  finishActiveBoardInput();
+  boardInteractionMode = next;
+  window.localStorage.setItem(BOARD_INTERACTION_MODE_KEY, next);
+  const select = document.getElementById("boardInteractionMode");
+  if (select) select.value = next;
+}
 function startPanOrZoomHold(event) {
   if (!panMode || !event.isPrimary || currentInputPointerId !== null) return false;
   currentInputPointerId = event.pointerId;
@@ -547,6 +568,68 @@ function endPanOrZoom(event) {
   saveBoardPageView(); scheduleSessionAutosave();
   return true;
 }
+function startMultiTouchGesture(event) {
+  if (!panMode || boardInteractionMode !== "multi" || event.pointerType !== "touch") return false;
+  event.preventDefault();
+  if (multiTouchSuppressed.has(event.pointerId)) return false;
+  if (!multiTouchGesture) multiTouchGesture = { pointers: new Map(), pair: null, changed: false };
+  const gesture = multiTouchGesture;
+  if (gesture.pointers.size >= 2 || gesture.pointers.has(event.pointerId)) return false;
+  gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  canvas.setPointerCapture(event.pointerId);
+  if (gesture.pointers.size === 2) {
+    const ids = [...gesture.pointers.keys()], initial = ids.map((id) => ({ ...gesture.pointers.get(id) }));
+    const anchor = canvasPointFromClient((initial[0].x + initial[1].x) / 2, (initial[0].y + initial[1].y) / 2);
+    gesture.pair = { ids, initial, initialCentroid: { x: anchor.x, y: anchor.y }, anchor, initialSpan: Math.hypot(initial[0].x - initial[1].x, initial[0].y - initial[1].y), startCamera: { ...boardCamera } };
+  }
+  return true;
+}
+function queueMultiTouchFrame() {
+  if (!multiTouchGesture || !multiTouchGesture.pair || multiTouchFrame) return;
+  multiTouchFrame = window.requestAnimationFrame(flushMultiTouchFrame);
+}
+function flushMultiTouchFrame() {
+  multiTouchFrame = 0;
+  const gesture = multiTouchGesture;
+  if (!gesture || !gesture.pair || gesture.pointers.size !== 2) return;
+  const pair = gesture.pair, [first, second] = pair.ids.map((id) => gesture.pointers.get(id));
+  const rect = boardWrapper.getBoundingClientRect();
+  const metrics = BoardState.measureTouchPair(pair.initial, [first, second], "auto", devSettings);
+  const currentCentroid = { x: metrics.midpoint.x - rect.left, y: metrics.midpoint.y - rect.top };
+  const span = metrics.currentSeparation;
+  const phase = metrics.classification === "pan" || metrics.classification === "zoom-in" || metrics.classification === "zoom-out" ? metrics.classification : null;
+  if (phase !== gesture.phase) {
+    if (phase && !gesture.hasPhase) { gesture.phaseCamera = { ...pair.startCamera }; gesture.phaseCentroid = pair.initialCentroid; gesture.phaseSpan = pair.initialSpan; gesture.hasPhase = true; }
+    else { gesture.phaseCamera = { ...boardCamera }; gesture.phaseCentroid = currentCentroid; gesture.phaseSpan = span; }
+    gesture.phase = phase;
+  }
+  if (!phase) return;
+  if (phase === "pan") boardCamera = { ...gesture.phaseCamera, x: gesture.phaseCamera.x + currentCentroid.x - gesture.phaseCentroid.x, y: gesture.phaseCamera.y + currentCentroid.y - gesture.phaseCentroid.y };
+  else boardCamera = zoomBoardCameraAt(gesture.phaseCamera, pair.anchor, span / Math.max(1, gesture.phaseSpan));
+  if (boardCamera.x !== gesture.phaseCamera.x || boardCamera.y !== gesture.phaseCamera.y || boardCamera.scale !== gesture.phaseCamera.scale) {
+    gesture.changed = true; applyBoardCamera();
+  }
+}
+function moveMultiTouchGesture(event) {
+  if (boardInteractionMode !== "multi" || !multiTouchGesture || !multiTouchGesture.pointers.has(event.pointerId)) return false;
+  event.preventDefault(); multiTouchGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY }); queueMultiTouchFrame(); return true;
+}
+function endMultiTouchGesture(releasedPointerId, cancelled = false) {
+  const gesture = multiTouchGesture;
+  if (!gesture) return false;
+  if (multiTouchFrame) window.cancelAnimationFrame(multiTouchFrame);
+  multiTouchFrame = 0;
+  if (!cancelled) flushMultiTouchFrame();
+  multiTouchGesture = null;
+  for (const id of gesture.pointers.keys()) {
+    multiTouchSuppressed.add(id);
+    if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+  }
+  if (releasedPointerId !== null) multiTouchSuppressed.delete(releasedPointerId);
+  if (gesture.changed) { saveBoardPageView(); scheduleSessionAutosave(); }
+  return true;
+}
+function endSuppressedMultiTouchPointer(pointerId) { multiTouchSuppressed.delete(pointerId); }
 function getZoomCue(container, id) {
   let cue = document.getElementById(id);
   if (!cue) { cue = document.createElement("div"); cue.id = id; cue.className = "zoom-cue"; container.append(cue); }
@@ -603,25 +686,43 @@ function placeToolbarPopup(triggerElement, popup) {
 function openDeveloperSettings() {
   const panel = document.getElementById("developerSettings");
   if (!panel) return;
+  finishActiveBoardInput();
   devSettingsReturnFocus = isDocumentPopupOpen() ? openDocumentPopupButton : document.activeElement;
   if (isDocumentPopupOpen()) closeDocumentPopup();
+  developerSettingsTab = "single";
+  developerCalibrationIntent = "pan";
+  developerCalibrationRecords = [];
   devSettingsDraft = { ...devSettings };
   const backdrop = document.getElementById("developerSettingsBackdrop");
   if (backdrop) backdrop.hidden = false;
   panel.hidden = false; panel.setAttribute("role", "dialog"); panel.setAttribute("aria-labelledby", "devSettingsTitle"); panel.setAttribute("aria-modal", "true"); devMode = true; renderDeveloperSettings();
+  document.addEventListener("keydown", trapDeveloperSettingsTab, true);
   panel.querySelector("[data-dev-close]").focus();
+}
+function trapDeveloperSettingsTab(event) {
+  if (event.key !== "Tab") return;
+  const panel = document.getElementById("developerSettings");
+  if (!panel || panel.hidden || panel.contains(document.activeElement)) return;
+  const controls = [...panel.querySelectorAll("button, input, select, [tabindex='0']")].filter((element) => !element.disabled && element.tabIndex !== -1 && !element.closest("[hidden]"));
+  if (!controls.length) { event.preventDefault(); panel.focus(); return; }
+  event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
 }
 function renderDeveloperSettings() {
   const panel = document.getElementById("developerSettings");
   if (!panel) return;
+  cancelDeveloperCalibration();
   const draft = devSettingsDraft || { ...devSettings };
   const totalMs = draft.zoomCueDelayMs + draft.zoomCueShrinkMs;
-  panel.innerHTML = `<header><strong id="devSettingsTitle">개발자 설정</strong><button type="button" class="dev-close" data-dev-close aria-label="닫기">×</button></header><div class="dev-settings-body"><section class="dev-timing"><h3>터치 줌 타이밍</h3><label>원 표시 지연 <input data-key="zoomCueDelayMs" type="range" min="0" max="1500" step="100" value="${draft.zoomCueDelayMs}"><output>${draft.zoomCueDelayMs}ms</output></label><label>원 축소 시간 <input data-key="zoomCueShrinkMs" type="range" min="500" max="5000" step="100" value="${draft.zoomCueShrinkMs}"><output>${draft.zoomCueShrinkMs}ms</output></label><p class="dev-total">줌 활성화까지 <output data-total>${totalMs}ms</output></p><p class="dev-guidance">시험 영역을 누른 채 기다리세요. 원이 나타나 줄어들고, 움직이거나 놓으면 취소됩니다.</p><div class="dev-test-area" data-dev-test tabindex="0" aria-label="터치 줌 시험 영역"></div></section><section class="dev-other"><label><input data-dev-overlay type="checkbox" ${draft.showTouchOverlay ? "checked" : ""}> 터치 위치·허용 반경·유지 시간 표시</label><label>프리셋 편집 유지 시간 <input data-key="presetHoldMs" type="range" min="1000" max="5000" step="100" value="${draft.presetHoldMs}"><output>${draft.presetHoldMs}ms</output></label><label>움직임 허용 <input data-key="movementThreshold" type="range" min="3" max="40" step="1" value="${draft.movementThreshold}"><output>${draft.movementThreshold}px</output></label><label>줌 민감도 <input data-key="zoomSensitivity" type="range" min="0.002" max="0.02" step="0.001" value="${draft.zoomSensitivity}"><output>${draft.zoomSensitivity}</output></label></section></div><footer><button type="button" data-dev-default>기본값</button><button type="button" data-dev-cancel>취소</button><button type="button" data-dev-save>저장</button></footer>`;
+  const thresholds = BoardState.normalizeTouchCalibration(draft);
+  panel.innerHTML = `<header><strong id="devSettingsTitle">개발자 설정</strong><button type="button" class="dev-close" data-dev-close aria-label="닫기">×</button></header><div class="dev-settings-body"><nav class="dev-tabs" role="tablist" aria-label="터치 시험 종류"><button type="button" role="tab" id="devSingleTab" aria-controls="devSinglePanel" data-dev-tab="single">단일 터치</button><button type="button" role="tab" id="devMultiTab" aria-controls="devMultiPanel" data-dev-tab="multi">멀티터치</button></nav><section id="devSinglePanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devSingleTab" data-dev-tab-panel="single"><div class="dev-timing"><h3>터치 줌 타이밍</h3><label>원 표시 지연 <input data-key="zoomCueDelayMs" type="range" min="0" max="1500" step="100" value="${draft.zoomCueDelayMs}"><output>${draft.zoomCueDelayMs}ms</output></label><label>원 축소 시간 <input data-key="zoomCueShrinkMs" type="range" min="500" max="5000" step="100" value="${draft.zoomCueShrinkMs}"><output>${draft.zoomCueShrinkMs}ms</output></label><p class="dev-total">줌 활성화까지 <output data-total>${totalMs}ms</output></p><p class="dev-guidance">시험 영역을 누른 채 기다리세요. 원이 나타나 줄어들고, 움직이거나 놓으면 취소됩니다.</p><div class="dev-test-area" data-dev-test tabindex="0" aria-label="터치 줌 시험 영역"></div></div><div class="dev-other"><label><input data-dev-overlay type="checkbox" ${draft.showTouchOverlay ? "checked" : ""}> 터치 위치·허용 반경·유지 시간 표시</label><label>프리셋 편집 유지 시간 <input data-key="presetHoldMs" type="range" min="1000" max="5000" step="100" value="${draft.presetHoldMs}"><output>${draft.presetHoldMs}ms</output></label><label>움직임 허용 <input data-key="movementThreshold" type="range" min="3" max="40" step="1" value="${draft.movementThreshold}"><output>${draft.movementThreshold}px</output></label><label>줌 민감도 <input data-key="zoomSensitivity" type="range" min="0.002" max="0.02" step="0.001" value="${draft.zoomSensitivity}"><output>${draft.zoomSensitivity}</output></label></div></section><section id="devMultiPanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devMultiTab" data-dev-tab-panel="multi" hidden><section class="dev-calibration"><div class="dev-calibration-layout"><aside class="dev-calibration-controls"><h3>두 손가락 동작 보정</h3><p class="dev-calibration-note">초기값 12/12/40px은 시험용입니다. 기기에 맞게 조정하세요. 측정 기록은 창을 닫으면 지워집니다. 저장한 기준값은 멀티터치 모드에 적용됩니다.</p><div class="dev-calibration-fields">${[["panVectorTolerance","이동 차이 허용","1","200"],["pinchActivationDistance","줌 거리 변화 시작","1","200"],["pinchMinimumSeparation","최소 손가락 간격","8","500"]].map(([key,label,min,max]) => `<label>${label}<input data-calibration-key="${key}" type="number" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><input data-calibration-range="${key}" type="range" aria-label="${label} 슬라이더" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><output data-calibration-output="${key}">${thresholds[key]}px</output></label>`).join("")}</div><label class="dev-calibration-intent">측정할 동작<select data-calibration-intent><option value="pan" ${developerCalibrationIntent === "pan" ? "selected" : ""}>평행 이동</option><option value="zoom-in" ${developerCalibrationIntent === "zoom-in" ? "selected" : ""}>두 손가락 모으기</option><option value="zoom-out" ${developerCalibrationIntent === "zoom-out" ? "selected" : ""}>두 손가락 벌리기</option></select></label><p class="dev-calibration-hint" data-calibration-hint></p><div class="dev-calibration-actions"><button type="button" data-calibration-start>측정 시작</button><button type="button" data-calibration-reset>기록 초기화</button></div><p class="dev-calibration-status" data-calibration-status role="status" aria-live="polite">측정을 시작하고 시험 영역에서 두 손가락을 움직이세요.</p></aside><div class="dev-calibration-main"><div class="dev-calibration-area" data-calibration-area tabindex="0" aria-label="두 손가락 보정 시험 영역"><span class="dev-calibration-anchor" data-calibration-anchor hidden>기준점</span><span class="dev-calibration-point" data-calibration-point="0" hidden>1</span><span class="dev-calibration-point" data-calibration-point="1" hidden>2</span><span class="dev-calibration-empty">두 손가락 시험 영역</span></div><dl class="dev-calibration-readout"><dt>손가락 1 / 2</dt><dd data-calibration-positions>—</dd><dt>고정 기준점</dt><dd data-calibration-anchor-value>—</dd><dt>이동 벡터 차이</dt><dd data-calibration-vector>—</dd><dt>처음 간격</dt><dd data-calibration-initial>—</dd><dt>현재 간격 / 변화</dt><dd data-calibration-span>—</dd><dt>분류</dt><dd data-calibration-classification>대기</dd></dl><h4>최근 측정 <span data-calibration-count>(0/10)</span></h4><ol class="dev-calibration-records" data-calibration-records></ol></div></div></section></section></div><footer><button type="button" data-dev-default>기본값</button><button type="button" data-dev-cancel>취소</button><button type="button" data-dev-save>저장</button></footer>`;
+  const tab = developerSettingsTab === "multi" ? "multi" : "single";
+  panel.querySelectorAll("[data-dev-tab]").forEach((button) => { const selected = button.dataset.devTab === tab; button.setAttribute("aria-selected", String(selected)); button.tabIndex = selected ? 0 : -1; });
+  panel.querySelectorAll("[data-dev-tab-panel]").forEach((section) => { section.hidden = section.dataset.devTabPanel !== tab; });
   panel.onkeydown = (event) => {
     event.stopPropagation();
     if (event.key === "Escape") { event.preventDefault(); discardDeveloperSettings(); return; }
     if (event.key === "Tab") {
-      const controls = [...panel.querySelectorAll("button, input, [tabindex='0']")].filter((element) => !element.disabled);
+      const controls = [...panel.querySelectorAll("button, input, select, [tabindex='0']")].filter((element) => !element.disabled && element.tabIndex !== -1 && !element.closest("[hidden]"));
       const first = controls[0], last = controls[controls.length - 1];
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -634,13 +735,38 @@ function renderDeveloperSettings() {
     panel.querySelector("[data-total]").value = `${draft.zoomCueDelayMs + draft.zoomCueShrinkMs}ms`;
     cancelDeveloperTrial();
   }));
+  const syncCalibrationFields = (key, raw) => {
+    const field = panel.querySelector(`[data-calibration-key="${key}"]`), range = panel.querySelector(`[data-calibration-range="${key}"]`), output = panel.querySelector(`[data-calibration-output="${key}"]`);
+    const bounds = { panVectorTolerance: [1, 200], pinchActivationDistance: [1, 200], pinchMinimumSeparation: [8, 500] }[key];
+    if (!bounds || raw === "" || !Number.isFinite(Number(raw))) return;
+    const value = Math.max(bounds[0], Math.min(bounds[1], Math.round(Number(raw))));
+    draft[key] = value;
+    field.value = String(value); range.value = String(value); output.value = `${value}px`;
+  };
+  panel.querySelectorAll("[data-calibration-key]").forEach((input) => {
+    input.addEventListener("input", () => { syncCalibrationFields(input.dataset.calibrationKey, input.value); cancelDeveloperCalibration(); });
+    input.addEventListener("change", () => { syncCalibrationFields(input.dataset.calibrationKey, input.value); });
+  });
+  panel.querySelectorAll("[data-calibration-range]").forEach((input) => input.addEventListener("input", () => { syncCalibrationFields(input.dataset.calibrationRange, input.value); cancelDeveloperCalibration(); }));
   panel.querySelector("[data-dev-default]").onclick = () => { cancelDeveloperTrial(); devSettingsDraft = { ...DEV_DEFAULTS }; renderDeveloperSettings(); panel.querySelector("[data-dev-default]").focus(); };
   panel.querySelector("[data-dev-cancel]").onclick = discardDeveloperSettings;
   panel.querySelector("[data-dev-save]").onclick = saveDeveloperSettings;
   panel.querySelector("[data-dev-close]").onclick = discardDeveloperSettings;
+  panel.querySelectorAll("[data-dev-tab]").forEach((button) => button.addEventListener("click", () => {
+    cancelDeveloperTrial(); cancelDeveloperCalibration(); developerSettingsTab = button.dataset.devTab; renderDeveloperSettings(); panel.querySelector(`[data-dev-tab="${developerSettingsTab}"]`).focus();
+  }));
+  panel.querySelectorAll("[role='tab']").forEach((button) => button.addEventListener("keydown", (event) => {
+    const tabs = [...panel.querySelectorAll("[role='tab']")];
+    const index = tabs.indexOf(button);
+    const next = event.key === "ArrowRight" ? tabs[(index + 1) % tabs.length] : event.key === "ArrowLeft" ? tabs[(index + tabs.length - 1) % tabs.length] : event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length - 1] : null;
+    if (next) { event.preventDefault(); next.click(); }
+  }));
   initDeveloperTrial(panel.querySelector("[data-dev-test]"), draft);
+  initDeveloperCalibration(panel, draft);
 }
 function saveDeveloperSettings() {
+  cancelDeveloperCalibration();
+  if (typeof finishActiveBoardInput === "function") finishActiveBoardInput();
   devSettings = { ...devSettingsDraft };
   window.localStorage.setItem(DEV_SETTINGS_KEY, JSON.stringify(devSettings));
   closeDeveloperSettings(true);
@@ -680,6 +806,105 @@ function cancelDeveloperTrial(area = document.querySelector("[data-dev-test]")) 
   if (trial) { window.clearTimeout(trial.cueTimer); window.clearTimeout(trial.zoomTimer); window.clearTimeout(trial.idleTimer); if (area && area.hasPointerCapture(trial.id)) area.releasePointerCapture(trial.id); }
   hideZoomCue("devZoomCue");
 }
+function initDeveloperCalibration(panel, settings) {
+  const area = panel.querySelector("[data-calibration-area]"), status = panel.querySelector("[data-calibration-status]"), list = panel.querySelector("[data-calibration-records]");
+  const intent = panel.querySelector("[data-calibration-intent]"), hint = panel.querySelector("[data-calibration-hint]");
+  const updateHint = () => { hint.textContent = intent.value === "pan" ? "같은 방향으로 자연스럽게 이동해 이동 차이를 측정하세요." : "줌이 시작되길 원하는 거리만큼만 손가락을 움직인 뒤 떼세요. 기록의 최대 거리 변화가 줌 시작 기준값으로 적용됩니다."; };
+  updateHint();
+  const readout = (selector, value) => { panel.querySelector(selector).textContent = value; };
+  const renderMetrics = (metrics) => {
+    const point = (value) => `${Math.round(value.x)}, ${Math.round(value.y)}px`;
+    readout("[data-calibration-positions]", metrics ? metrics.positions.map(point).join(" · ") : "—");
+    readout("[data-calibration-anchor-value]", metrics ? point(metrics.anchor) : "—");
+    readout("[data-calibration-vector]", metrics ? `${metrics.vectorDifference.toFixed(1)}px (최대 ${metrics.maxVectorDifference.toFixed(1)}px)` : "—");
+    readout("[data-calibration-initial]", metrics ? `${metrics.initialSeparation.toFixed(1)}px` : "—");
+    readout("[data-calibration-span]", metrics ? `${metrics.currentSeparation.toFixed(1)}px / ${metrics.spanDelta >= 0 ? "+" : ""}${metrics.spanDelta.toFixed(1)}px (최대 변화 ${metrics.maxAbsoluteSpanChange.toFixed(1)}px)` : "—");
+    readout("[data-calibration-classification]", metrics ? metrics.classification : "대기");
+    [0, 1].forEach((index) => { const element = panel.querySelector(`[data-calibration-point="${index}"]`); element.hidden = !metrics; if (metrics) { element.style.left = `${metrics.positions[index].x}px`; element.style.top = `${metrics.positions[index].y}px`; } });
+    const anchor = panel.querySelector("[data-calibration-anchor]"); anchor.hidden = !metrics;
+    if (metrics) { anchor.style.left = `${metrics.anchor.x}px`; anchor.style.top = `${metrics.anchor.y}px`; }
+  };
+  const renderRecords = () => {
+    list.replaceChildren(); readout("[data-calibration-count]", `(${developerCalibrationRecords.length}/10)`);
+    developerCalibrationRecords.forEach((record) => {
+      const item = document.createElement("li"), text = document.createElement("p"), apply = document.createElement("button");
+      const proposed = BoardState.applyTouchCalibrationRecord(settings, record);
+      const appliedValues = record.intent === "pan" ? `이동 차이 허용 ${proposed.panVectorTolerance}px` : `줌 시작 ${proposed.pinchActivationDistance}px · 최소 간격 ${proposed.pinchMinimumSeparation}px`;
+      text.textContent = `${record.label} · ${record.elapsedMs}ms · 이동 ${record.maxVectorDifference.toFixed(1)}px · 줌 변화 ${record.maxAbsoluteSpanChange.toFixed(1)}px · 처음 간격 ${record.initialSeparation.toFixed(1)}px · 적용값 ${appliedValues}`;
+      apply.type = "button"; apply.textContent = "이 결과를 초안에 적용";
+      apply.addEventListener("click", () => {
+        cancelDeveloperCalibration();
+        Object.assign(settings, BoardState.applyTouchCalibrationRecord(settings, record));
+        for (const [key, value] of Object.entries(BoardState.normalizeTouchCalibration(settings))) {
+          settings[key] = value;
+          const input = panel.querySelector(`[data-calibration-key="${key}"]`), range = panel.querySelector(`[data-calibration-range="${key}"]`), output = panel.querySelector(`[data-calibration-output="${key}"]`);
+          input.value = range.value = String(value); output.value = `${value}px`;
+        }
+        status.textContent = "측정값을 임시 설정에 적용했습니다. 저장을 눌러야 유지됩니다.";
+      });
+      item.append(text, apply); list.append(item);
+    });
+  };
+  const release = (calibration) => {
+    const ids = calibration.tracker.getActivePointerIds();
+    ids.forEach((id) => { if (area.hasPointerCapture(id)) area.releasePointerCapture(id); });
+  };
+  const finish = (calibration, summary) => {
+    if (developerCalibration !== calibration) return;
+    if (developerCalibrationFrame) window.cancelAnimationFrame(developerCalibrationFrame);
+    developerCalibrationFrame = 0;
+    developerCalibration = null; developerCalibrationArmed = false; release(calibration);
+    if (!summary) calibration.tracker.cancel();
+    if (summary) {
+      const labels = { pan: "평행 이동", "zoom-in": "손가락 모으기", "zoom-out": "손가락 벌리기" };
+      developerCalibrationRecords = BoardState.appendTouchCalibrationRecord(developerCalibrationRecords, { intent: summary.intent, label: labels[summary.intent], elapsedMs: Math.round(summary.elapsedMs), maxVectorDifference: summary.maxVectorDifference, maxAbsoluteSpanChange: summary.maxAbsoluteSpanChange, initialSeparation: summary.initialSeparation }); renderRecords();
+      status.textContent = "결과를 임시 목록에 추가했습니다. 선택한 측정값을 초안에 적용할 수 있습니다.";
+    } else status.textContent = "측정이 취소되어 결과를 기록하지 않았습니다.";
+  };
+  panel.querySelector("[data-calibration-start]").addEventListener("click", () => {
+    cancelDeveloperCalibration(); renderMetrics(null);
+    developerCalibrationArmed = true; status.textContent = "측정 준비 완료. 시험 영역을 두 손가락으로 누르세요."; area.focus();
+  });
+  panel.querySelector("[data-calibration-reset]").addEventListener("click", () => { cancelDeveloperCalibration(); developerCalibrationRecords = []; renderRecords(); renderMetrics(null); status.textContent = "임시 측정 기록을 비웠습니다."; });
+  intent.addEventListener("change", (event) => { developerCalibrationIntent = event.target.value; cancelDeveloperCalibration(); updateHint(); });
+  area.addEventListener("pointerdown", (event) => {
+    if (!developerCalibrationArmed || event.pointerType !== "touch") return;
+    event.preventDefault(); const rect = area.getBoundingClientRect();
+    const calibration = developerCalibration || { tracker: BoardState.createTouchCalibrationTracker(panel.querySelector("[data-calibration-intent]").value, BoardState.normalizeTouchCalibration(settings), performance.now()) };
+    if (!calibration.tracker.pointerDown(event.pointerId, { x: event.clientX - rect.left, y: event.clientY - rect.top })) return;
+    calibration.area = area; developerCalibration = calibration; area.setPointerCapture(event.pointerId);
+    status.textContent = calibration.tracker.getActivePointerIds().length === 2 ? "두 손가락을 추적하고 있습니다." : "첫 손가락을 받았습니다. 두 번째 손가락을 누르세요.";
+    renderMetrics(calibration.tracker.getMetrics());
+  });
+  area.addEventListener("pointermove", (event) => {
+    if (!developerCalibration || developerCalibration.area !== area) return;
+    const rect = area.getBoundingClientRect(), metrics = developerCalibration.tracker.pointerMove(event.pointerId, { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    if (!metrics || developerCalibrationFrame) return;
+    developerCalibrationFrame = window.requestAnimationFrame(() => {
+      developerCalibrationFrame = 0;
+      if (developerCalibration && developerCalibration.area === area) renderMetrics(developerCalibration.tracker.sample());
+    });
+  });
+  area.addEventListener("pointerup", (event) => {
+    if (!developerCalibration || developerCalibration.area !== area || !developerCalibration.tracker.getActivePointerIds().includes(event.pointerId)) return;
+    const rect = area.getBoundingClientRect();
+    developerCalibration.tracker.pointerMove(event.pointerId, { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    const summary = developerCalibration.tracker.pointerUp(event.pointerId, performance.now()); finish(developerCalibration, summary);
+    if (!summary) status.textContent = "두 손가락이 함께 닿지 않아 결과를 만들지 않았습니다.";
+  });
+  const cancel = (event) => { if (developerCalibration && developerCalibration.tracker.getActivePointerIds().includes(event.pointerId)) finish(developerCalibration, null); };
+  area.addEventListener("pointercancel", cancel); area.addEventListener("lostpointercapture", cancel);
+  renderRecords();
+}
+function cancelDeveloperCalibration() {
+  developerCalibrationArmed = false;
+  if (developerCalibrationFrame) window.cancelAnimationFrame(developerCalibrationFrame);
+  developerCalibrationFrame = 0;
+  if (!developerCalibration) return;
+  const calibration = developerCalibration, ids = calibration.tracker.getActivePointerIds();
+  developerCalibration = null; calibration.tracker.cancel();
+  ids.forEach((id) => { if (calibration.area.hasPointerCapture(id)) calibration.area.releasePointerCapture(id); });
+}
 function normalizeDevSettings(saved) {
   const value = saved && typeof saved === "object" ? { ...saved } : {};
   if (Number.isFinite(value.zoomHoldMs) && value.zoomCueDelayMs == null && value.zoomCueShrinkMs == null) {
@@ -698,12 +923,15 @@ function normalizeDevSettings(saved) {
     presetHoldMs: number("presetHoldMs", 1000, 5000, 100),
     movementThreshold: number("movementThreshold", 3, 40),
     zoomSensitivity: number("zoomSensitivity", 0.002, 0.02, 0.001),
+    ...BoardState.normalizeTouchCalibration(value),
     showTouchOverlay: typeof value.showTouchOverlay === "boolean" ? value.showTouchOverlay : DEV_DEFAULTS.showTouchOverlay,
   };
 }
 function loadDevSettings() { try { return normalizeDevSettings(JSON.parse(window.localStorage.getItem(DEV_SETTINGS_KEY) || "{}")); } catch { return { ...DEV_DEFAULTS }; } }
 function closeDeveloperSettings(saved) {
   cancelDeveloperTrial();
+  cancelDeveloperCalibration(); developerCalibrationRecords = [];
+  document.removeEventListener("keydown", trapDeveloperSettingsTab, true);
   const panel = document.getElementById("developerSettings");
   if (panel) { panel.hidden = true; panel.removeAttribute("aria-modal"); }
   const backdrop = document.getElementById("developerSettingsBackdrop"); if (backdrop) backdrop.hidden = true;
@@ -744,10 +972,26 @@ function initBoard201Ui() {
   pdfPrevPageButton.addEventListener("click", () => goToBoardPage(-1));
   pdfNextPageButton.addEventListener("click", () => goToBoardPage(1));
   document.querySelectorAll("[data-settings-category]").forEach((button) => button.addEventListener("click", () => selectSettingsCategory(button.dataset.settingsCategory)));
-  canvas.addEventListener("pointerdown", (event) => { if (panMode) { event.preventDefault(); startPanOrZoomHold(event); } });
-  canvas.addEventListener("pointermove", (event) => { if (panMode && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
-  canvas.addEventListener("pointerup", (event) => { if (panMode) endPanOrZoom(event); });
-  canvas.addEventListener("pointercancel", (event) => { if (panMode) endPanOrZoom(event); });
+  const interactionModeSelect = document.getElementById("boardInteractionMode");
+  try { boardInteractionMode = window.localStorage.getItem(BOARD_INTERACTION_MODE_KEY) === "multi" ? "multi" : "single"; } catch { boardInteractionMode = "single"; }
+  if (interactionModeSelect) { interactionModeSelect.value = boardInteractionMode; interactionModeSelect.addEventListener("change", () => setBoardInteractionMode(interactionModeSelect.value)); }
+  canvas.addEventListener("pointerdown", (event) => { if (panMode) { if (boardInteractionMode === "multi") startMultiTouchGesture(event); else { event.preventDefault(); startPanOrZoomHold(event); } } });
+  canvas.addEventListener("pointermove", (event) => { if (boardInteractionMode === "multi") moveMultiTouchGesture(event); else if (panMode && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
+  canvas.addEventListener("pointerup", (event) => {
+    if (multiTouchGesture && multiTouchGesture.pointers.has(event.pointerId)) { multiTouchGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY }); endMultiTouchGesture(event.pointerId); }
+    else endSuppressedMultiTouchPointer(event.pointerId);
+    if (boardInteractionMode === "single" && panMode) endPanOrZoom(event);
+  });
+  canvas.addEventListener("pointercancel", (event) => {
+    if (multiTouchGesture && multiTouchGesture.pointers.has(event.pointerId)) endMultiTouchGesture(event.pointerId, true);
+    else endSuppressedMultiTouchPointer(event.pointerId);
+    if (boardInteractionMode === "single" && panMode) endPanOrZoom(event);
+  });
+  canvas.addEventListener("lostpointercapture", (event) => {
+    if (multiTouchGesture && multiTouchGesture.pointers.has(event.pointerId)) endMultiTouchGesture(null, true);
+  });
+  window.addEventListener("pointerup", (event) => endSuppressedMultiTouchPointer(event.pointerId));
+  window.addEventListener("pointercancel", (event) => endSuppressedMultiTouchPointer(event.pointerId));
   window.addEventListener("resize", updateBoardViewport);
   const observer = new ResizeObserver(updateBoardViewport); observer.observe(toolbar);
   initVersionTap();
