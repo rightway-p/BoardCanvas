@@ -11,7 +11,9 @@
 
 ## 현재 상태와 제한
 
-- `src-tauri/tauri.conf.json`: 패키지 버전은 `2.0.1`; 번들 생성은 `active: false`.
+- 2026-10-05 사용자 승인: Board 2.0.1 Windows per-user NSIS 패키징 전환. `src-tauri/tauri.conf.json`에서 NSIS만 활성화하고 설치 모드를 `currentUser`로 지정하며 앱 identity `com.rightway.boardcanvas`와 패키지 버전 `2.0.1`을 유지한다.
+- updater 활성화, 서명키 생성/게시, HTTPS feed/호스팅 및 복구 기능은 이 패키징 승인에 포함되지 않는다. 실제 서명키와 HTTPS feed가 준비·검증되기 전까지 updater는 비활성 상태로 둔다.
+- 현재 설치 형태를 확인하지 않은 기존 v1 후보 EXE는 보존하며, NSIS 신규 설치물이 이를 복구 가능한 기준본으로 대체한다고 간주하지 않는다.
 - `src-tauri/Cargo.toml`: Tauri 의존성에 `updater` feature가 없다.
 - `src-tauri/src/commands/drive.rs`: `get_updater_status`는 활성화, HTTPS endpoint, 비어 있지 않은 공개키가 모두 있을 때만 설정 완료를 보고한다.
 - `js/board-2.0.1-ui.js`: 설치 전 `persistSessionState()`를 호출한 뒤 Tauri updater 설치 함수를 부른다. 이는 현재 웹 저장소의 저장 경로이며 설치본, WebView 프로필, 사용자 파일 전체가 롤백 뒤에도 보존됨을 증명하지 않는다.
@@ -19,7 +21,7 @@
 
 ## 제안 기본안 — 검증과 승인 전
 
-1. 첫 대상은 Windows per-user NSIS 설치로 한정해 signed Tauri updater를 연결한다. GitHub Releases와 HTTPS manifest는 후보 경로일 뿐이며 배포 위치는 미정이다. 다른 설치 방식과 플랫폼은 별도 검증 전 지원을 약속하지 않는다.
+1. 구현 전 제안이었던 Windows per-user NSIS 패키징은 2026-10-05 사용자 승인으로 진행한다. 서명된 Tauri updater 연결은 별도 미승인·미구현 범위다. GitHub Releases와 HTTPS manifest는 후보 경로일 뿐이며 배포 위치는 미정이다. 다른 설치 방식과 플랫폼은 별도 검증 전 지원을 약속하지 않는다.
 2. 정상 업데이트는 현재 앱보다 새 버전만 제안한다. 직전 버전 복구는 별도의 명시적 명령으로 실행하며, 현재 설치본의 기록에 고정된 **직전 성공 설치본**만 대상으로 한다. 기록에는 앱 identity (`com.rightway.boardcanvas`), 버전, OS/architecture, per-user NSIS 설치 종류, 서명된 package의 artifact digest, 설치된 실행 파일의 fingerprint를 서로 다른 필드로 둔다. 설치 전에는 package 서명과 package digest를 대조한다. 설치 후에는 배포가 제공하는 신뢰 가능한 post-install probe로 identity/version을 확인하거나 기대 실행 파일 fingerprint를 검증한다. 서로 다른 앱/플랫폼/설치 종류, 또는 일치하지 않는 package digest/fingerprint는 거부한다. 전역 최신 릴리스의 이전 항목을 추측해 되돌리지 않는다.
 3. 현재 앱 설치 폴더 교체·부분 삭제와 무관하게 실행 가능한, 설치 앱 밖의 안정 경로에 최소 Windows 복구 실행 파일을 둔다. 시작 메뉴 진입점은 이 도구를 실행한다. journal, checkpoint, 복구 artifact도 정해진 안정 경로에 두고, 기록된 앱 identity와 데이터 경로가 실제 설치와 일치하는지 및 앱/WebView 프로필이 닫혀 잠금 해제됐는지 검증한다. 경로가 예상 위치 밖을 가리키거나 프로필 잠금을 확인할 수 없으면 변경을 중단한다. 도구는 대상의 identity·플랫폼·설치 종류·서명·digest를 확인한 뒤 설치한다.
 4. 앱을 닫은 상태에서 네이티브 도구가 작업·설정과 필요한 WebView 프로필 데이터를 확인된 경로에서 복구 체크포인트로 기록한다. JS autosave 성공만으로 이 단계를 대체하지 않는다. 설치 전 checkpoint, 안정 경로, app-data 경로 및 위 설치 메타데이터를 원자적이고 검증 가능한 형태로 준비한다.
@@ -32,6 +34,7 @@
 
 ## 미정 및 외부 의존성
 
+- per-user NSIS 패키징 범위는 승인됐으나 실제 Windows 설치·업그레이드 및 데이터/WebView 경로 재사용 시험은 아직 하지 않았다.
 - 배포 endpoint/호스팅 위치, artifact 게시 절차, 공개키와 서명키 관리 주체, 실제 이전 signed installer의 가용성, 설치된 실행 파일 fingerprint의 신뢰 가능한 출처 및 검증 방식.
 - 복구 UI의 앱 내 위치와 오류 안내 문구. 외부 복구 진입점은 앱이 실행되지 않을 때 필요하다는 이유의 설계 제안이다.
 - 지원 플랫폼·설치 종류 및 서명 인증서 운영. admin 권한, quiet 설치, 설치 중 취소/원자성은 실제 환경에서 확인 전 보장하지 않는다.
@@ -58,7 +61,7 @@
 4. 아래 수용 기준을 실 설치본으로 검증한다. 실패나 미실행 항목이 있으면 배포/리뷰 완료로 처리하지 않는다.
 5. 의미 있는 구현 단위 뒤 현재 diff의 단순성을 점검하고, 독립 Codex 및 Antigravity 리뷰를 모두 수행한다. actionable finding을 처리하고 false positive/보류 사유와 리뷰어·실행 주체를 기록한다.
 
-현재 작업은 이 설계 문서 작성에 한정한다. 기능 활성화, 키 생성/게시, 사용자 데이터 변경, 배포, 리뷰 완료 선언은 포함하지 않는다.
+위 문장은 이 설계 문서를 작성하던 당시 작업 범위다. 이후 사용자가 per-user NSIS 패키징 전환을 승인했으며, updater·서명키·HTTPS feed·복구 기능 구현, 사용자 데이터 변경, 배포 및 리뷰 완료 선언은 여전히 이 범위에 포함되지 않는다.
 
 ## 참고
 

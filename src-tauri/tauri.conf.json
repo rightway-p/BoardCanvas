@@ -30,8 +30,15 @@
       }
     },
     "bundle": {
-      "active": false,
-      "identifier": "com.rightway.boardcanvas"
+      "active": true,
+      "targets": ["nsis"],
+      "identifier": "com.rightway.boardcanvas",
+      "icon": ["icons/icon.ico"],
+      "windows": {
+        "nsis": {
+          "installMode": "currentUser"
+        }
+      }
     },
     "security": {
       "csp": null
