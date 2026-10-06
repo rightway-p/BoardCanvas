@@ -152,6 +152,7 @@ body {
 .app.toolbar-placement-floating .toolbar > #fullscreenToggle,
 .app.toolbar-placement-floating .toolbar > #overlayModeToggle,
 .app.toolbar-placement-floating .toolbar > .preset-group,
+.app.toolbar-placement-floating .toolbar > .presentation-page-nav,
 .app.toolbar-placement-floating .toolbar > .toolbar-pdf-page-indicator {
   display: inline-flex;
 }
@@ -178,6 +179,7 @@ body {
   align-items: center;
   gap: 8px;
 }
+.app.toolbar-placement-floating .toolbar { overflow: visible; }
 
 .app.toolbar-placement-left .tool-cluster,
 .app.toolbar-placement-right .tool-cluster {
@@ -405,7 +407,6 @@ body {
 #undoButton,
 #redoButton,
 #clearButton,
-#fullscreenToggle,
 #overlayModeToggle,
 #openDocumentPopup,
 #toolbarDragHandle {
@@ -1095,9 +1096,9 @@ body {
 .drive-dialog-card label { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .drive-dialog-card label input { flex-basis: 100%; }
 
-.settings-overlay { position: fixed; inset: 0; z-index: 110; background: #1e1e1e66; }
+.settings-overlay { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: var(--space-3); background: #1e1e1e66; }
 .settings-overlay.is-hidden { display: none !important; }
-.settings-dialog { position: fixed; left: var(--settings-left, 12px); top: var(--settings-top, 12px); width: min(960px, calc(100vw - 24px)); height: auto; min-height: 0; max-height: min(84vh, calc(100vh - 24px)); display: flex; flex-direction: column; overflow: hidden; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); box-shadow: var(--shadow-settings); }
+.settings-dialog { position: relative; width: min(960px, 100%); height: auto; min-height: 0; max-height: min(84vh, calc(100vh - (var(--space-3) * 2))); display: flex; flex-direction: column; overflow: hidden; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); box-shadow: var(--shadow-settings); }
 .settings-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line); background: var(--surface); }
 .settings-header h2 { margin: 0; font-size: var(--type-title); line-height: 1.2; font-weight: 650; }
 .settings-header button { width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid transparent; border-radius: var(--radius-card); background: transparent; color: var(--text); font-size: 24px; line-height: 1; cursor: pointer; }
@@ -1150,12 +1151,22 @@ body {
 .remote-test-page-buttons button[aria-current="true"] { background: var(--pen-blue); color: white; }
 .remote-settings-status { min-height: 40px; margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-card); background: #eef1f5; color: #4f5966; font-size: var(--type-label); line-height: 1.4; }
 .settings-dialog :focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.presentation-page-nav { position: fixed; z-index: 20; left: 50%; bottom: var(--space-4); transform: translateX(-50%); display: flex; align-items: center; gap: var(--space-2); min-height: 48px; padding: 3px var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-card); background: #ffffffed; box-shadow: 0 4px 16px #0002; }
-.app:has(.settings-overlay:not(.is-hidden)) .presentation-page-nav { visibility: hidden; pointer-events: none; }
-.presentation-page-nav button { width: 42px; height: 40px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font-size: 24px; cursor: pointer; }
+.presentation-page-nav { display: flex; align-items: center; gap: var(--space-1); min-width: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
+.presentation-page-nav button { display: grid; place-items: center; width: var(--toolbar-control-size); height: var(--toolbar-control-size); min-width: var(--toolbar-control-size); min-height: var(--toolbar-control-size); padding: 0; border: 0; border-radius: var(--radius-card); background: transparent; color: var(--text); cursor: pointer; }
+.presentation-page-nav button svg { width: var(--toolbar-action-icon-size); height: var(--toolbar-action-icon-size); fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
 .presentation-page-nav button:hover:not(:disabled) { background: var(--surface-soft); }
 .presentation-page-nav button:disabled { opacity: .4; cursor: default; }
-.presentation-page-nav span { min-width: 54px; text-align: center; font-size: var(--type-label); font-variant-numeric: tabular-nums; }
+.presentation-page-nav .page-indicator { display: inline-flex; align-items: center; justify-content: center; min-width: 0; max-width: 100%; padding-inline: var(--space-1); color: var(--text); font-size: var(--type-label); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.presentation-page-nav .page-separator { padding-inline: 2px; color: var(--muted); }
+.app.toolbar-placement-left .presentation-page-nav,
+.app.toolbar-placement-right .presentation-page-nav,
+.app.toolbar-placement-floating .presentation-page-nav { flex-direction: column; gap: 0; width: 100%; }
+.app.toolbar-placement-left .presentation-page-nav .page-indicator,
+.app.toolbar-placement-right .presentation-page-nav .page-indicator,
+.app.toolbar-placement-floating .presentation-page-nav .page-indicator { flex-direction: column; width: 100%; padding-block: var(--space-1); }
+.app.toolbar-placement-left .presentation-page-nav .page-separator,
+.app.toolbar-placement-right .presentation-page-nav .page-separator,
+.app.toolbar-placement-floating .presentation-page-nav .page-separator { width: calc(100% - (var(--space-2) * 2)); padding: 0; border-top: 1px solid var(--line); font-size: 0; line-height: 0; }
 .toolbar > #fullscreenToggle, .toolbar > #overlayModeToggle { display: none !important; }
 #boardBackground,
 #board {
@@ -1219,7 +1230,7 @@ body.overlay-mode,
 
 
 @media (max-width: 760px) {
-  .settings-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+  .settings-dialog { width: 100%; height: 100%; max-height: 100%; }
   .settings-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0,1fr); }
   .settings-nav { flex-direction: row; overflow-x: auto; padding: var(--space-2); border-right: 0; border-bottom: 1px solid var(--line); }
   .settings-nav button { flex: 0 0 auto; min-height: 40px; padding: 7px 10px; font-size: 13px; white-space: nowrap; }
@@ -1239,7 +1250,98 @@ body.overlay-mode,
   .remote-test-card { grid-column: 1 / -1; }
 }
 @media (max-height: 600px) {
-  .settings-dialog { max-height: calc(100vh - 16px); }
+  .settings-dialog { max-height: 100%; }
   .settings-header { padding-block: var(--space-2); }
   .settings-content { min-height: 0; }
+}
+
+@media (max-height: 719px) {
+  .app.toolbar-placement-left .toolbar,
+  .app.toolbar-placement-right .toolbar,
+  .app.toolbar-placement-floating .toolbar {
+    --toolbar-control-size: 24px;
+    --toolbar-padding-y: 4px;
+    --toolbar-compact-gap: 2px;
+    --toolbar-side-width: calc(var(--toolbar-control-size) + (var(--toolbar-padding-y) * 2) + (var(--toolbar-border-size) * 2));
+    gap: var(--toolbar-compact-gap);
+    padding: var(--toolbar-padding-y) 3px;
+  }
+
+  .app.toolbar-placement-left .tool-cluster,
+  .app.toolbar-placement-right .tool-cluster,
+  .app.toolbar-placement-left .control,
+  .app.toolbar-placement-right .control,
+  .app.toolbar-placement-left .preset-group,
+  .app.toolbar-placement-right .preset-group,
+  .app.toolbar-placement-left .width-stepper,
+  .app.toolbar-placement-right .width-stepper,
+  .app.toolbar-placement-left .preset-list,
+  .app.toolbar-placement-right .preset-list {
+    gap: var(--toolbar-compact-gap);
+  }
+
+  .app.toolbar-placement-left .toolbar-drag-handle,
+  .app.toolbar-placement-right .toolbar-drag-handle,
+  .app.toolbar-placement-left .tool-button,
+  .app.toolbar-placement-right .tool-button,
+  .app.toolbar-placement-floating .toolbar-drag-handle,
+  .app.toolbar-placement-floating .tool-button,
+  .app.toolbar-placement-left .pen-preset,
+  .app.toolbar-placement-right .pen-preset,
+  .app.toolbar-placement-floating .pen-preset {
+    width: var(--toolbar-control-size);
+    height: var(--toolbar-control-size);
+    min-width: var(--toolbar-control-size);
+    min-height: var(--toolbar-control-size);
+    padding: 3px;
+  }
+
+  .app.toolbar-placement-left #lineWidth,
+  .app.toolbar-placement-right #lineWidth,
+  .app.toolbar-placement-left #eraserWidth,
+  .app.toolbar-placement-right #eraserWidth,
+  .app.toolbar-placement-floating #lineWidth {
+    width: var(--toolbar-control-size);
+    height: var(--toolbar-control-size);
+    min-width: var(--toolbar-control-size);
+    min-height: var(--toolbar-control-size);
+    padding: 0;
+  }
+
+  .app.toolbar-placement-left .current-pen-editor,
+  .app.toolbar-placement-right .current-pen-editor,
+  .app.toolbar-placement-floating .current-pen-editor {
+    gap: var(--toolbar-compact-gap);
+    padding: 2px;
+  }
+
+  .app.toolbar-placement-left .current-pen-editor .control,
+  .app.toolbar-placement-right .current-pen-editor .control,
+  .app.toolbar-placement-floating .current-pen-editor .control {
+    width: var(--toolbar-control-size);
+  }
+
+  .app.toolbar-placement-left #penColor,
+  .app.toolbar-placement-right #penColor,
+  .app.toolbar-placement-floating #penColor,
+  .app.toolbar-placement-left .current-pen-editor .stepper-button,
+  .app.toolbar-placement-right .current-pen-editor .stepper-button,
+  .app.toolbar-placement-floating .current-pen-editor .stepper-button {
+    width: var(--toolbar-control-size);
+    height: var(--toolbar-control-size);
+    min-width: var(--toolbar-control-size);
+    min-height: var(--toolbar-control-size);
+  }
+
+  .app.toolbar-placement-left .current-pen-editor .width-stepper,
+  .app.toolbar-placement-right .current-pen-editor .width-stepper,
+  .app.toolbar-placement-floating .current-pen-editor .width-stepper {
+    gap: 0;
+  }
+
+  .app.toolbar-placement-left .presentation-page-nav .page-indicator,
+  .app.toolbar-placement-right .presentation-page-nav .page-indicator,
+  .app.toolbar-placement-floating .presentation-page-nav .page-indicator {
+    padding-block: var(--toolbar-compact-gap);
+  }
 }

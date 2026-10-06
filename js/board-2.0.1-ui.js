@@ -218,10 +218,9 @@ function renderBoardPage(index = boardPageIndex) {
   return pageRender;
 }
 function updateBoardSequenceUI() {
-  const label = `${boardPageIndex + 1} / ${boardPageSequence.length}`;
-  pdfPageIndicator.textContent = label;
+  updatePageIndicator(pdfPageIndicator, boardPageIndex + 1, boardPageSequence.length);
   if (toolbarPdfPageIndicator) {
-    toolbarPdfPageIndicator.textContent = label;
+    toolbarPdfPageIndicator.textContent = `${boardPageIndex + 1} / ${boardPageSequence.length}`;
     toolbarPdfPageIndicator.classList.toggle("is-empty", boardPageSequence.length <= 1);
   }
   pdfPrevPageButton.disabled = boardPageIndex <= 0 || pdfExportInProgress || sessionRestoreInProgress;

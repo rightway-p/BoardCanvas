@@ -55,13 +55,6 @@ function setDocumentPopupOpen(open) {
   document.querySelectorAll(".presentation-page-nav").forEach((nav) => { nav.inert = open; });
   [...toolbar.children].forEach((child) => { if (child !== documentEditor) child.inert = open; });
   if (open) {
-    const rect = openDocumentPopupButton.getBoundingClientRect();
-    const width = Math.min(960, window.innerWidth - 24);
-    const height = Math.min(window.innerHeight * 0.84, window.innerHeight - 24);
-    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right + 12));
-    const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top));
-    documentPopup.style.setProperty("--settings-left", `${left}px`);
-    documentPopup.style.setProperty("--settings-top", `${top}px`);
     document.getElementById("closeSettingsButton").focus();
   } else if (wasOpen) {
     openDocumentPopupButton.focus();
@@ -144,6 +137,21 @@ function updateUndoRedoUI() {
   }
 }
 
+function updatePageIndicator(element, current, total) {
+  if (!element) return;
+  const currentLabel = Number.isFinite(current) && current > 0 ? String(current) : "-";
+  const totalLabel = Number.isFinite(total) && total > 0 ? String(total) : "-";
+  const currentSpan = element.querySelector(".page-current");
+  const totalSpan = element.querySelector(".page-total");
+  if (currentSpan && totalSpan) {
+    currentSpan.textContent = currentLabel;
+    totalSpan.textContent = totalLabel;
+  } else {
+    element.textContent = `${currentLabel} / ${totalLabel}`;
+  }
+  element.setAttribute("aria-label", currentLabel === "-" ? "페이지 없음" : `페이지 ${currentLabel} / ${totalLabel}`);
+}
+
 function updatePdfNavigationUI() {
   const hasPdf = hasLoadedPdfDocument();
   const controlsLocked = pdfExportInProgress || sessionRestoreInProgress;
@@ -160,7 +168,7 @@ function updatePdfNavigationUI() {
     exportAnnotatedPdfButton.disabled = controlsLocked;
   }
   removeDocumentButton.disabled = !hasPdf || controlsLocked;
-  pdfPageIndicator.textContent = indicatorText;
+  updatePageIndicator(pdfPageIndicator, currentPage, totalPages);
 
   if (toolbarPdfPageIndicator) {
     toolbarPdfPageIndicator.textContent = indicatorText;
