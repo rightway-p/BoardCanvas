@@ -62,6 +62,7 @@ function setDocumentPopupOpen(open) {
 }
 
 function closeDocumentPopup() {
+  if (typeof discardTouchSettingsDraft === "function") discardTouchSettingsDraft();
   if (window.BoardRemote) window.BoardRemote.closeSettings();
   setDocumentPopupOpen(false);
 }

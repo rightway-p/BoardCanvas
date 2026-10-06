@@ -171,27 +171,48 @@ test("interaction mode selection finishes active input and persists one exclusiv
   assert.equal(finishes, 2);
 });
 
-test("developer dialog keeps Tab inside after focus leaves and lets keyboard users switch tabs", () => {
+test("touch settings stay embedded and leave focus handling to the parent Settings dialog", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const trap = source.slice(source.indexOf("function trapDeveloperSettingsTab"), source.indexOf("function renderDeveloperSettings"));
-  const focused = [];
-  const controls = [
-    { disabled: false, tabIndex: 0, closest: () => null, focus() { focused.push("first"); } },
-    { disabled: false, tabIndex: -1, closest: () => null, focus() { focused.push("inactive"); } },
-    { disabled: false, tabIndex: 0, closest: () => null, focus() { focused.push("last"); } },
-  ];
-  const panel = { hidden: false, contains: () => false, querySelectorAll: () => controls, focus() { focused.push("panel"); } };
-  const context = { document: { activeElement: {}, getElementById: () => panel } };
-  vm.createContext(context); vm.runInContext(trap, context);
-  let prevented = false;
-  context.trapDeveloperSettingsTab({ key: "Tab", shiftKey: false, preventDefault() { prevented = true; } });
-  assert.equal(prevented, true);
-  assert.deepEqual(focused, ["first"]);
-  focused.length = 0; prevented = false;
-  context.trapDeveloperSettingsTab({ key: "Tab", shiftKey: true, preventDefault() { prevented = true; } });
-  assert.equal(prevented, true);
-  assert.deepEqual(focused, ["last"]);
-  assert.match(source, /event\.key === "ArrowRight"[\s\S]*event\.key === "Home"[\s\S]*event\.key === "End"/);
+  const html = fs.readFileSync(require.resolve("../index.html"), "utf8");
+  assert.doesNotMatch(source, /function trapDeveloperSettingsTab|function openDeveloperSettings|count >= 7/);
+  assert.match(source, /function renderTouchSettings\(\)/);
+  assert.match(source, /function ensureTouchSettingsDraft\(\)/);
+  assert.doesNotMatch(source.slice(source.indexOf("function renderTouchSettings"), source.indexOf("function formatTouchSettingValue")), /data-dev-close|panel\.querySelector\("header"\)|\.remove\(\)/);
+  assert.match(source, /data-dev-overlay[\s\S]*draft\.showTouchOverlay = event\.target\.checked/);
+  assert.match(source, /formatTouchSettingValue\("zoomSensitivity", draft\.zoomSensitivity\)/);
+  assert.match(html, /data-settings-panel="screen"[\s\S]*id="touchSettingsContent"/);
+  assert.match(html, /id="checkUpdateButton"/);
+});
+
+test("floating toolbar viewport updates reclamp its saved position to the measured size", () => {
+  const uiSource = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const toolbarSource = fs.readFileSync(require.resolve("../js/session-pdf-toolbar.js"), "utf8");
+  const viewport = uiSource.slice(uiSource.indexOf("function updateBoardViewport"), uiSource.indexOf("function updatePanFitButton"));
+  const setter = toolbarSource.slice(toolbarSource.indexOf("function clampToolbarFloatingPosition"), toolbarSource.indexOf("function setToolbarPlacement"));
+  const events = [];
+  const context = {
+    toolbarLayout: { placement: "floating", floatX: 433, floatY: 54 },
+    toolbar: { getBoundingClientRect: () => ({ width: 50, height: 696 }) },
+    boardWrapper: { style: {} },
+    app: { style: { setProperty(name, value) { events.push(`${name}:${value}`); } } },
+    window: { innerWidth: 1280, innerHeight: 720, requestAnimationFrame() { events.push("raf"); } },
+    requestAnimationFrame() { events.push("raf"); },
+    updatePanFitButton() {},
+    setCanvasSize() { events.push("canvas"); },
+    saveToolbarLayout() { throw new Error("floating viewport resize must not persist"); },
+  };
+  vm.createContext(context);
+  vm.runInContext(`${setter}\n${viewport}`, context);
+  context.updateBoardViewport();
+  assert.equal(context.toolbarLayout.floatY, 12);
+  assert.equal(context.boardWrapper.style.inset, "0");
+  assert.deepEqual(events, ["--toolbar-float-x:433px", "--toolbar-float-y:12px", "raf", "canvas"]);
+
+  context.toolbar = null;
+  assert.doesNotThrow(() => context.updateBoardViewport());
+  context.toolbar = { getBoundingClientRect: () => ({ width: 50, height: 696 }) };
+  context.boardWrapper = null;
+  assert.doesNotThrow(() => context.updateBoardViewport());
 });
 
 test("pan fit button tracks pan mode and fits PDF to the available board viewport", () => {
@@ -744,10 +765,11 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
   assert.equal(nodes.zoomCue.hidden, true);
   assert.equal(context.canvas.classes.has("is-zooming-in"), false);
 
-  const settingsFns = source.slice(source.indexOf("function getZoomCue"), source.indexOf("function initVersionTap"));
+  const settingsFns = source.slice(source.indexOf("function getZoomCue"), source.indexOf("function initUpdaterWiring"));
   const settingsNodes = {};
   const settingsContext = {
     window: { setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, clearInterval() {}, localStorage: { setItem(k, v) { this[k] = v; }, getItem(k) { return this[k] || null; } } },
+    performance: { now: () => now },
     document: { getElementById: (id) => settingsNodes[id] || null, querySelector: () => null, createElement: makeNode, addEventListener() {}, removeEventListener() {} },
     BoardState: boardState,
     setBoardInteractionMode(mode) { vm.runInContext(`boardInteractionMode="${mode}"`, settingsContext); },
@@ -793,8 +815,6 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
   assert.equal(vm.runInContext("developerTrial", settingsContext), null);
   assert.equal(settingsNodes.devZoomCue.hidden, true);
 
-  settingsNodes.developerSettings = { hidden: false, removeAttribute() {} };
-  settingsNodes.developerSettingsBackdrop = { hidden: false };
   assert.equal(settingsContext.normalizeDevSettings({ zoomHoldMs: 3000 }).zoomCueDelayMs, 500);
   assert.equal(settingsContext.normalizeDevSettings({ zoomHoldMs: 3000 }).zoomCueShrinkMs, 2500);
   assert.equal(settingsContext.normalizeDevSettings({ zoomHoldMs: 5000 }).zoomCueShrinkMs, 4500);
@@ -809,26 +829,82 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
   assert.equal(validCustom.zoomCueDelayMs + validCustom.zoomCueShrinkMs, 3000);
   assert.equal(validCustom.presetHoldMs, 4100);
   assert.equal(validCustom.showTouchOverlay, false);
+  assert.equal(settingsContext.formatTouchSettingValue("zoomSensitivity", "0.009"), "0.009");
+  assert.equal(settingsContext.formatTouchSettingValue("movementThreshold", "12"), "12px");
+  assert.equal(settingsContext.formatTouchSettingValue("zoomCueDelayMs", "500"), "500ms");
   settingsContext.discardDeveloperSettings();
   assert.equal(settingsContext.window.localStorage.test, undefined);
-  assert.equal(settingsNodes.developerSettings.hidden, true);
-  assert.equal(vm.runInContext("devSettingsDraft", settingsContext), null);
+  assert.deepEqual(vm.runInContext("devSettingsDraft", settingsContext), vm.runInContext("devSettings", settingsContext));
   vm.runInContext("devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}", settingsContext);
-  vm.runInContext("developerSettingsTab=\"multi\"", settingsContext);
+  vm.runInContext("touchSettingsTab=\"multi\"", settingsContext);
+  vm.runInContext("const savedDraftIdentity=devSettingsDraft", settingsContext);
   settingsContext.saveDeveloperSettings();
   assert.equal(JSON.parse(settingsContext.window.localStorage.test).zoomCueDelayMs, 900);
   assert.equal(vm.runInContext("devSettings.zoomCueShrinkMs", settingsContext), 2100);
+  assert.equal(vm.runInContext("devSettingsDraft===savedDraftIdentity", settingsContext), true);
+  vm.runInContext("devSettingsDraft.zoomCueDelayMs=600", settingsContext);
+  settingsContext.saveDeveloperSettings();
+  assert.equal(vm.runInContext("devSettings.zoomCueDelayMs", settingsContext), 600);
   assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "multi");
-  assert.match(source, /developerSettingsTab = boardInteractionMode;/);
+  assert.match(source, /touchSettingsTab = boardInteractionMode;/);
   vm.runInContext("boardInteractionMode=\"multi\"", settingsContext);
-  vm.runInContext("developerSettingsTab=\"single\"", settingsContext);
+  vm.runInContext("touchSettingsTab=\"single\"", settingsContext);
   settingsContext.discardDeveloperSettings();
   assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "multi");
-  vm.runInContext("developerSettingsTab=\"single\"; devSettingsDraft={...devSettings}", settingsContext);
+  vm.runInContext("touchSettingsTab=\"single\"; devSettingsDraft={...devSettings}", settingsContext);
   settingsContext.saveDeveloperSettings();
   assert.equal(vm.runInContext("boardInteractionMode", settingsContext), "single");
   assert.doesNotMatch(source, /getElementById\("appInfoButton"\)\.addEventListener/);
   assert.match(source, /zoomCueDelayMs: 500, zoomCueShrinkMs: 1500/);
+});
+
+test("single-touch trial keeps feedback isolated and clears it with all pointer lifecycles", () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const trialSource = source.slice(source.indexOf("let developerTrial"), source.indexOf("function initDeveloperCalibration"));
+  const timers = new Map(); const intervals = new Map(); let timerId = 0; let now = 0;
+  const feedbackPoint = { style: {} }, feedbackReadout = { textContent: "" };
+  const feedback = {
+    hidden: true, style: {},
+    setAttribute() {},
+    querySelector(selector) { return selector.includes("feedback-point") ? feedbackPoint : feedbackReadout; },
+    remove() { this.removed = true; area.feedback = null; },
+  };
+  const handlers = {};
+  const area = {
+    feedback: null,
+    addEventListener(name, handler) { handlers[name] = handler; },
+    querySelector() { return this.feedback; },
+    append(node) { this.feedback = node; },
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 100 }),
+    setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {},
+  };
+  const context = {
+    developerTrial: null,
+    document: { createElement: () => feedback, querySelector: () => area },
+    performance: { now: () => now },
+    window: {
+      setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
+      clearTimeout(id) { timers.delete(id); },
+      setInterval(fn) { const id = ++timerId; intervals.set(id, fn); return id; },
+      clearInterval(id) { intervals.delete(id); },
+    },
+    showZoomHoldCue() {}, showZoomCue() {}, hideZoomCue() {},
+  };
+  vm.createContext(context); vm.runInContext(trialSource, context);
+  context.initDeveloperTrial(area, { zoomCueDelayMs: 500, zoomCueShrinkMs: 1500, movementThreshold: 12, zoomSensitivity: 0.008, showTouchOverlay: true });
+  handlers.pointerdown({ isPrimary: true, pointerId: 1, clientX: 60, clientY: 70, preventDefault() {} });
+  assert.equal(area.feedback.hidden, false);
+  assert.match(feedbackReadout.textContent, /허용 반경 12px · 유지 0ms/);
+  now = 125; [...intervals.values()].forEach((fn) => fn());
+  assert.match(feedbackReadout.textContent, /유지 125ms/);
+  handlers.pointerup({ pointerId: 1 });
+  assert.equal(area.feedback, null);
+  assert.equal(intervals.size, 0);
+  assert.equal(timers.size, 0);
+  handlers.pointerdown({ isPrimary: true, pointerId: 2, clientX: 60, clientY: 70, preventDefault() {} });
+  handlers.lostpointercapture({ pointerId: 2 });
+  assert.equal(area.feedback, null);
+  assert.equal(intervals.size, 0);
 });
 
 test("add undo/redo preserves edits made after redo", () => {

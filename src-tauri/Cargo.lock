@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "boardcanvas"
-version = "2.0.1-beta.3"
+version = "2.0.1-beta.4"
 dependencies = [
  "base64 0.22.1",
  "futures-util",

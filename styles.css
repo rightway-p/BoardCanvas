@@ -264,6 +264,13 @@ body {
 .app.toolbar-placement-right .toolbar { --toolbar-control-size: 32px; }
 .toolbar .color-preset,
 .toolbar .help-icon-button { width: var(--toolbar-control-size); height: var(--toolbar-control-size); min-width: var(--toolbar-control-size); min-height: var(--toolbar-control-size); border-radius: 8px; }
+.toolbar-boundary { position: relative; }
+.toolbar-boundary::before { content: ""; position: absolute; pointer-events: none; background: var(--line); opacity: .8; }
+.app.toolbar-placement-top .toolbar-boundary::before,
+.app.toolbar-placement-bottom .toolbar-boundary::before { top: 4px; bottom: 4px; left: -6px; width: 1px; }
+.app.toolbar-placement-left .toolbar-boundary::before,
+.app.toolbar-placement-right .toolbar-boundary::before,
+.app.toolbar-placement-floating .toolbar-boundary::before { top: -5px; right: 4px; left: 4px; height: 1px; }
 .app.toolbar-placement-left .toolbar-drag-handle,
 .app.toolbar-placement-right .toolbar-drag-handle,
 .app.toolbar-placement-left .tool-button,
@@ -998,13 +1005,8 @@ body {
 @keyframes zoom-hold-shrink { to { transform: translate(-50%, -50%) scale(.2); } }
 #board.is-zooming-in { cursor: zoom-in; }
 #board.is-zooming-out { cursor: zoom-out; }
-.dev-touch-mark { position: absolute; z-index: 6; min-width: calc(var(--dev-radius, 12px) * 2); min-height: calc(var(--dev-radius, 12px) * 2); border: 2px solid #e53935; border-radius: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; color: #c62828; background: #fff8; font-size: 9px; pointer-events: none; }
-.page-manager, .developer-settings { position: fixed; z-index: 80; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: auto; background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px #0003; padding: 16px; }
-.page-manager header, .developer-settings header, .page-manager footer, .developer-settings footer { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-.developer-settings { width: min(840px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; display: grid; gap: 14px; }
-.developer-settings[hidden] { display: none; }
-.developer-settings header { position: sticky; top: -16px; z-index: 1; padding: 4px 0 10px; background: white; font-size: 17px; }
-.developer-settings .dev-close { width: 32px; min-height: 32px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); font-size: 22px; line-height: 1; }
+.page-manager { position: fixed; z-index: 80; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: auto; background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px #0003; padding: 16px; }
+.page-manager header, .page-manager footer { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .dev-settings-body { display: grid; align-content: start; gap: 16px; overflow-y: auto; min-height: 0; padding: 0 2px; }
 .dev-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); }
 .dev-tabs button { min-height: 38px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); }
@@ -1014,12 +1016,16 @@ body {
 .dev-timing, .dev-other { display: grid; gap: 10px; }
 .dev-timing { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
 .dev-timing h3 { margin: 0; font-size: 14px; }
-.developer-settings label { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(100px, 1.4fr) 54px; align-items: center; gap: 8px; font-size: 13px; }
-.developer-settings input[type="checkbox"] { grid-column: 1; }
-.developer-settings output { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: #475569; }
+.touch-settings-card label { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(100px, 1.4fr) 54px; align-items: center; gap: 8px; font-size: 13px; word-break: keep-all; }
+.touch-settings-card .dev-other > label:first-child { display: flex; justify-content: flex-start; gap: var(--space-2); }
+.touch-settings-card input[type="checkbox"] { grid-column: 1; }
+.touch-settings-card output { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: #475569; }
 .dev-total { margin: 0; text-align: right; font-weight: 600; font-size: 13px; }
 .dev-guidance { margin: 0; color: #475569; font-size: 12px; line-height: 1.45; }
 .dev-test-area { position: relative; display: grid; place-items: center; min-height: 104px; overflow: hidden; border: 1px dashed #94a3b8; border-radius: 10px; background: white; color: #64748b; font-size: 13px; touch-action: none; user-select: none; }
+.dev-touch-feedback { position: absolute; z-index: 2; display: block; border: 2px solid #e53935; border-radius: 50%; transform: translate(-50%, -50%); background: #fff8; pointer-events: none; }
+.dev-touch-feedback-point { position: absolute; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); background: #c62828; }
+.dev-touch-feedback-readout { position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%); min-width: max-content; color: #c62828; font-size: 10px; line-height: 1.2; }
 .dev-calibration { display: grid; align-content: start; gap: 8px; }
 .dev-calibration-layout { display: grid; grid-template-columns: minmax(190px, 220px) minmax(0, 1fr); gap: 14px; align-items: start; }
 .dev-calibration-controls, .dev-calibration-main { display: grid; align-content: start; gap: 10px; min-width: 0; }
@@ -1046,11 +1052,15 @@ body {
 .dev-calibration-records li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 11px; }
 .dev-calibration-records p { margin: 0; font-variant-numeric: tabular-nums; }
 .dev-calibration-records button { min-height: 32px; font-size: 11px; }
-.developer-settings-backdrop { position: fixed; inset: 0; z-index: 79; background: #0004; }
-.developer-settings-backdrop[hidden] { display: none; }
-.developer-settings footer { position: sticky; bottom: -16px; padding-top: 10px; background: white; }
-.developer-settings footer button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); }
-.developer-settings footer [data-dev-save] { border-color: #1976d2; background: #1976d2; color: white; }
+.touch-settings-card footer { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.touch-settings-card footer button { min-height: var(--settings-control-size); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); color: var(--text); font-size: var(--type-body); cursor: pointer; }
+.touch-settings-card footer [data-dev-save] { border-color: var(--pen-blue); background: var(--pen-blue); color: white; }
+.touch-settings-status { margin: 0; color: var(--muted); font-size: var(--type-label); line-height: 1.4; }
+.dev-definition { margin: 0; color: var(--muted); font-size: var(--type-body); line-height: 1.5; }
+.touch-settings-card .dev-settings-body { overflow: visible; padding: 0; }
+.touch-settings-card .dev-test-area { min-height: 180px; overflow: visible; }
+.touch-settings-card .dev-calibration-area { min-height: 360px; }
+.touch-settings-card .dev-calibration-records { max-height: 160px; }
 @media (min-width: 700px) {
   .dev-settings-body { grid-template-columns: 1fr; align-items: start; }
   .dev-timing { grid-template-columns: 1fr 1fr; }
@@ -1063,7 +1073,6 @@ body {
   .dev-other label:first-child { grid-column: 1 / -1; }
 }
 @media (max-width: 520px) {
-  .developer-settings { width: calc(100vw - 16px); max-height: calc(100vh - 16px); padding: 10px; gap: 10px; }
   .dev-calibration-layout { grid-template-columns: 1fr; }
   .dev-calibration-area { min-height: 280px; }
   .dev-calibration-readout { grid-template-columns: max-content 1fr; }
@@ -1072,11 +1081,10 @@ body {
 .page-list { display: grid; gap: 6px; margin: 10px 0; }
 .page-entry { text-align: left; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: white; }
 .page-entry.is-active { outline: 2px solid var(--accent); }
-.page-manager button, .developer-settings button { min-height: 32px; cursor: pointer; }
+.page-manager button { min-height: 32px; cursor: pointer; }
 .pen-preset-editor { position: fixed; z-index: 80; display: grid; gap: 8px; min-width: 190px; padding: 10px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0003; }
 .pen-preset-editor label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pen-preset-editor > div { display: flex; justify-content: flex-end; gap: 6px; }
-.developer-settings label { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 10px 0; }
 .sequence-actions { display: flex; gap: 6px; }
 .sequence-actions .document-action-button { flex: 1; }
 .app-info-popup { position: fixed; z-index: 70; right: auto; top: 60px; display: grid; gap: 8px; min-width: 150px; padding: 12px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0002; }
@@ -1115,6 +1123,19 @@ body {
 .settings-content { min-width: 0; overflow: auto; padding: var(--space-5); scrollbar-gutter: stable; }
 .settings-content [data-settings-panel][hidden] { display: none !important; }
 .settings-content h3 { margin: 0 0 var(--space-4); font-size: 18px; line-height: 1.3; }
+.settings-group-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.settings-card { min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
+.settings-card h4 { margin: 0; font-size: 16px; line-height: 1.3; }
+.settings-card p { margin: var(--space-2) 0 var(--space-3); color: var(--muted); font-size: var(--type-body); line-height: 1.45; }
+.settings-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.settings-card-actions .document-action-button { flex: 1 1 180px; }
+.screen-settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.screen-settings-grid .touch-settings-card { grid-column: 1 / -1; }
+.screen-background-card .board-color-editor { margin-top: var(--space-3); }
+.about-card { max-width: 620px; }
+.about-version { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin: var(--space-3) 0; }
+.about-version span { color: var(--muted); font-size: var(--type-label); }
+.about-version-value { min-height: var(--settings-control-size); display: inline-flex; align-items: center; padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface-soft); color: var(--text) !important; font-size: var(--type-body) !important; }
 .settings-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--space-2); max-width: 620px; }
 .settings-content .document-action-button { width: auto; min-height: var(--settings-control-size); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); color: var(--text); font-size: var(--type-body); text-align: left; }
 .settings-content .document-action-button:hover { border-color: #aebbd0; background: #f8faff; }
@@ -1236,6 +1257,10 @@ body.overlay-mode,
   .settings-nav button { flex: 0 0 auto; min-height: 40px; padding: 7px 10px; font-size: 13px; white-space: nowrap; }
   .settings-content { padding: var(--space-4) var(--space-3); }
   .settings-action-grid { grid-template-columns: 1fr; }
+  .settings-group-grid,
+  .screen-settings-grid { grid-template-columns: 1fr; }
+  .screen-settings-grid .touch-settings-card { grid-column: auto; }
+  .about-version { align-items: flex-start; flex-direction: column; }
   .remote-action-row { grid-template-columns: minmax(56px,1fr) minmax(54px,auto) auto auto !important; gap: 4px !important; padding-inline: 2px !important; }
   .remote-key-badge { min-width: 54px; max-width: 84px; padding-inline: 4px; font-size: 13px; }
   .remote-action-row button { min-width: 54px; padding-inline: 4px; font-size: 14px; }

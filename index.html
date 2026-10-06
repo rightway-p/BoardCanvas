@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Web Board</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.1-beta.3-toolbar-r1" />
+  <link rel="stylesheet" href="styles.css?v=2.0.1-beta4-ux-r1" />
 </head>
 
 <body>
@@ -61,7 +61,7 @@
           </div>
         </div>
       </div>
-      <button id="clearButton" class="tool-button icon-tool-button" type="button" aria-label="전체 지우기" title="전체 지우기">
+      <button id="clearButton" class="tool-button icon-tool-button toolbar-boundary" type="button" aria-label="전체 지우기" title="전체 지우기">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 7h16"></path>
           <path d="M9 7V5h6v2"></path>
@@ -74,14 +74,14 @@
       <div id="pageManager" class="page-manager is-hidden" role="dialog" aria-label="페이지 관리">
         <header><strong>페이지 관리</strong><button id="closePageManager" type="button" aria-label="닫기">×</button></header><div id="pageList" class="page-list"></div><footer><button id="addBlankPage" type="button">현재 뒤에 칠판 추가</button><button id="deleteBlankPage" type="button">칠판 삭제</button><button id="pageStructureUndo" type="button" aria-label="페이지 변경 취소">↶</button><button id="pageStructureRedo" type="button" aria-label="페이지 변경 다시 실행">↷</button></footer>
       </div>
-      <button id="undoButton" class="tool-button icon-tool-button" type="button" aria-label="실행 취소" title="실행 취소 (Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"></path><path d="M4 12h8a6 6 0 1 1 0 12"></path></svg></button>
+      <button id="undoButton" class="tool-button icon-tool-button toolbar-boundary" type="button" aria-label="실행 취소" title="실행 취소 (Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"></path><path d="M4 12h8a6 6 0 1 1 0 12"></path></svg></button>
       <button id="redoButton" class="tool-button icon-tool-button" type="button" aria-label="다시 실행" title="다시 실행 (Ctrl/Cmd+Y 또는 Shift+Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"></path><path d="M20 12h-8a6 6 0 1 0 0 12"></path></svg></button>
-      <div id="currentPenEditor" class="current-pen-editor"><label class="control" for="penColor"><span>현재 펜 색</span><input id="penColor" type="color" value="#111111" /></label><label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label></div>
-      <div class="preset-group" aria-label="펜 프리셋"><span class="preset-title">펜 프리셋</span><div id="penPresets" class="preset-list"></div></div>
+      <div id="currentPenEditor" class="current-pen-editor toolbar-boundary"><label class="control" for="penColor"><span>현재 펜 색</span><input id="penColor" type="color" value="#111111" /></label><label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label></div>
+      <div class="preset-group toolbar-boundary" aria-label="펜 프리셋"><span class="preset-title">펜 프리셋</span><div id="penPresets" class="preset-list"></div></div>
       <div id="presetHelp" class="preset-help-wrap"><button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" title="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button><div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭) 저장</div></div>
       <span id="modeLabel" class="mode-label">모드: 펜</span>
-      <nav class="presentation-page-nav" aria-label="페이지 탐색"><button id="pdfPrevPage" type="button" aria-label="이전 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span id="pdfPageIndicator" class="page-indicator" aria-live="polite" aria-atomic="true" aria-label="페이지 없음"><span class="page-current">-</span><span class="page-separator" aria-hidden="true">/</span><span class="page-total">-</span></span><button id="pdfNextPage" type="button" aria-label="다음 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button></nav>
-      <div id="documentEditor" class="document-editor">
+      <nav class="presentation-page-nav toolbar-boundary" aria-label="페이지 탐색"><button id="pdfPrevPage" type="button" aria-label="이전 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span id="pdfPageIndicator" class="page-indicator" aria-live="polite" aria-atomic="true" aria-label="페이지 없음"><span class="page-current">-</span><span class="page-separator" aria-hidden="true">/</span><span class="page-total">-</span></span><button id="pdfNextPage" type="button" aria-label="다음 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button></nav>
+      <div id="documentEditor" class="document-editor toolbar-boundary">
         <button id="appInfoButton" class="tool-button icon-tool-button app-info-button" type="button" aria-label="설정" title="설정" aria-expanded="false" aria-controls="documentPopup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
         <div id="documentPopup" class="settings-overlay is-hidden" role="dialog" aria-modal="true" aria-label="설정">
           <section class="settings-dialog">
@@ -95,19 +95,27 @@
               </nav>
               <div class="settings-content">
                 <section data-settings-panel="documents"><h3>자료·저장</h3>
-                  <div class="settings-action-grid"><button id="documentLoadButton" class="document-action-button" type="button">PDF/PPT 불러오기</button><button id="saveBoardWorkButton" class="document-action-button" type="button">작업 저장</button><button id="openBoardWorkButton" class="document-action-button" type="button">작업 열기</button><button id="driveSettingsButton" class="document-action-button" type="button">Google Drive PDF</button><button id="exportAnnotatedPdfButton" class="document-action-button" type="button">판서 포함 PDF 저장</button><button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서 제거</button></div>
+                  <div class="settings-group-grid">
+                    <article class="settings-card"><h4>가져오기</h4><p>PDF 또는 PPT/PPTX 파일을 불러오거나 Google Drive의 PDF를 엽니다.</p><div class="settings-card-actions"><button id="documentLoadButton" class="document-action-button" type="button">PDF/PPT 불러오기</button><button id="driveSettingsButton" class="document-action-button" type="button">Google Drive PDF</button></div></article>
+                    <article class="settings-card"><h4>작업</h4><p>현재 문서와 필기를 작업 파일로 저장하거나 다시 엽니다.</p><div class="settings-card-actions"><button id="saveBoardWorkButton" class="document-action-button" type="button">작업 저장</button><button id="openBoardWorkButton" class="document-action-button" type="button">작업 열기</button></div></article>
+                    <article class="settings-card"><h4>내보내기</h4><p>현재 판서를 포함한 PDF를 저장합니다.</p><div class="settings-card-actions"><button id="exportAnnotatedPdfButton" class="document-action-button" type="button">판서 포함 PDF 저장</button></div></article>
+                    <article class="settings-card"><h4>제거·페이지 관리</h4><p>현재 문서를 비우거나 칠판 페이지 순서를 관리합니다.</p><div class="settings-card-actions"><button id="removeDocumentButton" class="document-action-button document-remove-button" type="button">문서 제거</button><button id="pageManagerButton" class="document-action-button" type="button">페이지 관리</button></div></article>
+                  </div>
                   <input id="boardWorkInput" class="document-file-input" type="file" accept=".boardwork,.boardjson,application/json" />
                   <input id="documentInput" class="document-file-input" type="file" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" />
-                  <button id="pageManagerButton" class="document-action-button" type="button">페이지 관리</button><p id="documentStatus" class="document-status">문서 없음</p>
+                  <p id="documentStatus" class="document-status">문서 없음</p>
                 </section>
                 <section data-settings-panel="screen" hidden><h3>화면</h3>
-                  <div id="boardColorEditor" class="control board-color-editor"><span>배경색</span><button id="openBoardColorPopup" class="board-color-trigger" type="button" aria-label="배경색 설정" aria-expanded="false" aria-controls="boardColorPopup"><span id="boardColorPreview" class="board-color-preview" aria-hidden="true"></span></button>
-                    <div id="boardColorPopup" class="board-color-popover is-hidden" role="dialog" aria-label="배경색 설정"><label class="control board-color-control" for="boardColor"><span>배경색</span><input id="boardColor" type="color" value="#ffffff" /></label><div class="preset-group board-preset-group" aria-label="배경색 프리셋"><span class="preset-title">프리셋</span><div id="boardPresets" class="preset-list"></div></div></div>
-                  </div><label class="settings-checkbox" for="boardInteractionMode">터치 동작 방식<select id="boardInteractionMode" aria-label="터치 동작 방식"><option value="single">단일 터치</option><option value="multi">두 손가락 멀티터치</option></select></label><p class="interaction-mode-hint">펜 그리기는 그대로 유지되며, 패닝 모드에서 선택한 터치 방식 하나만 사용합니다.</p><button id="fullscreenToggle" class="document-action-button" type="button">전체화면 전환</button><button id="fitPageButton" class="document-action-button" type="button">페이지 맞춤</button>
-                  <label class="settings-checkbox"><input id="allowPdfZoomBelowFit" type="checkbox">PDF 맞춤보다 작게 축소 허용</label>
+                  <div class="settings-group-grid screen-settings-grid">
+                    <article class="settings-card screen-background-card"><h4>배경</h4><p>현재 칠판 페이지의 배경색과 프리셋을 설정합니다.</p><div id="boardColorEditor" class="control board-color-editor"><span>배경색</span><button id="openBoardColorPopup" class="board-color-trigger" type="button" aria-label="배경색 설정" aria-expanded="false" aria-controls="boardColorPopup"><span id="boardColorPreview" class="board-color-preview" aria-hidden="true"></span></button>
+                      <div id="boardColorPopup" class="board-color-popover is-hidden" role="dialog" aria-label="배경색 설정"><label class="control board-color-control" for="boardColor"><span>배경색</span><input id="boardColor" type="color" value="#ffffff" /></label><div class="preset-group board-preset-group" aria-label="배경색 프리셋"><span class="preset-title">프리셋</span><div id="boardPresets" class="preset-list"></div></div></div>
+                    </div></article>
+                    <article class="settings-card touch-settings-card"><h4>터치 조작</h4><div id="touchSettingsContent"></div></article>
+                    <article class="settings-card screen-control-card"><h4>화면 제어</h4><p>전체 화면, 페이지 맞춤과 PDF 축소 범위를 설정합니다.</p><div class="settings-card-actions"><button id="fullscreenToggle" class="document-action-button" type="button">전체화면 전환</button><button id="fitPageButton" class="document-action-button" type="button">페이지 맞춤</button></div><label class="settings-checkbox"><input id="allowPdfZoomBelowFit" type="checkbox">PDF 맞춤보다 작게 축소 허용</label></article>
+                  </div>
                 </section>
                 <section data-settings-panel="remote" hidden><h3>리모컨</h3><div id="remoteSettingsContent"></div></section>
-                <section data-settings-panel="about" hidden><h3>앱 정보</h3><strong>BoardCanvas</strong><button id="appVersion" type="button">버전 2.0.1-beta.3</button><button id="checkUpdateButton" type="button">업데이트 확인</button><button id="promoteStableButton" type="button" hidden>정식 버전으로 전환</button><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><button id="rollbackUpdateButton" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" type="button" hidden>복구 도구 열기</button><span id="updateStatus" aria-live="polite"></span></section>
+                <section data-settings-panel="about" hidden><h3>앱 정보</h3><div class="settings-card about-card"><strong>BoardCanvas</strong><p>현재 버전과 업데이트 상태를 확인하고 이전 버전 복구를 실행합니다.</p><div class="about-version"><span>현재 버전</span><span id="appVersion" class="about-version-value">버전 2.0.1-beta.4</span></div><div class="settings-card-actions"><button id="checkUpdateButton" class="document-action-button" type="button">업데이트 확인</button><button id="promoteStableButton" class="document-action-button" type="button" hidden>정식 버전으로 전환</button></div><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><div class="settings-card-actions"><button id="rollbackUpdateButton" class="document-action-button" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" class="document-action-button" type="button" hidden>복구 도구 열기</button></div><span id="updateStatus" aria-live="polite"></span></div></section>
               </div>
             </div>
           </section>
@@ -138,7 +146,7 @@
   <script src="./js/domain/board-state.js"></script>
   <script src="./js/globals.js?v=2.0.1-settings-sidebar-r1"></script>
   <script src="./js/runtime-overlay.js?v=2.0.1-fullscreen-state-r1"></script>
-  <script src="./js/session-pdf-toolbar.js?v=2.0.1-beta.3-toolbar-r1"></script>
+  <script src="./js/session-pdf-toolbar.js?v=2.0.1-beta4-ux-r1"></script>
   <script src="./js/presets-utils.js"></script>
   <script src="./js/presets-ui.js"></script>
   <script src="./js/strokes-core.js?v=2.0.1-pdf-content-fit-r1"></script>
@@ -148,7 +156,7 @@
   <script src="./js/render-doc-draw.js?v=2.0.1-reopen-view-r1"></script>
   <script src="./js/remote-controls.js?v=2.0.1-remote-clear-r3"></script>
   <script src="./js/events-init.js?v=2.0.1-settings-sidebar-r2"></script>
-  <script src="./js/board-2.0.1-ui.js?v=2.0.1-beta.3-toolbar-r1"></script>
+  <script src="./js/board-2.0.1-ui.js?v=2.0.1-beta4-ux-r1"></script>
 </body>
 
 </html>
