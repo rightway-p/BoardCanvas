@@ -9,7 +9,7 @@
   },
   "package": {
     "productName": "BoardCanvas",
-    "version": "2.0.1"
+    "version": "2.0.1-beta.1"
   },
   "tauri": {
     "windows": [
@@ -27,12 +27,16 @@
       "all": false,
       "window": {
         "all": true
+      },
+      "dialog": {
+        "confirm": true
       }
     },
     "bundle": {
       "active": true,
       "targets": ["nsis"],
       "identifier": "com.rightway.boardcanvas",
+      "resources": [],
       "icon": ["icons/icon.ico"],
       "windows": {
         "nsis": {

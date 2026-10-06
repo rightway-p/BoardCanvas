@@ -444,23 +444,84 @@ function requestBoardWorkReplacement(action) {
   return request.promise;
 }
 let updaterFlow;
+async function getUpdaterFlow(invoke, setStatus) {
+  if (!updaterFlow) {
+    updaterFlow = import("./updater-flow.mjs?v=2.0.1-recovery-r1").then(({ createUpdaterFlow }) => createUpdaterFlow({
+      getStatus: () => invoke("get_updater_status"),
+      checkUpdate: () => invoke("check_board_update"),
+      prepareUpdate: () => invoke("prepare_board_update"),
+      authorizePrepared: ({ workSaved, pdfsSaved }) => invoke("authorize_prepared_operation", { workSaved, pdfsSaved }),
+      launchUpdate: () => invoke("launch_board_update"),
+      checkPromotion: () => invoke("check_stable_release"),
+      preparePromotion: () => invoke("prepare_board_promotion"),
+      launchPromotion: () => invoke("launch_board_promotion"),
+      getRecoveryStatus: () => invoke("get_recovery_status"),
+      rollback: () => invoke("rollback_board_update"),
+      cancelPrepared: () => invoke("cancel_prepared_operation"),
+      acknowledgeRecovery: ({ restoreSucceeded, pdfRestoreSucceeded }) => invoke("acknowledge_recovery", { restoreSucceeded, pdfRestoreSucceeded }),
+      openRecovery: () => invoke("open_recovery_tool"),
+      finishInput: finishActiveBoardInput,
+      persistSession: persistSessionState,
+      confirmInstall: (message) => window.confirm(message),
+      confirmRollback: (message) => window.confirm(message),
+      confirmPromotion: (message) => window.confirm(message),
+      setStatus,
+      onRecoveryStatus: updateRecoveryUi,
+    })).catch((error) => { updaterFlow = undefined; throw error; });
+  }
+  return updaterFlow;
+}
 async function runUpdaterCheck(userInitiated) {
   const invoke = getTauriInvoke();
   const status = document.getElementById("updateStatus");
   const setStatus = (message) => { status.textContent = message; };
   if (!invoke) { if (userInitiated) setStatus("데스크톱 앱에서만 업데이트를 확인할 수 있습니다."); return false; }
-  if (!updaterFlow) {
-    updaterFlow = import("./updater-flow.mjs?v=2.0.1-updater-r1").then(({ createUpdaterFlow }) => createUpdaterFlow({
-      getStatus: () => invoke("get_updater_status"),
-      getUpdater: () => window.__TAURI__?.updater,
-      finishInput: finishActiveBoardInput,
-      persistSession: persistSessionState,
-      confirmInstall: (message) => window.confirm(message),
-      setStatus,
-    })).catch((error) => { updaterFlow = undefined; throw error; });
-  }
-  try { return (await updaterFlow).run(userInitiated); }
+  try { return (await getUpdaterFlow(invoke, setStatus)).run(userInitiated); }
   catch (error) { setStatus(error?.message || "업데이트를 확인하지 못했습니다."); return false; }
+}
+function updateRecoveryUi(info) {
+  const version = document.getElementById("appVersion");
+  const previous = document.getElementById("previousVersion");
+  const rollback = document.getElementById("rollbackUpdateButton");
+  const openTool = document.getElementById("openRecoveryToolButton");
+  const promote = document.getElementById("promoteStableButton");
+  if (info?.currentVersion && version) version.textContent = `버전 ${info.currentVersion}`;
+  if (previous) previous.textContent = info?.canRollback ? `직전 버전: ${info.previousVersion}` : (info?.message || "복구 가능한 직전 버전 없음");
+  if (rollback) rollback.hidden = !info?.canRollback;
+  if (openTool) openTool.hidden = !info?.recoveryToolAvailable;
+  if (promote) promote.hidden = info?.channel !== "beta";
+}
+async function refreshUpdaterRecovery() {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    document.getElementById("updateStatus").textContent = "데스크톱 앱에서만 업데이트와 버전 복구를 사용할 수 있습니다.";
+    return null;
+  }
+  try {
+    const status = await invoke("get_updater_status");
+    updateRecoveryUi(status);
+    return (await getUpdaterFlow(invoke, (message) => { document.getElementById("updateStatus").textContent = message; })).refreshRecovery();
+  } catch (error) {
+    document.getElementById("updateStatus").textContent = error?.message || "복구 상태를 확인하지 못했습니다.";
+    return null;
+  }
+}
+async function acknowledgeUpdaterRecovery(invoke, restoreResult) {
+  const status = await invoke("get_recovery_status");
+  if (status?.state !== "needs-verification") return Boolean(restoreResult?.success);
+  const flow = await getUpdaterFlow(invoke, (message) => { document.getElementById("updateStatus").textContent = message; });
+  return flow.acknowledgeRestoredSession(restoreResult);
+}
+async function runUpdaterAction(name) {
+  const invoke = getTauriInvoke();
+  const status = document.getElementById("updateStatus");
+  if (!invoke) { status.textContent = "데스크톱 앱에서만 업데이트와 버전 복구를 사용할 수 있습니다."; return false; }
+  try {
+    const flow = await getUpdaterFlow(invoke, (message) => { status.textContent = message; });
+    if (name === "rollback") return await flow.rollback();
+    if (name === "promote") return await flow.promote();
+    return await flow.openRecovery();
+  } catch (error) { status.textContent = error?.message || "요청을 처리하지 못했습니다."; return false; }
 }
 async function finishBoardWorkReplacement(save) {
   const pending = workReplacementManager.take();
@@ -1021,6 +1082,9 @@ function initVersionTap() {
   let count = 0, timer = null;
   const version = document.getElementById("appVersion"); if (!version) return;
   document.getElementById("checkUpdateButton").addEventListener("click", () => { void runUpdaterCheck(true); });
+  document.getElementById("rollbackUpdateButton").addEventListener("click", () => { void runUpdaterAction("rollback"); });
+  document.getElementById("promoteStableButton").addEventListener("click", () => { void runUpdaterAction("promote"); });
+  document.getElementById("openRecoveryToolButton").addEventListener("click", () => { void runUpdaterAction("openRecovery"); });
   version.addEventListener("click", () => { count += 1; window.clearTimeout(timer); timer = window.setTimeout(() => { count = 0; }, 1500); if (count >= 7) { count = 0; openDeveloperSettings(); } });
 }
 function initBoard201Ui() {
@@ -1048,7 +1112,7 @@ function initBoard201Ui() {
   cancelReplaceButton.addEventListener("click", () => { workReplacementManager.cancel(); replaceWorkDialog.classList.add("is-hidden"); documentInput.value = ""; });
   pdfPrevPageButton.addEventListener("click", () => goToBoardPage(-1));
   pdfNextPageButton.addEventListener("click", () => goToBoardPage(1));
-  document.querySelectorAll("[data-settings-category]").forEach((button) => button.addEventListener("click", () => selectSettingsCategory(button.dataset.settingsCategory)));
+  document.querySelectorAll("[data-settings-category]").forEach((button) => button.addEventListener("click", () => { selectSettingsCategory(button.dataset.settingsCategory); if (button.dataset.settingsCategory === "about") void refreshUpdaterRecovery(); }));
   const interactionModeSelect = document.getElementById("boardInteractionMode");
   try { boardInteractionMode = window.localStorage.getItem(BOARD_INTERACTION_MODE_KEY) === "multi" ? "multi" : "single"; } catch { boardInteractionMode = "single"; }
   if (interactionModeSelect) { interactionModeSelect.value = boardInteractionMode; interactionModeSelect.addEventListener("change", () => setBoardInteractionMode(interactionModeSelect.value)); }
@@ -1128,11 +1192,23 @@ if (!document.getElementById("developerSettings")) { const panel = document.crea
   window.requestBoardWorkReplacement = requestBoardWorkReplacement;
   window.loadBoardWorkFile = openBoardWorkFile;
   const restorePromise = window.boardRestorePromise || Promise.resolve();
-  void restorePromise.then(() => {
+  void restorePromise.then((restoreResult) => {
     boardPageSequence.forEach((page) => { if (page.kind === "pdf" && !page.pdfWorldSize) page.pdfWorldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; if (page.kind === "blank" && !page.worldSize) page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; });
     renderBoardPage(boardPageIndex);
     updateBoardViewport();
-    return runUpdaterCheck(false);
+    const invoke = getTauriInvoke();
+    if (!invoke) {
+      if (!restoreResult?.success) return false;
+      setSessionPersistenceHeld(false);
+      return runUpdaterCheck(false);
+    }
+    return acknowledgeUpdaterRecovery(invoke, restoreResult)
+      .then((acknowledged) => {
+        if (!acknowledged) return false;
+        setSessionPersistenceHeld(false);
+        return runUpdaterCheck(false);
+      })
+      .catch((error) => { document.getElementById("updateStatus").textContent = error?.message || "복구 완료를 확인하지 못해 업데이트 확인을 보류했습니다."; return false; });
   });
   applyBoardCamera(); updateBoardViewport(); renderBoardPage(boardPageIndex);
 }

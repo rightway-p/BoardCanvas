@@ -1,0 +1,118 @@
+name: Signed Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version whose immutable v<version> Git tag is being built
+        required: true
+        type: string
+      channel:
+        description: Beta is the default rollout channel; stable requires evidence and protected approval
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - stable
+      validation_record:
+        description: Checked-in docs/release-validation/<version>.md record (required for stable)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    environment: ${{ inputs.channel == 'stable' && 'stable-release' || 'beta-release' }}
+    env:
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+      BOARD_RELEASE_CHANNEL: ${{ inputs.channel }}
+      BOARD_RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Require a pre-existing immutable version tag and configured signing secrets
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          VALIDATION_RECORD: ${{ inputs.validation_record }}
+        run: |
+          if ($env:VERSION -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'Invalid semantic version.' }
+          if (-not $env:TAURI_PRIVATE_KEY -or -not $env:TAURI_KEY_PASSWORD -or -not $env:TAURI_UPDATER_PUBLIC_KEY) { throw 'All three Tauri updater secrets must be configured.' }
+          if ((git rev-parse HEAD).Trim() -ne (git rev-parse "v$env:VERSION^{commit}").Trim()) { throw 'Checkout does not match the pre-existing v<version> tag.' }
+          $expected = (Get-Content -Raw -LiteralPath 'src-tauri/updater.pub').Trim()
+          if ($expected -cne $env:TAURI_UPDATER_PUBLIC_KEY.Trim()) { throw 'Configured public key does not match src-tauri/updater.pub.' }
+          if ($env:CHANNEL -eq 'stable') {
+            if ($env:VALIDATION_RECORD -cne ('docs/release-validation/' + $env:VERSION + '.md')) { throw 'Stable promotion requires the checked-in reviewed validation record for this version.' }
+            if (-not (Test-Path -LiteralPath $env:VALIDATION_RECORD -PathType Leaf)) { throw 'The reviewed stable validation record is missing from the immutable version tag.' }
+            $record = Get-Content -Raw -LiteralPath $env:VALIDATION_RECORD
+            if ($record -notmatch '(?m)^status:\s*reviewed\s*$' -or $record -notmatch '(?m)^hardware_validation:\s*passed\s*$' -or $record -notmatch '(?m)^beta_validation:\s*passed\s*$' -or $record -notmatch '(?m)^reviewer:\s*\S+\s*$') { throw 'The stable validation record must contain reviewed status, beta validation, hardware validation, and a named reviewer.' }
+          }
+          if ($env:CHANNEL -eq 'stable' -and $env:VERSION.Contains('-')) { throw 'Stable releases cannot use a prerelease version.' }
+          if ($env:CHANNEL -eq 'beta' -and -not $env:VERSION.Contains('-beta.')) { throw 'Beta builds must use a prerelease version such as 2.0.1-beta.2.' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build the external recovery helper
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --bin boardcanvas-recovery --features recovery-helper-build --release
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          Copy-Item -LiteralPath src-tauri/target/release/boardcanvas-recovery.exe -Destination src-tauri/resources/boardcanvas-recovery.exe
+
+      - name: Build and sign the current-user NSIS installer and release metadata
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if (-not (Test-Path -LiteralPath 'src-tauri/resources/boardcanvas-recovery.exe')) { throw 'Recovery helper is missing.' }
+          npx --no-install tauri build
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri application build failed.' }
+          $bundle = Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter "*${env:VERSION}*setup.exe" -File | Select-Object -First 1
+          if (-not $bundle) { throw 'The versioned current-user NSIS installer was not produced.' }
+          $output = Join-Path $env:RUNNER_TEMP 'signed-release-assets'
+          & scripts/package-signed-release.ps1 -Version $env:VERSION -Channel $env:CHANNEL -InstallerPath $bundle.FullName -OutputDirectory $output
+          if ($LASTEXITCODE -ne 0) { throw 'Release signing failed.' }
+
+      - name: Publish versioned beta installer and update the beta feed
+        if: inputs.channel == 'beta'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $feed = gh release view board-beta --json isPrerelease --jq '.isPrerelease'
+          if ($LASTEXITCODE -ne 0 -or $feed.Trim() -ne 'true') { throw 'Create the board-beta GitHub prerelease before publishing beta feed metadata.' }
+          gh release create "v$env:VERSION" "$env:RUNNER_TEMP/signed-release-assets/BoardCanvas_$($env:VERSION)_x64-setup.exe" "$env:RUNNER_TEMP/signed-release-assets/board-release.json" "$env:RUNNER_TEMP/signed-release-assets/board-release.json.sig" --verify-tag --prerelease --title "BoardCanvas $env:VERSION (Beta)" --notes "Signed beta installer. Source: immutable v$env:VERSION tag."
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the immutable versioned beta release.' }
+          gh release upload board-beta "$env:RUNNER_TEMP/signed-release-assets/board-release.json" "$env:RUNNER_TEMP/signed-release-assets/board-release.json.sig" --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not update the rolling beta feed metadata.' }
+
+      - name: Publish stable release after evidence review
+        if: inputs.channel == 'stable'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          VALIDATION_RECORD: ${{ inputs.validation_record }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "Stable signed installer. Reviewed validation record: $env:VALIDATION_RECORD. Protected environment approval is required."
+          gh release create "v$env:VERSION" "$env:RUNNER_TEMP/signed-release-assets/BoardCanvas_$($env:VERSION)_x64-setup.exe" "$env:RUNNER_TEMP/signed-release-assets/board-release.json" "$env:RUNNER_TEMP/signed-release-assets/board-release.json.sig" --verify-tag --latest --title "BoardCanvas $env:VERSION" --notes $notes
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the stable release.' }

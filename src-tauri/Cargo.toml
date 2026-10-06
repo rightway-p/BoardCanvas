@@ -1,6 +1,7 @@
 [package]
 name = "boardcanvas"
-version = "2.0.1"
+version = "2.0.1-beta.1"
+default-run = "boardcanvas"
 description = "BoardCanvas desktop app"
 authors = ["BoardCanvas"]
 license = ""
@@ -14,22 +15,28 @@ tauri-build = { version = "1.5", features = [] }
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "1.6", features = ["window-all", "dialog"] }
+tauri = { version = "1.6", features = [ "dialog-confirm", "window-all", "dialog"] }
 base64 = "0.22"
 rand = "0.8"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sha2 = "0.10"
+minisign-verify = "0.2.5"
+semver = "1.0"
+hex = "0.4"
 tokio = { version = "1", features = ["io-util", "net", "sync", "time"] }
+futures-util = "0.3"
 url = "2.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 webview2-com = "0.19.1"
 windows = "0.39.0"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+recovery-test-feed = []
+recovery-helper-build = []
 
 [patch.crates-io]
 wry = { path = "../vendor/wry-0.24.11" }

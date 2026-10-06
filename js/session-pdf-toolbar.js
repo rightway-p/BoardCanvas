@@ -1,3 +1,5 @@
+let sessionPersistenceHeld = true;
+
 function isBoardColorPopupOpen() {
   return !boardColorPopup.classList.contains("is-hidden");
 }
@@ -424,6 +426,15 @@ async function clearSessionPdfBytes() {
   }
 }
 
+function setSessionPersistenceHeld(held) {
+  sessionPersistenceHeld = Boolean(held);
+}
+
+function failedSessionRestore(hadSnapshot) {
+  setDocumentStatus("복원에 실패해 저장을 일시 중지했습니다. 원본 세션을 보존합니다.", "warning");
+  return { success: false, pdfSuccess: false, hadSnapshot };
+}
+
 function serializeSessionSnapshot() {
   saveCurrentStrokeState();
 
@@ -451,7 +462,7 @@ function serializeSessionSnapshot() {
 }
 
 function scheduleSessionAutosave() {
-  if (sessionRestoreInProgress) {
+  if (sessionPersistenceHeld || sessionRestoreInProgress) {
     return;
   }
 
@@ -526,7 +537,7 @@ function parseSessionSnapshot(rawValue) {
 }
 
 async function persistSessionState() {
-  if (sessionRestoreInProgress) {
+  if (sessionPersistenceHeld || sessionRestoreInProgress) {
     return false;
   }
 
@@ -552,17 +563,23 @@ async function persistSessionState() {
 
 async function restoreSessionState() {
   if (sessionRestoreInProgress) {
-    return;
+    return { success: false, pdfSuccess: false, hadSnapshot: false };
   }
 
+  setSessionPersistenceHeld(true);
   sessionRestoreInProgress = true;
   updateUndoRedoUI();
+  let hadSnapshot = false;
 
   try {
     const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    hadSnapshot = rawSnapshot !== null;
+    if (!hadSnapshot) {
+      return { success: true, pdfSuccess: true, hadSnapshot: false };
+    }
     const snapshot = parseSessionSnapshot(rawSnapshot ? JSON.parse(rawSnapshot) : null);
     if (!snapshot) {
-      return;
+      return failedSessionRestore(true);
     }
 
     boardStrokeSnapshot = cloneStrokeCollection(snapshot.boardStrokes);
@@ -580,7 +597,7 @@ async function restoreSessionState() {
     if (!snapshot.hasPdf) {
       clearAllStrokeHistory();
       updateUndoRedoUI();
-      return;
+      return { success: true, pdfSuccess: true, hadSnapshot: true };
     }
 
     const recoveredPdfBytes = await loadSessionPdfBytes();
@@ -588,22 +605,19 @@ async function restoreSessionState() {
       loadedPdfBytes = null;
       sessionPdfBytesDirty = false;
       pdfPageStrokeSnapshots.clear();
-      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
       clearAllStrokeHistory();
       updateUndoRedoUI();
-      return;
+      return failedSessionRestore(true);
     }
 
     const recoveredFileName = snapshot.loadedDocumentName || "recovered.pdf";
     const recoveredFile = new File([recoveredPdfBytes], recoveredFileName, { type: "application/pdf" });
-    await loadPdfFromFile(recoveredFile);
-    if (!hasLoadedPdfDocument()) {
+    if (!(await loadPdfFromFile(recoveredFile)) || !hasLoadedPdfDocument()) {
       loadedPdfBytes = null;
       sessionPdfBytesDirty = false;
       pdfPageStrokeSnapshots.clear();
-      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
       clearAllStrokeHistory();
-      return;
+      return failedSessionRestore(true);
     }
 
     // Reload saved page-level annotations after document load resets snapshots.
@@ -628,23 +642,38 @@ async function restoreSessionState() {
       Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
       snapshot.pdfPageNumber
     );
+    pdfPageRasterCanvas = null;
+    let finalRenderSucceeded;
     if (snapshot.pageSequence && snapshot.pageSequence.length) {
       const active = boardPageSequence[boardPageIndex];
       boardPageIndex = active ? boardPageIndex : 0;
       await renderBoardPage(boardPageIndex);
+      finalRenderSucceeded = boardPageSequence[boardPageIndex]?.kind === "blank"
+        || (Boolean(pdfPageRasterCanvas)
+          && hasLoadedPdfDocument()
+          && boardPageSequence[boardPageIndex]?.kind === "pdf"
+          && boardPageSequence[boardPageIndex].pdfPage === pdfPageNumber);
     } else {
       const pageIndex = boardPageSequence.findIndex((page) => page.kind === "pdf" && page.pdfPage === targetPage);
       boardPageIndex = Math.max(0, pageIndex);
       await renderPdfPage(targetPage);
-      fitCurrentBoardPage(false);
+      finalRenderSucceeded = Boolean(pdfPageRasterCanvas)
+        && hasLoadedPdfDocument()
+        && pdfPageNumber === targetPage;
+      if (finalRenderSucceeded) fitCurrentBoardPage(false);
+    }
+    if (!finalRenderSucceeded) {
+      return failedSessionRestore(true);
     }
     setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
     clearAllStrokeHistory();
     pageStructureUndo.length = 0;
     pageStructureRedo.length = 0;
     updateUndoRedoUI();
+    return { success: true, pdfSuccess: true, hadSnapshot: true };
   } catch (error) {
     // Ignore recovery failures and continue with a clean runtime state.
+    return failedSessionRestore(hadSnapshot);
   } finally {
     sessionRestoreInProgress = false;
     updatePdfNavigationUI();

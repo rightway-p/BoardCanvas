@@ -1,0 +1,7 @@
+{
+  "tauri": {
+    "bundle": {
+      "resources": ["resources/boardcanvas-recovery.exe"]
+    }
+  }
+}
