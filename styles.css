@@ -979,7 +979,7 @@ body {
 .app.toolbar-placement-floating #penColor { width: 32px; height: 32px; min-width: 32px; min-height: 32px; border-radius: 8px; }
 .app.toolbar-placement-left .current-pen-editor .width-stepper,
 .app.toolbar-placement-right .current-pen-editor .width-stepper,
-.app.toolbar-placement-floating .current-pen-editor .width-stepper { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.app.toolbar-placement-floating .current-pen-editor .width-stepper { display: flex; flex-direction: column-reverse; align-items: center; gap: 1px; }
 .app.toolbar-placement-left .current-pen-editor .stepper-button,
 .app.toolbar-placement-right .current-pen-editor .stepper-button,
 .app.toolbar-placement-floating .current-pen-editor .stepper-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
