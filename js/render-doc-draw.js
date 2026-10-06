@@ -583,10 +583,18 @@ function getMidpoint(a, b) {
 
 function applyCurrentBrush() {
   ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
-  ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
-  ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
+  ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
+  ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
   const width = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
   ctx.lineWidth = Math.max(1, width * pixelRatio);
+}
+
+function redrawVisibleStrokesWithActive() {
+  redrawAllStrokes();
+  if (!activeStroke) return;
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
+  drawStrokePath(activeStroke);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function smoothInputPoint(point, forceFull) {
@@ -708,6 +716,7 @@ function processPendingPoints(maxPoints, frameBudgetMs) {
 
   if (didStroke) {
     ctx.stroke();
+    if (tool === "pen" && penOpacity < 1) redrawVisibleStrokesWithActive();
   }
 
   if (pendingHead >= pendingPoints.length) {
@@ -825,6 +834,8 @@ function stopDrawing(event) {
     setCanvasSize();
     pendingQualityResize = false;
   }
+
+  redrawAllStrokes();
 
   updateUndoRedoUI();
 }

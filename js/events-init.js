@@ -165,6 +165,15 @@ lineWidthInput.addEventListener("blur", () => {
   applyPenWidth(lineWidthInput.value, true);
 });
 
+if (penOpacityInput) {
+  penOpacityInput.addEventListener("input", () => {
+    penOpacity = normalizePenOpacity(Number(penOpacityInput.value) / 100, 1);
+    saveStoredOpacity(LAST_PEN_OPACITY_STORAGE_KEY, penOpacity);
+    updatePenPresetSelection();
+    window.renderPenPaletteSettings?.();
+  });
+}
+
 lineWidthDecButton.addEventListener("click", () => {
   stepPenWidth(-1);
 });
@@ -243,6 +252,7 @@ document.addEventListener("MSFullscreenChange", () => {
 });
 document.addEventListener("pointerdown", (event) => {
   syncOverlayMouseBypassWithPointerEvent(event);
+  if (document.getElementById("penColorPicker")?.open) return;
   if (isDocumentPopupOpen() && !documentEditor.contains(event.target)) {
     closeDocumentPopup();
   }
@@ -259,6 +269,7 @@ document.addEventListener("pointerdown", (event) => {
 document.addEventListener("keydown", (event) => {
   const developerSettings = document.getElementById("developerSettings");
   if (developerSettings && !developerSettings.hidden) return;
+  if (document.getElementById("penColorPicker")?.open) return;
   if (isDocumentPopupOpen()) {
     if (event.key === "Tab") {
       const focusable = [...documentPopup.querySelectorAll("button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])")]

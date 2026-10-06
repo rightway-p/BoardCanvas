@@ -1,7 +1,10 @@
+let closePenPresetOverflow = null;
+
 function getCurrentPenPresetSnapshot() {
   return {
     color: normalizeHexColor(penColorInput.value) || DEFAULT_PEN_PRESETS[0].color,
     width: normalizeLineWidth(lineWidthInput.value),
+    opacity: normalizePenOpacity(penOpacity, 1),
     type: currentPenType
   };
 }
@@ -13,6 +16,7 @@ function isSamePenPreset(a, b) {
 
   return a.color === b.color
     && Number(a.width) === Number(b.width)
+    && Number(a.opacity) === Number(b.opacity)
     && String(a.type) === String(b.type);
 }
 
@@ -53,6 +57,7 @@ function applyPenColor(color, persist = true) {
     saveStoredColor(LAST_PEN_COLOR_STORAGE_KEY, normalized);
   }
   updatePenPresetSelection();
+  window.renderPenPaletteSettings?.();
 }
 
 function applyPenWidth(width, persist = true) {
@@ -111,7 +116,11 @@ function applyPenPreset(preset, persist = true) {
   currentPenType = normalized.type;
   applyPenColor(normalized.color, persist);
   applyPenWidth(normalized.width, persist);
+  penOpacity = normalizePenOpacity(normalized.opacity, 1);
+  if (penOpacityInput) penOpacityInput.value = String(Math.round(penOpacity * 100));
+  if (persist) saveStoredOpacity(LAST_PEN_OPACITY_STORAGE_KEY, penOpacity);
   updatePenPresetSelection();
+  window.renderPenPaletteSettings?.();
 }
 
 function saveCurrentPenPreset(index) {
@@ -124,6 +133,28 @@ function saveCurrentPenPreset(index) {
   renderPenPresets();
 }
 
+function addPenPreset(preset = {}) {
+  const normalized = normalizePenPreset({
+    color: preset.color || penColorInput.value,
+    width: preset.width ?? 2,
+    opacity: preset.opacity ?? penOpacity,
+    type: preset.type || currentPenType
+  }, DEFAULT_PEN_PRESETS[0]);
+  penPresets.push(normalized);
+  savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+  renderPenPresets();
+  return penPresets.length - 1;
+}
+
+function removePenPreset(index) {
+  const normalizedIndex = Math.floor(Number(index));
+  if (normalizedIndex < 0 || normalizedIndex >= penPresets.length) return false;
+  penPresets.splice(normalizedIndex, 1);
+  savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+  renderPenPresets();
+  return true;
+}
+
 function openPenPresetEditor(index, anchor) {
   const preset = penPresets[index];
   if (!preset) return;
@@ -132,17 +163,24 @@ function openPenPresetEditor(index, anchor) {
   editor.className = "pen-preset-editor";
   editor.setAttribute("role", "dialog");
   editor.setAttribute("aria-label", `펜 프리셋 ${index + 1} 편집`);
-  editor.innerHTML = `<label>색 <input data-color type="color" value="${preset.color}"></label><label>굵기 <input data-width type="number" min="1" max="40" step="1" value="${preset.width}"></label><div><button data-cancel type="button">취소</button><button data-save type="button">저장</button></div>`;
+  editor.innerHTML = `<label>색 <button data-color-open type="button" class="pen-editor-color-button">색 선택</button></label><label>굵기 <input data-width type="number" min="1" max="40" step="1" value="${preset.width}"></label><div><button data-cancel type="button">취소</button><button data-save type="button">저장</button></div>`;
   document.body.append(editor);
   const rect = anchor.getBoundingClientRect();
   const box = editor.getBoundingClientRect();
   editor.style.left = `${Math.max(8, Math.min(window.innerWidth - box.width - 8, rect.left))}px`;
   editor.style.top = `${Math.max(8, Math.min(window.innerHeight - box.height - 8, rect.bottom + 6))}px`;
   editor.querySelector("[data-cancel]").onclick = () => editor.remove();
+  editor.querySelector("[data-color-open]").onclick = () => {
+    window.openSharedPenPicker?.("palette", index, () => {
+      const width = Math.max(1, Math.min(40, Math.round(Number(editor.querySelector("[data-width]")?.value) || penPresets[index].width)));
+      penPresets[index] = { ...penPresets[index], width };
+      savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
+      editor.remove(); renderPenPresets();
+    });
+  };
   editor.querySelector("[data-save]").onclick = () => {
     const width = Math.max(1, Math.min(40, Math.round(Number(editor.querySelector("[data-width]").value) || preset.width)));
-    const color = normalizeHexColor(editor.querySelector("[data-color]").value) || preset.color;
-    penPresets[index] = { ...preset, color, width };
+    penPresets[index] = { ...penPresets[index], width };
     savePenPresets(PEN_PRESET_STORAGE_KEY, penPresets);
     editor.remove(); renderPenPresets();
   };
@@ -167,18 +205,20 @@ function renderPenPresets() {
   if (!penPresetsContainer) {
     return;
   }
+  closePenPresetOverflow?.();
 
   penPresetsContainer.innerHTML = "";
 
+  const extraButtons = [];
   penPresets.forEach((preset, index) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "color-preset pen-preset";
-    button.style.backgroundColor = preset.color;
+    button.style.backgroundColor = `rgba(${parseInt(preset.color.slice(1, 3), 16)}, ${parseInt(preset.color.slice(3, 5), 16)}, ${parseInt(preset.color.slice(5, 7), 16)}, ${normalizePenOpacity(preset.opacity, 1)})`;
     button.style.setProperty("--pen-line-size", `${Math.max(2, Math.min(12, preset.width))}px`);
     button.style.setProperty("--pen-line-color", getContrastColor(preset.color));
     button.setAttribute("aria-label", `pen preset ${index + 1}`);
-    button.title = `탭: 적용 · 3초 누르기: 색/굵기 편집`;
+    button.title = `탭: 적용 · 3초 누르기: 색/굵기/불투명도 편집`;
     let holdTimer = null;
     let held = false;
     let holdStart = null;
@@ -208,6 +248,7 @@ function renderPenPresets() {
         return;
       }
       applyPenPreset(preset, true);
+      closePenPresetOverflow?.();
     });
 
     button.addEventListener("contextmenu", (event) => {
@@ -215,10 +256,54 @@ function renderPenPresets() {
       saveCurrentPenPreset(index);
     });
 
-    penPresetsContainer.appendChild(button);
+    if (index >= 4) {
+      button.hidden = true;
+      extraButtons.push(button);
+    } else {
+      penPresetsContainer.appendChild(button);
+    }
   });
 
+  if (extraButtons.length > 0) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "color-preset pen-preset-more";
+    more.textContent = "…";
+    more.setAttribute("aria-label", "추가 팔레트 보기");
+    more.title = "추가 팔레트 보기";
+    more.addEventListener("click", () => {
+      closePenPresetOverflow?.();
+      const popup = document.createElement("div");
+      popup.className = "pen-preset-overflow-popover";
+      popup.setAttribute("role", "menu");
+      extraButtons.forEach((source) => {
+        source.hidden = false;
+        source.setAttribute("role", "menuitem");
+        popup.appendChild(source);
+      });
+      document.body.appendChild(popup);
+      const rect = more.getBoundingClientRect();
+      popup.style.left = `${Math.max(8, Math.min(window.innerWidth - popup.offsetWidth - 8, rect.left))}px`;
+      popup.style.top = `${Math.max(8, Math.min(window.innerHeight - popup.offsetHeight - 8, rect.bottom + 6))}px`;
+      const close = (event) => {
+        if (event.type === "keydown" && event.key !== "Escape") return;
+        if (event.type !== "keydown" && popup.contains(event.target)) return;
+        extraButtons.forEach((button) => { button.hidden = true; penPresetsContainer.appendChild(button); });
+        popup.remove(); more.setAttribute("aria-expanded", "false");
+        document.removeEventListener("pointerdown", close, true); document.removeEventListener("keydown", close, true);
+        closePenPresetOverflow = null;
+      };
+      closePenPresetOverflow = () => close({ type: "outside", target: document.body });
+      document.addEventListener("pointerdown", close, true);
+      document.addEventListener("keydown", close, true);
+      more.setAttribute("aria-expanded", "true");
+    });
+    more.setAttribute("aria-expanded", "false");
+    penPresetsContainer.appendChild(more);
+  }
+
   updatePenPresetSelection();
+  window.renderPenPaletteSettings?.();
 }
 
 function renderBoardPresets() {
@@ -269,12 +354,15 @@ function initPresets() {
 function initLastUsedSettings() {
   const initialPenColor = loadStoredColor(LAST_PEN_COLOR_STORAGE_KEY, penColorInput.value);
   const initialPenWidth = loadStoredLineWidth(LAST_PEN_WIDTH_STORAGE_KEY, lineWidthInput.value);
+  const initialPenOpacity = loadStoredOpacity(LAST_PEN_OPACITY_STORAGE_KEY, penOpacity);
   const initialEraserWidth = loadStoredEraserWidth(LAST_ERASER_WIDTH_STORAGE_KEY, eraserWidthInput.value);
   const initialEraserMode = loadStoredEraserMode(LAST_ERASER_MODE_STORAGE_KEY, eraserMode);
   const initialBoardColor = loadStoredColor(LAST_BOARD_COLOR_STORAGE_KEY, boardColorInput.value);
 
   applyPenColor(initialPenColor, false);
   applyPenWidth(initialPenWidth, false);
+  penOpacity = initialPenOpacity;
+  if (penOpacityInput) penOpacityInput.value = String(Math.round(penOpacity * 100));
   applyEraserWidth(initialEraserWidth, false);
   applyEraserMode(initialEraserMode, false);
   applyBoardColor(initialBoardColor, false);

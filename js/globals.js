@@ -39,6 +39,7 @@ const overlayModeToggleButton = document.getElementById("overlayModeToggle");
 const penColorInput = document.getElementById("penColor");
 const boardColorInput = document.getElementById("boardColor");
 const lineWidthInput = document.getElementById("lineWidth");
+const penOpacityInput = document.getElementById("penOpacity");
 const lineWidthDecButton = document.getElementById("lineWidthDec");
 const lineWidthIncButton = document.getElementById("lineWidthInc");
 const documentEditor = document.getElementById("documentEditor");
@@ -92,6 +93,7 @@ const PEN_PRESET_STORAGE_KEY = "board.pen.presets.v1";
 const BOARD_PRESET_STORAGE_KEY = "board.background.presets.v1";
 const LAST_PEN_COLOR_STORAGE_KEY = "board.pen.lastColor.v1";
 const LAST_PEN_WIDTH_STORAGE_KEY = "board.pen.lastWidth.v1";
+const LAST_PEN_OPACITY_STORAGE_KEY = "board.pen.lastOpacity.v1";
 const LAST_ERASER_WIDTH_STORAGE_KEY = "board.eraser.lastWidth.v1";
 const LAST_ERASER_MODE_STORAGE_KEY = "board.eraser.lastMode.v1";
 const LAST_BOARD_COLOR_STORAGE_KEY = "board.background.lastColor.v1";
@@ -152,6 +154,7 @@ let frameCostAverage = 0;
 let pendingQualityResize = false;
 
 let currentPenType = "basic";
+let penOpacity = 1;
 let penPresets = [];
 let boardPresetColors = [];
 

@@ -29,6 +29,12 @@ function normalizeLineWidth(width) {
   return normalizeWidth(width, lineWidthInput);
 }
 
+function normalizePenOpacity(value, fallback = 1) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.min(1, Math.max(0, numeric)) : fallback;
+}
+
 function normalizeEraserWidth(width) {
   return normalizeWidth(width, eraserWidthInput);
 }
@@ -58,6 +64,7 @@ function clonePenPreset(preset) {
   return {
     color: preset.color,
     width: preset.width,
+    opacity: normalizePenOpacity(preset.opacity, 1),
     type: preset.type
   };
 }
@@ -70,6 +77,7 @@ function normalizePenPreset(value, fallbackPreset) {
     return {
       color,
       width: fallback.width,
+      opacity: normalizePenOpacity(fallback.opacity, 1),
       type: fallback.type
     };
   }
@@ -80,11 +88,12 @@ function normalizePenPreset(value, fallbackPreset) {
 
   const color = normalizeHexColor(value.color) || fallback.color;
   const width = normalizeLineWidth(value.width ?? fallback.width);
+  const opacity = normalizePenOpacity(value.opacity ?? fallback.opacity, 1);
   const type = (typeof value.type === "string" && value.type.trim())
     ? value.type.trim()
     : fallback.type;
 
-  return { color, width, type };
+  return { color, width, opacity, type };
 }
 
 function loadColorPresets(storageKey, defaults) {
@@ -132,9 +141,7 @@ function loadPenPresets(storageKey, defaults) {
       return fallback;
     }
 
-    const normalized = defaults.map((defaultPreset, index) => {
-      return normalizePenPreset(parsed[index], defaultPreset);
-    });
+    const normalized = parsed.map((preset, index) => normalizePenPreset(preset, defaults[index] || defaults[0]));
 
     return normalized;
   } catch (error) {
@@ -178,6 +185,7 @@ function loadStoredLineWidth(storageKey, fallbackWidth) {
   const normalizedFallback = normalizeLineWidth(fallbackWidth);
   try {
     const raw = window.localStorage.getItem(storageKey);
+    if (raw === null || raw === "") return normalizedFallback;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) {
       return normalizedFallback;
@@ -197,10 +205,19 @@ function saveStoredLineWidth(storageKey, width) {
   }
 }
 
+function loadStoredOpacity(storageKey, fallback = 1) {
+  try { return normalizePenOpacity(window.localStorage.getItem(storageKey), fallback); } catch { return fallback; }
+}
+
+function saveStoredOpacity(storageKey, opacity) {
+  try { window.localStorage.setItem(storageKey, String(normalizePenOpacity(opacity, 1))); } catch {}
+}
+
 function loadStoredEraserWidth(storageKey, fallbackWidth) {
   const normalizedFallback = normalizeEraserWidth(fallbackWidth);
   try {
     const raw = window.localStorage.getItem(storageKey);
+    if (raw === null || raw === "") return normalizedFallback;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) {
       return normalizedFallback;

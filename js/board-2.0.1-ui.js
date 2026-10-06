@@ -227,11 +227,12 @@ function updateBoardSequenceUI() {
 }
 let selectedSettingsCategory = "documents";
 function selectSettingsCategory(category) {
-  const allowed = new Set(["documents", "screen", "remote", "about"]);
+  const allowed = new Set(["documents", "pen", "screen", "remote", "about"]);
   if (!allowed.has(category)) return;
   if (selectedSettingsCategory === "screen" && category !== "screen") discardTouchSettingsDraft();
   selectedSettingsCategory = category;
   if (category === "screen") ensureTouchSettingsDraft();
+  if (category === "pen") window.renderPenPaletteSettings?.();
   document.querySelectorAll("[data-settings-category]").forEach((button) => {
     if (button.dataset.settingsCategory === category) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
@@ -1115,6 +1116,10 @@ function initUpdaterWiring() {
   document.getElementById("rollbackUpdateButton").addEventListener("click", () => { void runUpdaterAction("rollback"); });
   document.getElementById("promoteStableButton").addEventListener("click", () => { void runUpdaterAction("promote"); });
   document.getElementById("openRecoveryToolButton").addEventListener("click", () => { void runUpdaterAction("openRecovery"); });
+  document.getElementById("reopenSetupWizardButton")?.addEventListener("click", () => {
+    closeDocumentPopup();
+    window.BoardSetupWizard?.open?.();
+  });
 }
 function initBoard201Ui() {
   devSettings = loadDevSettings();
@@ -1217,6 +1222,10 @@ function initBoard201Ui() {
   window.requestBoardWorkReplacement = requestBoardWorkReplacement;
   window.loadBoardWorkFile = openBoardWorkFile;
   const restorePromise = window.boardRestorePromise || Promise.resolve();
+  const launchSetupWizard = (restoreResult, recoveryAcknowledged) => {
+    if (typeof isDedicatedOverlayWindow === "function" && isDedicatedOverlayWindow()) return;
+    window.BoardSetupWizard?.init({ restored: restoreResult?.success === true, recoveryAcknowledged: recoveryAcknowledged === true });
+  };
   void restorePromise.then((restoreResult) => {
     boardPageSequence.forEach((page) => { if (page.kind === "pdf" && !page.pdfWorldSize) page.pdfWorldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; if (page.kind === "blank" && !page.worldSize) page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; });
     renderBoardPage(boardPageIndex);
@@ -1225,13 +1234,13 @@ function initBoard201Ui() {
     if (!invoke) {
       if (!restoreResult?.success) return false;
       setSessionPersistenceHeld(false);
-      return runUpdaterCheck(false);
+      return runUpdaterCheck(false).then((result) => { launchSetupWizard(restoreResult, true); return result; });
     }
     return acknowledgeUpdaterRecovery(invoke, restoreResult)
       .then((acknowledged) => {
         if (!acknowledged) return false;
         setSessionPersistenceHeld(false);
-        return runUpdaterCheck(false);
+        return runUpdaterCheck(false).then((result) => { launchSetupWizard(restoreResult, true); return result; });
       })
       .catch((error) => { document.getElementById("updateStatus").textContent = error?.message || "복구 완료를 확인하지 못해 업데이트 확인을 보류했습니다."; return false; });
   });

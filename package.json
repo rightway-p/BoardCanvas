@@ -1,11 +1,11 @@
 {
   "name": "boardcanvas",
-  "version": "2.0.1-beta.4",
+  "version": "2.0.1-beta.5",
   "private": true,
   "description": "BoardCanvas desktop wrapper using Tauri",
   "scripts": {
     "web:build": "node scripts/prepare-dist.js",
-    "test": "node --test tests/board-state.test.js tests/board-export.test.js tests/remote-controls.test.js tests/runtime-fullscreen.test.js tests/updater-flow.test.js tests/session-restore.test.js tests/release-packaging.test.js tests/drive-login-flow.test.js",
+    "test": "node --test tests/board-state.test.js tests/board-export.test.js tests/remote-controls.test.js tests/runtime-fullscreen.test.js tests/updater-flow.test.js tests/session-restore.test.js tests/release-packaging.test.js tests/drive-login-flow.test.js tests/opacity.test.js tests/setup-wizard.test.js",
     "test:board-state": "node --test tests/board-state.test.js",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
