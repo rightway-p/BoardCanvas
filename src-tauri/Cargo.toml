@@ -1,6 +1,6 @@
 [package]
 name = "boardcanvas"
-version = "2.0.1-beta.5"
+version = "2.0.1-beta.6"
 default-run = "boardcanvas"
 description = "BoardCanvas desktop app"
 authors = ["BoardCanvas"]
