@@ -335,37 +335,6 @@ function openSessionDatabase() {
   });
 }
 
-async function saveSessionPdfBytes(pdfBytes) {
-  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
-    return false;
-  }
-
-  let database;
-  try {
-    database = await openSessionDatabase();
-    if (!database) {
-      return false;
-    }
-
-    await new Promise((resolve, reject) => {
-      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
-      transaction.oncomplete = () => resolve();
-      transaction.onabort = () => reject(transaction.error || new Error("PDF save aborted."));
-      transaction.onerror = () => reject(transaction.error || new Error("Failed to save PDF data."));
-
-      const store = transaction.objectStore(SESSION_DB_STORE);
-      store.put(pdfBytes, SESSION_DB_PDF_KEY);
-    });
-    return true;
-  } catch (error) {
-    return false;
-  } finally {
-    if (database) {
-      database.close();
-    }
-  }
-}
-
 async function loadSessionPdfBytes() {
   let database;
   try {
@@ -408,35 +377,189 @@ async function loadSessionPdfBytes() {
   }
 }
 
-async function clearSessionPdfBytes() {
+function normalizeSessionPdfBytes(value) {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+  }
+  return null;
+}
+
+async function updateSessionPdfBytesWithBackup(rawSnapshot, pdfBytes) {
   let database;
   try {
     database = await openSessionDatabase();
-    if (!database) {
-      return false;
-    }
+    if (!database) return false;
 
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
-      transaction.oncomplete = () => resolve();
-      transaction.onabort = () => reject(transaction.error || new Error("PDF clear aborted."));
-      transaction.onerror = () => reject(transaction.error || new Error("Failed to clear PDF data."));
-
       const store = transaction.objectStore(SESSION_DB_STORE);
-      store.delete(SESSION_DB_PDF_KEY);
+      let failed = false;
+      const request = store.get(SESSION_DB_PDF_KEY);
+      request.onerror = () => {
+        failed = true;
+        reject(request.error || new Error("Failed to back up PDF data."));
+      };
+      request.onsuccess = () => {
+        const previousBytes = normalizeSessionPdfBytes(request.result);
+        if (request.result !== undefined && !previousBytes) {
+          failed = true;
+          transaction.abort();
+          reject(new Error("Cached PDF data cannot be backed up."));
+          return;
+        }
+
+        store.put({
+          rawSnapshot,
+          hasPdfBytes: previousBytes !== null,
+          pdfBytes: previousBytes
+        }, SESSION_DB_PENDING_WRITE_KEY);
+        if (pdfBytes) store.put(pdfBytes, SESSION_DB_PDF_KEY);
+        else store.delete(SESSION_DB_PDF_KEY);
+      };
+      transaction.oncomplete = () => { if (!failed) resolve(); };
+      transaction.onabort = () => { if (!failed) reject(transaction.error || new Error("PDF save aborted.")); };
+      transaction.onerror = () => { if (!failed) reject(transaction.error || new Error("Failed to save PDF data.")); };
     });
     return true;
   } catch (error) {
     return false;
   } finally {
-    if (database) {
-      database.close();
+    if (database) database.close();
+  }
+}
+
+async function recoverPendingSessionWrite(forceRollback = false) {
+  let database;
+  let backup;
+  try {
+    database = await openSessionDatabase();
+    if (!database) return true;
+    backup = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readonly");
+      const request = transaction.objectStore(SESSION_DB_STORE).get(SESSION_DB_PENDING_WRITE_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("Failed to read pending session backup."));
+      transaction.onabort = () => reject(transaction.error || new Error("Pending session backup read aborted."));
+    });
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
+  }
+
+  if (!backup) return true;
+  if (backup.committed && !forceRollback) {
+    try {
+      database = await openSessionDatabase();
+      if (!database) return false;
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+        transaction.objectStore(SESSION_DB_STORE).delete(SESSION_DB_PENDING_WRITE_KEY);
+        transaction.oncomplete = resolve;
+        transaction.onabort = () => reject(transaction.error || new Error("Pending session cleanup aborted."));
+        transaction.onerror = () => reject(transaction.error || new Error("Pending session cleanup failed."));
+      });
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      if (database) database.close();
     }
+  }
+  if (backup.rawSnapshot !== null && typeof backup.rawSnapshot !== "string") return false;
+  if (backup.hasPdfBytes && !normalizeSessionPdfBytes(backup.pdfBytes)) return false;
+
+  try {
+    if (backup.rawSnapshot === null) window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    else window.localStorage.setItem(SESSION_STORAGE_KEY, backup.rawSnapshot);
+    if (window.localStorage.getItem(SESSION_STORAGE_KEY) !== backup.rawSnapshot) return false;
+  } catch (error) {
+    return false;
+  }
+
+  try {
+    database = await openSessionDatabase();
+    if (!database) return false;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      if (backup.hasPdfBytes) store.put(normalizeSessionPdfBytes(backup.pdfBytes), SESSION_DB_PDF_KEY);
+      else store.delete(SESSION_DB_PDF_KEY);
+      store.delete(SESSION_DB_PENDING_WRITE_KEY);
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error("Pending session rollback aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Pending session rollback failed."));
+    });
+    return true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
+  }
+}
+
+async function markSessionWriteCommitted() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) return false;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      let foundBackup = false;
+      const request = store.get(SESSION_DB_PENDING_WRITE_KEY);
+      request.onsuccess = () => {
+        if (!request.result) {
+          transaction.abort();
+          reject(new Error("Session backup is missing."));
+          return;
+        }
+        foundBackup = true;
+        store.put({ ...request.result, committed: true }, SESSION_DB_PENDING_WRITE_KEY);
+      };
+      request.onerror = () => reject(request.error || new Error("Failed to finalize session backup."));
+      transaction.oncomplete = () => { if (foundBackup) resolve(); };
+      transaction.onabort = () => reject(transaction.error || new Error("Session backup finalization aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Session backup finalization failed."));
+    });
+    return true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
   }
 }
 
 function setSessionPersistenceHeld(held) {
+  const wasHeld = sessionPersistenceHeld;
   sessionPersistenceHeld = Boolean(held);
+  if (sessionPersistenceHeld && !wasHeld) {
+    sessionLockWarningShown = true;
+    setDocumentStatus("세션 원본 복구에 실패해 캐시 저장을 일시 중지했습니다. 기존 백업을 보존합니다.", "warning");
+  }
+}
+
+const SESSION_DB_PENDING_WRITE_KEY = "last-pdf-pending-write";
+let sessionPersistenceQueue = Promise.resolve();
+let sessionLockWarningShown = false;
+const SESSION_PERSISTENCE_LOCK = "board-session-persistence-v1";
+
+async function withSessionPersistenceLock(callback) {
+  try {
+    if (typeof navigator === "undefined" || !navigator.locks || typeof navigator.locks.request !== "function") {
+      throw new Error("Web Locks API unavailable.");
+    }
+    return await navigator.locks.request(SESSION_PERSISTENCE_LOCK, { mode: "exclusive" }, callback);
+  } catch (error) {
+    setSessionPersistenceHeld(true);
+    if (!sessionLockWarningShown) {
+      sessionLockWarningShown = true;
+      setDocumentStatus("세션 원본 복구에 실패해 캐시 저장을 일시 중지했습니다. 기존 백업을 보존합니다.", "warning");
+    }
+    return { lockFailed: true };
+  }
 }
 
 function failedSessionRestore(hadSnapshot) {
@@ -550,22 +673,85 @@ async function persistSessionState() {
     return false;
   }
 
+  let request;
   try {
     const snapshot = serializeSessionSnapshot();
-    const serialized = JSON.stringify(snapshot);
-
-    if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
-      if (sessionPdfBytesDirty) {
-        if (!(await saveSessionPdfBytes(loadedPdfBytes))) return false;
-        sessionPdfBytesDirty = false;
-      }
-    } else {
-      if (!(await clearSessionPdfBytes())) return false;
-      sessionPdfBytesDirty = false;
-    }
-    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
-    return window.localStorage.getItem(SESSION_STORAGE_KEY) === serialized;
+    request = {
+      snapshot,
+      serialized: JSON.stringify(snapshot),
+      pdfSource: loadedPdfBytes,
+      pdfBytes: snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0
+        ? loadedPdfBytes.slice()
+        : null,
+      dirty: sessionPdfBytesDirty
+    };
   } catch (error) {
+    return false;
+  }
+
+  const pending = sessionPersistenceQueue.then(() => persistSessionSnapshot(request));
+  sessionPersistenceQueue = pending.catch(() => false);
+  return pending;
+}
+
+async function persistSessionSnapshot(request) {
+  if (sessionPersistenceHeld || sessionRestoreInProgress) return false;
+
+  const result = await withSessionPersistenceLock(() => persistSessionSnapshotLocked(request));
+  return result?.lockFailed ? false : result;
+}
+
+async function persistSessionSnapshotLocked(request) {
+  if (!(await recoverPendingSessionWrite())) {
+    setSessionPersistenceHeld(true);
+    return false;
+  }
+
+  let previousRaw;
+  let backupPending = false;
+  let storageChanged = false;
+  try {
+    const { snapshot, serialized, pdfSource, pdfBytes, dirty } = request;
+    if (snapshot.hasPdf && !pdfBytes) return false;
+    previousRaw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+
+    if (pdfSource !== loadedPdfBytes) return false;
+    if (!(await updateSessionPdfBytesWithBackup(previousRaw, pdfBytes))) return false;
+    backupPending = true;
+    if (pdfSource !== loadedPdfBytes) {
+      if (!(await recoverPendingSessionWrite(true))) setSessionPersistenceHeld(true);
+      return false;
+    }
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    storageChanged = true;
+    if (window.localStorage.getItem(SESSION_STORAGE_KEY) !== serialized || pdfSource !== loadedPdfBytes) {
+      throw new Error("Session snapshot changed while saving.");
+    }
+
+    if (backupPending) {
+      if (!(await markSessionWriteCommitted())) throw new Error("Session backup finalization failed.");
+      if (pdfSource !== loadedPdfBytes) {
+        if (!(await recoverPendingSessionWrite(true))) setSessionPersistenceHeld(true);
+        return false;
+      }
+    }
+    if (dirty && pdfSource === loadedPdfBytes) sessionPdfBytesDirty = false;
+    return true;
+  } catch (error) {
+    let restored = true;
+    if (backupPending) {
+      restored = await recoverPendingSessionWrite(true);
+    } else if (storageChanged) {
+      try {
+        if (previousRaw === null) window.localStorage.removeItem(SESSION_STORAGE_KEY);
+        else window.localStorage.setItem(SESSION_STORAGE_KEY, previousRaw);
+        restored = window.localStorage.getItem(SESSION_STORAGE_KEY) === previousRaw;
+      } catch (restoreError) {
+        restored = false;
+      }
+    }
+    if (!restored) setSessionPersistenceHeld(true);
     return false;
   }
 }
@@ -581,7 +767,19 @@ async function restoreSessionState() {
   let hadSnapshot = false;
 
   try {
-    const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const readPair = await withSessionPersistenceLock(async () => {
+      if (!(await recoverPendingSessionWrite())) return { failed: true };
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      let parsed;
+      try { parsed = raw === null ? null : JSON.parse(raw); } catch (error) { return { failed: true }; }
+      const bytes = parsed && parsed.hasPdf ? await loadSessionPdfBytes() : null;
+      return { raw, bytes };
+    });
+    if (readPair?.lockFailed) return { success: false, pdfSuccess: false, hadSnapshot: true };
+    if (readPair?.failed) return failedSessionRestore(true);
+    const rawSnapshot = readPair.raw;
+    const recoveredPdfBytes = readPair.bytes;
+
     hadSnapshot = rawSnapshot !== null;
     if (!hadSnapshot) {
       return { success: true, pdfSuccess: true, hadSnapshot: false };
@@ -609,7 +807,6 @@ async function restoreSessionState() {
       return { success: true, pdfSuccess: true, hadSnapshot: true };
     }
 
-    const recoveredPdfBytes = await loadSessionPdfBytes();
     if (!(recoveredPdfBytes instanceof Uint8Array) || recoveredPdfBytes.length <= 0) {
       loadedPdfBytes = null;
       sessionPdfBytesDirty = false;
