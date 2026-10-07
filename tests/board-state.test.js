@@ -63,6 +63,111 @@ test("touch calibration recent results remain bounded to the newest ten", () => 
   assert.equal(records[9].index, 12);
 });
 
+test("calibration fullscreen session stays armed across completed traces and restores the prior window state", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const initSource = source.slice(source.indexOf("function initDeveloperCalibration"), source.indexOf("function cancelDeveloperCalibration"));
+  const elements = new Map(); const handlers = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {
+      hidden: false, disabled: false, value: "", textContent: "", dataset: {}, style: {},
+      classList: { add() { this.active = true; }, remove() { this.active = false; } },
+      addEventListener(name, fn) { handlers.set(`${selector}:${name}`, fn); },
+      replaceChildren() {}, append() {}, appendChild() {}, setAttribute() {}, focus() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0 }), setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {},
+    });
+    return elements.get(selector);
+  };
+  const selectors = ["[data-calibration-area]", "[data-calibration-status]", "[data-calibration-records]", "[data-calibration-intent]", "[data-calibration-hint]", "[data-calibration-workspace]", "[data-calibration-start]", "[data-calibration-cancel]", "[data-calibration-finish]", "[data-calibration-reset]", "[data-calibration-count]", "[data-calibration-positions]", "[data-calibration-anchor-value]", "[data-calibration-vector]", "[data-calibration-initial]", "[data-calibration-span]", "[data-calibration-classification]", "[data-calibration-anchor]", "[data-calibration-point=\"0\"]", "[data-calibration-point=\"1\"]"];
+  selectors.forEach(element);
+  element("[data-calibration-intent]").value = "pan";
+  const panel = { querySelector: element, addEventListener(name, fn) { handlers.set(`panel:${name}`, fn); } };
+  let now = 0, fullscreen = false, deferredEnter = null, enterCalls = 0;
+  const context = {
+    developerCalibration: null, developerCalibrationFrame: 0, developerCalibrationArmed: false,
+    developerCalibrationRecords: [], developerCalibrationIntent: "pan", BoardState: boardState,
+    developerCalibrationStartInvalidator: null,
+    cancelDeveloperCalibration() { if (this.developerCalibrationStartInvalidator) this.developerCalibrationStartInvalidator(); this.developerCalibration = null; this.developerCalibrationArmed = false; this.developerCalibrationFullscreen = null; },
+    performance: { now: () => now },
+    document: { createElement: () => element(`created-${Math.random()}`) },
+    window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {} },
+    isFullscreenActive: () => fullscreen,
+    async enterFullscreen() { enterCalls += 1; if (deferredEnter) await deferredEnter; fullscreen = true; },
+    exitFullscreen() { fullscreen = false; },
+  };
+  vm.createContext(context); vm.runInContext(initSource, context);
+  context.initDeveloperCalibration(panel, boardState.normalizeTouchCalibration({}));
+  await handlers.get("[data-calibration-start]:click")();
+  const measure = (a, b) => {
+    const recordCount = context.developerCalibrationRecords.length;
+    handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: a, clientX: 10, clientY: 10, preventDefault() {} });
+    handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: b, clientX: 50, clientY: 10, preventDefault() {} });
+    now += 20;
+    handlers.get("[data-calibration-area]:pointerup")({ pointerId: a, clientX: 10, clientY: 10 });
+    handlers.get("[data-calibration-area]:pointerup")({ pointerId: b, clientX: 50, clientY: 10 });
+    assert.equal(context.developerCalibrationRecords.length, recordCount + 1);
+  };
+  measure(1, 2);
+  assert.equal(context.developerCalibrationArmed, true);
+  assert.equal(context.developerCalibrationRecords.length, 1);
+  assert.equal(context.developerCalibrationRecords[0].intent, "pan");
+  assert.equal(context.developerCalibrationRecords[0].elapsedMs, 20);
+  assert.equal(context.developerCalibrationRecords[0].initialSeparation, 40);
+  assert.equal(context.developerCalibrationRecords[0].maxVectorDifference, 0);
+  assert.equal(context.developerCalibrationRecords[0].maxAbsoluteSpanChange, 0);
+  measure(3, 4);
+  assert.equal(context.developerCalibrationRecords.length, 2);
+  handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: 5, clientX: 10, clientY: 10, preventDefault() {} });
+  handlers.get("[data-calibration-cancel]:click")();
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(context.developerCalibrationRecords.length, 2);
+  assert.equal(fullscreen, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+
+  await handlers.get("[data-calibration-start]:click")();
+  handlers.get("panel:keydown")({ key: "Escape" });
+  assert.equal(context.developerCalibrationRecords.length, 2);
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(fullscreen, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+
+  fullscreen = true;
+  await handlers.get("[data-calibration-start]:click")();
+  handlers.get("[data-calibration-finish]:click")();
+  assert.equal(fullscreen, true);
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+
+  fullscreen = false;
+  let resolveEnter;
+  deferredEnter = new Promise((resolve) => { resolveEnter = resolve; });
+  const cancelledStart = handlers.get("[data-calibration-start]:click")();
+  await handlers.get("[data-calibration-start]:click")();
+  assert.equal(enterCalls, 3);
+  assert.equal(element("[data-calibration-cancel]").disabled, false);
+  handlers.get("[data-calibration-cancel]:click")();
+  resolveEnter(); await cancelledStart;
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+  assert.equal(fullscreen, false);
+
+  let resolveClose;
+  deferredEnter = new Promise((resolve) => { resolveClose = resolve; });
+  const closedStart = handlers.get("[data-calibration-start]:click")();
+  context.cancelDeveloperCalibration(); // panel close/category rerender invalidation
+  resolveClose(); await closedStart;
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+  assert.equal(fullscreen, false);
+
+  deferredEnter = null;
+  fullscreen = true;
+  await handlers.get("[data-calibration-start]:click")();
+  handlers.get("[data-calibration-cancel]:click")();
+  assert.equal(fullscreen, true);
+  assert.equal(context.developerCalibrationArmed, false);
+  assert.equal(element("[data-calibration-workspace]").classList.active, false);
+});
+
 test("applying a selected calibration result returns a bounded draft without mutating saved settings", () => {
   const saved = { panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40 };
   const panDraft = boardState.applyTouchCalibrationRecord(saved, { intent: "pan", maxVectorDifference: 0 });
@@ -95,6 +200,8 @@ test("selected multitouch mode pans and zooms around the initial midpoint withou
   const context = {
     panMode: true, boardInteractionMode: "multi", devSettings: { panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40 },
     BoardState: boardState,
+    isFullscreenActive: () => false,
+    exitFullscreen() {},
     boardCamera: { x: 0, y: 0, scale: 1 }, multiTouchGesture: null, multiTouchSuppressed: new Set(), multiTouchFrame: 0,
     window: { requestAnimationFrame(fn) { const id = ++frameId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); } },
     canvas: { setPointerCapture(id) { captures.add(id); }, hasPointerCapture(id) { return captures.has(id); }, releasePointerCapture(id) { captures.delete(id); } },
@@ -776,7 +883,7 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
     hideDevTouch() {},
   };
   vm.createContext(settingsContext);
-  vm.runInContext(`let boardInteractionMode="single"; const DEV_SETTINGS_KEY="test"; const DEV_DEFAULTS={zoomCueDelayMs:500,zoomCueShrinkMs:1500,presetHoldMs:3000,movementThreshold:12,zoomSensitivity:.008,showTouchOverlay:true}; let devSettings={...DEV_DEFAULTS}; let devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}; let devSettingsReturnFocus={isConnected:true,focus(){this.focused=true;}}; let devMode=true; let devTicker=null; let zoomCueTimer=null; let developerCalibration=null; let developerCalibrationFrame=0; let developerCalibrationArmed=false; let developerCalibrationRecords=[]; ${settingsFns}`, settingsContext);
+  vm.runInContext(`let boardInteractionMode="single"; const DEV_SETTINGS_KEY="test"; const DEV_DEFAULTS={zoomCueDelayMs:500,zoomCueShrinkMs:1500,presetHoldMs:3000,movementThreshold:12,zoomSensitivity:.008,showTouchOverlay:true}; let devSettings={...DEV_DEFAULTS}; let devSettingsDraft={zoomCueDelayMs:900,zoomCueShrinkMs:2100}; let devSettingsReturnFocus={isConnected:true,focus(){this.focused=true;}}; let devMode=true; let devTicker=null; let zoomCueTimer=null; let developerCalibration=null; let developerCalibrationFrame=0; let developerCalibrationArmed=false; let developerCalibrationFullscreen=null; let developerCalibrationRecords=[]; ${settingsFns}`, settingsContext);
   const previewHandlers = {}, preview = {
     addEventListener(name, fn) { previewHandlers[name] = fn; },
     getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 100 }),

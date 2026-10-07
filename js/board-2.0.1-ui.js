@@ -9,6 +9,8 @@ let developerCalibrationIntent = "pan";
 let developerCalibration = null;
 let developerCalibrationFrame = 0;
 let developerCalibrationArmed = false;
+let developerCalibrationFullscreen = null;
+let developerCalibrationStartInvalidator = null;
 let developerCalibrationRecords = [];
 let boardInteractionMode = "single";
 let multiTouchGesture = null;
@@ -252,7 +254,7 @@ function renderPageList() {
     button.type = "button";
     button.className = `page-entry${index === boardPageIndex ? " is-active" : ""}`;
     button.textContent = `${index + 1} · ${page.kind === "pdf" ? `PDF ${page.pdfPage}쪽` : "칠판"}`;
-    button.addEventListener("click", () => { finishActiveBoardInput(); saveCurrentStrokeState(); saveBoardPageView(); renderBoardPage(index); });
+    button.addEventListener("click", () => { finishActiveBoardInput(); saveCurrentStrokeState(); renderBoardPage(index); });
     pageList.appendChild(button);
   });
   const active = currentBoardPage();
@@ -263,7 +265,7 @@ function renderPageList() {
 function addBoardBlankPage() {
   if (pdfExportInProgress || sessionRestoreInProgress) return;
   finishActiveBoardInput();
-  saveCurrentStrokeState(); saveBoardPageView();
+  saveCurrentStrokeState();
   const index = boardPageIndex + 1;
   const page = BoardState.createBlankPage(`blank:${Date.now()}`);
   page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height };
@@ -275,7 +277,7 @@ function addBoardBlankPage() {
 function deleteBoardBlankPage() {
   if (!BoardState.canDeletePage(boardPageSequence, boardPageIndex)) return;
   finishActiveBoardInput();
-  saveCurrentStrokeState(); saveBoardPageView();
+  saveCurrentStrokeState();
   const op = { action: "delete", index: boardPageIndex, page: null };
   BoardState.applyStructureOperation(boardPageSequence, op, true);
   pageStructureUndo.push(op); pageStructureRedo.length = 0;
@@ -287,7 +289,7 @@ function runPageStructureUndo(redo) {
   const op = from[from.length - 1];
   if (!op) return;
   finishActiveBoardInput();
-  saveCurrentStrokeState(); saveBoardPageView();
+  saveCurrentStrokeState();
   const oldIndex = boardPageIndex;
   if (!BoardState.applyStructureOperation(boardPageSequence, op, redo)) return;
   from.pop(); to.push(op);
@@ -303,7 +305,7 @@ function goToBoardPage(delta) {
   const next = boardPageIndex + delta;
   if (next < 0 || next >= boardPageSequence.length) return;
   finishActiveBoardInput();
-  saveCurrentStrokeState(); saveBoardPageView(); renderBoardPage(next);
+  saveCurrentStrokeState(); renderBoardPage(next);
 }
 function applyBoardCamera() {
   if (boardWorld) boardWorld.style.transform = "none";
@@ -370,7 +372,7 @@ function fitCurrentBoardPage(finishInput = true) {
   return true;
 }
 function boardWorkSnapshot() {
-  saveCurrentStrokeState(); saveBoardPageView();
+  saveCurrentStrokeState();
   if (hasLoadedPdfDocument() && !(loadedPdfBytes instanceof Uint8Array)) throw new Error("원본 PDF가 복구되지 않아 작업 파일을 만들 수 없습니다. PDF를 다시 불러오세요.");
   return { format: "boardcanvas-work", version: 1, savedAt: Date.now(), name: loadedDocumentName, pdfBase64: loadedPdfBytes ? encodeBase64(loadedPdfBytes) : null, pageIndex: boardPageIndex, pages: boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []), view: page.view ? { ...page.view } : null, pdfWorldSize: page.pdfWorldSize ? { ...page.pdfWorldSize } : null, worldSize: page.worldSize ? { ...page.worldSize } : null })) };
 }
@@ -419,7 +421,6 @@ function requestBoardWorkReplacement(action) {
   }
   finishActiveBoardInput();
   saveCurrentStrokeState();
-  saveBoardPageView();
   const hasWork = hasLoadedPdfDocument() || boardPageSequence.length > 1 || boardPageSequence.some((page) => (page.strokes || []).length);
   const request = workReplacementManager.request(action);
   if (!request.accepted) {
@@ -826,7 +827,7 @@ function renderTouchSettings() {
   const draft = devSettingsDraft || { ...devSettings };
   const totalMs = draft.zoomCueDelayMs + draft.zoomCueShrinkMs;
   const thresholds = BoardState.normalizeTouchCalibration(draft);
-  panel.innerHTML = `<div class="dev-settings-body"><nav class="dev-tabs" role="tablist" aria-label="터치 조작 방식"><button type="button" role="tab" id="devSingleTab" aria-controls="devSinglePanel" data-dev-tab="single">한 손가락</button><button type="button" role="tab" id="devMultiTab" aria-controls="devMultiPanel" data-dev-tab="multi">두 손가락</button></nav><p class="dev-calibration-note">펜 그리기는 그대로 유지되며, 패닝에서 선택한 탐색 방식 하나만 사용합니다. 탭 변경과 시험은 초안에만 반영되고 저장할 때 적용됩니다.</p><section id="devSinglePanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devSingleTab" data-dev-tab-panel="single"><div class="dev-timing"><h3>한 손가락: 패닝·줌</h3><p class="dev-definition">한 손가락으로 끌면 화면을 패닝합니다. 기본값은 500ms 대기 후 1500ms 동안 원이 줄어들며, 총 2000ms가 지나면 줌이 시작됩니다. 그 뒤 세로로 위로 끌면 화면 확대, 아래로 끌면 화면 축소입니다.</p><label>원 표시 지연 <input data-key="zoomCueDelayMs" type="range" min="0" max="1500" step="100" value="${draft.zoomCueDelayMs}"><output>${formatTouchSettingValue("zoomCueDelayMs", draft.zoomCueDelayMs)}</output></label><label>원 축소 시간 <input data-key="zoomCueShrinkMs" type="range" min="500" max="5000" step="100" value="${draft.zoomCueShrinkMs}"><output>${formatTouchSettingValue("zoomCueShrinkMs", draft.zoomCueShrinkMs)}</output></label><p class="dev-total">줌 활성화까지 <output data-total>${totalMs}ms</output></p><p class="dev-guidance">시험 영역을 누른 채 기다린 뒤, 위·아래로 움직여도 실제 칠판·PDF·카메라는 변하지 않습니다.</p><div class="dev-test-area" data-dev-test tabindex="0" aria-label="한 손가락 패닝과 줌 시험 영역">한 손가락 시험 영역</div></div><div class="dev-other"><label><input data-dev-overlay type="checkbox" ${draft.showTouchOverlay ? "checked" : ""}> 터치 위치·허용 반경·유지 시간 표시</label><label>프리셋 편집 유지 시간 <input data-key="presetHoldMs" type="range" min="1000" max="5000" step="100" value="${draft.presetHoldMs}"><output>${formatTouchSettingValue("presetHoldMs", draft.presetHoldMs)}</output></label><label>움직임 허용 <input data-key="movementThreshold" type="range" min="3" max="40" step="1" value="${draft.movementThreshold}"><output>${formatTouchSettingValue("movementThreshold", draft.movementThreshold)}</output></label><label>줌 민감도 <input data-key="zoomSensitivity" type="range" min="0.002" max="0.02" step="0.001" value="${draft.zoomSensitivity}"><output>${formatTouchSettingValue("zoomSensitivity", draft.zoomSensitivity)}</output></label></div></section><section id="devMultiPanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devMultiTab" data-dev-tab-panel="multi" hidden><section class="dev-calibration"><div class="dev-calibration-workspace" data-calibration-workspace><div class="dev-calibration-action-strip"><div class="dev-calibration-heading"><h3>두 손가락: 패닝·핀치 줌</h3></div><label class="dev-calibration-intent">측정할 동작<select data-calibration-intent><option value="pan" ${developerCalibrationIntent === "pan" ? "selected" : ""}>같은 방향으로 이동 · 패닝</option><option value="zoom-in" ${developerCalibrationIntent === "zoom-in" ? "selected" : ""}>모으기 · 화면 축소</option><option value="zoom-out" ${developerCalibrationIntent === "zoom-out" ? "selected" : ""}>벌리기 · 화면 확대</option></select></label><p class="dev-calibration-hint" data-calibration-hint></p><div class="dev-calibration-actions"><button type="button" data-calibration-start>측정 시작</button><button type="button" data-calibration-cancel disabled>측정 취소</button></div><p class="dev-calibration-status" data-calibration-status role="status" aria-live="polite">측정을 시작하고 시험 영역에서 두 손가락을 움직이세요.</p></div><div class="dev-calibration-main"><div class="dev-calibration-area" data-calibration-area tabindex="0" aria-label="두 손가락 보정 시험 영역"><span class="dev-calibration-anchor" data-calibration-anchor hidden>기준점</span><span class="dev-calibration-point" data-calibration-point="0" hidden>1</span><span class="dev-calibration-point" data-calibration-point="1" hidden>2</span><span class="dev-calibration-empty">두 손가락 시험 영역</span></div><dl class="dev-calibration-readout"><dt>손가락 1 / 2</dt><dd data-calibration-positions>—</dd><dt>고정 기준점</dt><dd data-calibration-anchor-value>—</dd><dt>이동 벡터 차이</dt><dd data-calibration-vector>—</dd><dt>처음 간격</dt><dd data-calibration-initial>—</dd><dt>현재 간격 / 변화</dt><dd data-calibration-span>—</dd><dt>분류</dt><dd data-calibration-classification>대기</dd></dl></div><div class="dev-calibration-secondary"><p class="dev-calibration-note">두 손가락을 같은 방향으로 움직이면 패닝, 벌리면 화면 확대(줌 IN), 모으면 화면 축소(줌 OUT)입니다. 처음 두 손가락의 중심은 고정 기준점으로 사용됩니다. 기본값은 이동 차이 12px, 줌 시작 12px, 최소 간격 40px이며 측정 기록은 최근 10개만 남습니다.</p><div class="dev-calibration-fields">${[["panVectorTolerance","이동 차이 허용","1","200"],["pinchActivationDistance","줌 거리 변화 시작","1","200"],["pinchMinimumSeparation","최소 손가락 간격","8","500"]].map(([key,label,min,max]) => `<label>${label}<input data-calibration-key="${key}" type="number" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><input data-calibration-range="${key}" type="range" aria-label="${label} 슬라이더" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><output data-calibration-output="${key}">${thresholds[key]}px</output></label>`).join("")}</div><section class="dev-calibration-history"><div class="dev-calibration-history-header"><h4>최근 측정 <span data-calibration-count>(0/10)</span></h4><div class="dev-calibration-actions"><button type="button" data-calibration-reset>기록 초기화</button></div></div><ol class="dev-calibration-records" data-calibration-records></ol></section></div></section></section></div><footer><button type="button" data-dev-default>기본값</button><button type="button" data-dev-cancel>취소</button><button type="button" data-dev-save>저장</button></footer><p class="touch-settings-status" data-touch-status role="status" aria-live="polite">변경 사항은 저장할 때 적용됩니다.</p>`;
+  panel.innerHTML = `<div class="dev-settings-body"><nav class="dev-tabs" role="tablist" aria-label="터치 조작 방식"><button type="button" role="tab" id="devSingleTab" aria-controls="devSinglePanel" data-dev-tab="single">한 손가락</button><button type="button" role="tab" id="devMultiTab" aria-controls="devMultiPanel" data-dev-tab="multi">두 손가락</button></nav><p class="dev-calibration-note">펜 그리기는 그대로 유지되며, 패닝에서 선택한 탐색 방식 하나만 사용합니다. 탭 변경과 시험은 초안에만 반영되고 저장할 때 적용됩니다.</p><section id="devSinglePanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devSingleTab" data-dev-tab-panel="single"><div class="dev-timing"><h3>한 손가락: 패닝·줌</h3><p class="dev-definition">한 손가락으로 끌면 화면을 패닝합니다. 기본값은 500ms 대기 후 1500ms 동안 원이 줄어들며, 총 2000ms가 지나면 줌이 시작됩니다. 그 뒤 세로로 위로 끌면 화면 확대, 아래로 끌면 화면 축소입니다.</p><label>원 표시 지연 <input data-key="zoomCueDelayMs" type="range" min="0" max="1500" step="100" value="${draft.zoomCueDelayMs}"><output>${formatTouchSettingValue("zoomCueDelayMs", draft.zoomCueDelayMs)}</output></label><label>원 축소 시간 <input data-key="zoomCueShrinkMs" type="range" min="500" max="5000" step="100" value="${draft.zoomCueShrinkMs}"><output>${formatTouchSettingValue("zoomCueShrinkMs", draft.zoomCueShrinkMs)}</output></label><p class="dev-total">줌 활성화까지 <output data-total>${totalMs}ms</output></p><p class="dev-guidance">시험 영역을 누른 채 기다린 뒤, 위·아래로 움직여도 실제 칠판·PDF·카메라는 변하지 않습니다.</p><div class="dev-test-area" data-dev-test tabindex="0" aria-label="한 손가락 패닝과 줌 시험 영역">한 손가락 시험 영역</div></div><div class="dev-other"><label><input data-dev-overlay type="checkbox" ${draft.showTouchOverlay ? "checked" : ""}> 터치 위치·허용 반경·유지 시간 표시</label><label>프리셋 편집 유지 시간 <input data-key="presetHoldMs" type="range" min="1000" max="5000" step="100" value="${draft.presetHoldMs}"><output>${formatTouchSettingValue("presetHoldMs", draft.presetHoldMs)}</output></label><label>움직임 허용 <input data-key="movementThreshold" type="range" min="3" max="40" step="1" value="${draft.movementThreshold}"><output>${formatTouchSettingValue("movementThreshold", draft.movementThreshold)}</output></label><label>줌 민감도 <input data-key="zoomSensitivity" type="range" min="0.002" max="0.02" step="0.001" value="${draft.zoomSensitivity}"><output>${formatTouchSettingValue("zoomSensitivity", draft.zoomSensitivity)}</output></label></div></section><section id="devMultiPanel" class="dev-tab-panel" role="tabpanel" aria-labelledby="devMultiTab" data-dev-tab-panel="multi" hidden><section class="dev-calibration"><div class="dev-calibration-workspace" data-calibration-workspace><div class="dev-calibration-action-strip"><div class="dev-calibration-heading"><h3>두 손가락: 패닝·핀치 줌</h3></div><label class="dev-calibration-intent">측정할 동작<select data-calibration-intent><option value="pan" ${developerCalibrationIntent === "pan" ? "selected" : ""}>같은 방향으로 이동 · 패닝</option><option value="zoom-in" ${developerCalibrationIntent === "zoom-in" ? "selected" : ""}>모으기 · 화면 축소</option><option value="zoom-out" ${developerCalibrationIntent === "zoom-out" ? "selected" : ""}>벌리기 · 화면 확대</option></select></label><p class="dev-calibration-hint" data-calibration-hint></p><div class="dev-calibration-actions"><button type="button" data-calibration-start>측정 시작</button><button type="button" data-calibration-cancel disabled>측정 취소</button><button type="button" data-calibration-finish hidden>측정 완료</button></div><p class="dev-calibration-status" data-calibration-status role="status" aria-live="polite">측정을 시작하고 시험 영역에서 두 손가락을 움직이세요.</p></div><div class="dev-calibration-main"><div class="dev-calibration-area" data-calibration-area tabindex="0" aria-label="두 손가락 보정 시험 영역"><span class="dev-calibration-anchor" data-calibration-anchor hidden>기준점</span><span class="dev-calibration-point" data-calibration-point="0" hidden>1</span><span class="dev-calibration-point" data-calibration-point="1" hidden>2</span><span class="dev-calibration-empty">두 손가락 시험 영역</span></div><dl class="dev-calibration-readout"><dt>손가락 1 / 2</dt><dd data-calibration-positions>—</dd><dt>고정 기준점</dt><dd data-calibration-anchor-value>—</dd><dt>이동 벡터 차이</dt><dd data-calibration-vector>—</dd><dt>처음 간격</dt><dd data-calibration-initial>—</dd><dt>현재 간격 / 변화</dt><dd data-calibration-span>—</dd><dt>분류</dt><dd data-calibration-classification>대기</dd></dl></div><div class="dev-calibration-secondary"><p class="dev-calibration-note">두 손가락을 같은 방향으로 움직이면 패닝, 벌리면 화면 확대(줌 IN), 모으면 화면 축소(줌 OUT)입니다. 처음 두 손가락의 중심은 고정 기준점으로 사용됩니다. 기본값은 이동 차이 12px, 줌 시작 12px, 최소 간격 40px이며 측정 기록은 최근 10개만 남습니다.</p><div class="dev-calibration-fields">${[["panVectorTolerance","이동 차이 허용","1","200"],["pinchActivationDistance","줌 거리 변화 시작","1","200"],["pinchMinimumSeparation","최소 손가락 간격","8","500"]].map(([key,label,min,max]) => `<label>${label}<input data-calibration-key="${key}" type="number" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><input data-calibration-range="${key}" type="range" aria-label="${label} 슬라이더" min="${min}" max="${max}" step="1" value="${thresholds[key]}"><output data-calibration-output="${key}">${thresholds[key]}px</output></label>`).join("")}</div><section class="dev-calibration-history"><div class="dev-calibration-history-header"><h4>최근 측정 <span data-calibration-count>(0/10)</span></h4><div class="dev-calibration-actions"><button type="button" data-calibration-reset>기록 초기화</button></div></div><ol class="dev-calibration-records" data-calibration-records></ol></section></div></section></section></div><footer><button type="button" data-dev-default>기본값</button><button type="button" data-dev-cancel>취소</button><button type="button" data-dev-save>저장</button></footer><p class="touch-settings-status" data-touch-status role="status" aria-live="polite">변경 사항은 저장할 때 적용됩니다.</p>`;
   const tab = touchSettingsTab === "multi" ? "multi" : "single";
   panel.querySelectorAll("[data-dev-tab]").forEach((button) => { const selected = button.dataset.devTab === tab; button.setAttribute("aria-selected", String(selected)); button.tabIndex = selected ? 0 : -1; });
   panel.querySelectorAll("[data-dev-tab-panel]").forEach((section) => { section.hidden = section.dataset.devTabPanel !== tab; });
@@ -985,7 +986,9 @@ function cancelDeveloperTrial(area = document.querySelector("[data-dev-test]")) 
 function initDeveloperCalibration(panel, settings) {
   const area = panel.querySelector("[data-calibration-area]"), status = panel.querySelector("[data-calibration-status]"), list = panel.querySelector("[data-calibration-records]");
   const intent = panel.querySelector("[data-calibration-intent]"), hint = panel.querySelector("[data-calibration-hint]");
-  const workspace = panel.querySelector("[data-calibration-workspace]"), startButton = panel.querySelector("[data-calibration-start]"), cancelButton = panel.querySelector("[data-calibration-cancel]");
+  const workspace = panel.querySelector("[data-calibration-workspace]"), startButton = panel.querySelector("[data-calibration-start]"), cancelButton = panel.querySelector("[data-calibration-cancel]"), finishButton = panel.querySelector("[data-calibration-finish]");
+  let startRequest = 0, startPending = false;
+  developerCalibrationStartInvalidator = () => { startRequest += 1; startPending = false; startButton.disabled = false; };
   const syncActions = () => { cancelButton.disabled = !(developerCalibrationArmed || developerCalibration); };
   const updateHint = () => { hint.textContent = (intent.value === "pan" ? "같은 방향으로 자연스럽게 이동해 이동 차이를 측정하세요." : "줌이 시작되길 원하는 거리만큼만 손가락을 움직인 뒤 떼세요. 기록의 최대 거리 변화가 줌 시작 기준값으로 적용됩니다.") + " 손가락을 떼면 결과가 기록됩니다."; };
   updateHint();
@@ -1027,24 +1030,55 @@ function initDeveloperCalibration(panel, settings) {
     const ids = calibration.tracker.getActivePointerIds();
     ids.forEach((id) => { if (area.hasPointerCapture(id)) area.releasePointerCapture(id); });
   };
-  const finish = (calibration, summary) => {
+  const finish = (calibration, summary, endSession = false) => {
     if (developerCalibration !== calibration) return;
     if (developerCalibrationFrame) window.cancelAnimationFrame(developerCalibrationFrame);
     developerCalibrationFrame = 0;
-    developerCalibration = null; developerCalibrationArmed = false; release(calibration); syncActions();
+    developerCalibration = null; developerCalibrationArmed = !endSession; release(calibration); syncActions();
     if (!summary) calibration.tracker.cancel();
     if (summary) {
       const labels = { pan: "같은 방향 이동 · 패닝", "zoom-in": "모으기 · 화면 축소", "zoom-out": "벌리기 · 화면 확대" };
       developerCalibrationRecords = BoardState.appendTouchCalibrationRecord(developerCalibrationRecords, { intent: summary.intent, label: labels[summary.intent], elapsedMs: Math.round(summary.elapsedMs), maxVectorDifference: summary.maxVectorDifference, maxAbsoluteSpanChange: summary.maxAbsoluteSpanChange, initialSeparation: summary.initialSeparation }); renderRecords();
-      status.textContent = "결과를 임시 목록에 추가했습니다. 선택한 측정값을 초안에 적용할 수 있습니다.";
+      status.textContent = developerCalibrationArmed ? "결과를 추가했습니다. 계속 측정하거나 측정을 완료하세요." : "결과를 임시 목록에 추가했습니다. 선택한 측정값을 초안에 적용할 수 있습니다.";
     } else status.textContent = "측정이 취소되어 결과를 기록하지 않았습니다.";
   };
-  startButton.addEventListener("click", () => {
-    cancelDeveloperCalibration(); renderMetrics(null);
-    developerCalibrationArmed = true; syncActions(); status.textContent = "측정 준비 완료. 시험 영역을 두 손가락으로 누르세요.";
-    workspace.scrollIntoView({ block: "start" }); area.focus({ preventScroll: true });
+  const endSession = (cancel = false) => {
+    startRequest += 1; startPending = false; startButton.disabled = false;
+    const discardedIncompleteTrace = Boolean(developerCalibration);
+    if (discardedIncompleteTrace) finish(developerCalibration, null, true);
+    else developerCalibrationArmed = false;
+    workspace.classList.remove("is-measuring"); finishButton.hidden = true; syncActions();
+    const restoreFullscreen = developerCalibrationFullscreen;
+    developerCalibrationFullscreen = null;
+    if (restoreFullscreen && isFullscreenActive()) exitFullscreen();
+    if (cancel || discardedIncompleteTrace) renderMetrics(null);
+    status.textContent = cancel ? "측정을 취소했습니다. 미완료 동작은 기록하지 않았습니다." : discardedIncompleteTrace ? "측정을 완료했습니다. 미완료 동작은 기록하지 않았습니다." : "측정을 완료했습니다. 기록한 결과는 최근 측정 목록에 남아 있습니다.";
+  };
+  startButton.addEventListener("click", async () => {
+    if (startPending || developerCalibrationArmed || developerCalibration) return;
+    cancelDeveloperCalibration();
+    startPending = true; startButton.disabled = true;
+    cancelButton.disabled = false;
+    const request = ++startRequest;
+    renderMetrics(null);
+    const requestedFullscreen = !isFullscreenActive();
+    developerCalibrationFullscreen = requestedFullscreen;
+    if (requestedFullscreen) await enterFullscreen();
+    if (request !== startRequest) {
+      if (requestedFullscreen && isFullscreenActive() && developerCalibrationFullscreen === null) exitFullscreen();
+      return;
+    }
+    startPending = false; startButton.disabled = false;
+    const fullscreenActive = isFullscreenActive();
+    developerCalibrationFullscreen = requestedFullscreen && fullscreenActive;
+    workspace.classList.add("is-measuring"); finishButton.hidden = false;
+    developerCalibrationArmed = true; syncActions();
+    status.textContent = requestedFullscreen && !fullscreenActive ? "전체 화면을 시작하지 못했습니다. 현재 창에서 측정을 계속할 수 있습니다." : "측정 준비 완료. 시험 영역에서 반복 측정한 뒤 완료를 누르세요.";
+    area.focus({ preventScroll: true });
   });
-  cancelButton.addEventListener("click", () => { cancelDeveloperCalibration(); renderMetrics(null); status.textContent = "측정이 취소되어 결과를 기록하지 않았습니다."; syncActions(); });
+  cancelButton.addEventListener("click", () => endSession(true));
+  finishButton.addEventListener("click", () => endSession());
+  panel.addEventListener("keydown", (event) => { if (event.key === "Escape" && developerCalibrationFullscreen !== null) endSession(true); });
   panel.querySelector("[data-calibration-reset]").addEventListener("click", () => { cancelDeveloperCalibration(); developerCalibrationRecords = []; renderRecords(); renderMetrics(null); status.textContent = "임시 측정 기록을 비웠습니다."; syncActions(); });
   intent.addEventListener("change", (event) => { developerCalibrationIntent = event.target.value; cancelDeveloperCalibration(); updateHint(); syncActions(); });
   area.addEventListener("pointerdown", (event) => {
@@ -1077,9 +1111,17 @@ function initDeveloperCalibration(panel, settings) {
   renderRecords(); syncActions();
 }
 function cancelDeveloperCalibration() {
+  if (typeof developerCalibrationStartInvalidator === "function") developerCalibrationStartInvalidator();
   developerCalibrationArmed = false;
   const cancelButton = document.querySelector("[data-calibration-cancel]");
   if (cancelButton) cancelButton.disabled = true;
+  const workspace = document.querySelector("[data-calibration-workspace]");
+  if (workspace) workspace.classList.remove("is-measuring");
+  const finishButton = document.querySelector("[data-calibration-finish]");
+  if (finishButton) finishButton.hidden = true;
+  const restoreFullscreen = developerCalibrationFullscreen;
+  developerCalibrationFullscreen = null;
+  if (restoreFullscreen && isFullscreenActive()) exitFullscreen();
   if (developerCalibrationFrame) window.cancelAnimationFrame(developerCalibrationFrame);
   developerCalibrationFrame = 0;
   if (!developerCalibration) return;

@@ -1054,6 +1054,23 @@ body {
 .dev-calibration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .dev-calibration-actions button, .dev-calibration-records button { width: fit-content; min-height: var(--settings-control-size); padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--text); word-break: keep-all; }
 .dev-calibration-area { position: relative; min-height: 220px; overflow: hidden; border: 1px dashed #94a3b8; border-radius: 9px; background: #fff; touch-action: none; user-select: none; }
+.dev-calibration-workspace.is-measuring { position: fixed; inset: 0; z-index: 120; display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px); grid-template-rows: minmax(0, 1fr); align-content: stretch; align-items: stretch; gap: 12px; overflow: hidden; padding: 12px; background: var(--surface, #f8fafc); }
+.dev-calibration-workspace.is-measuring .dev-calibration-action-strip { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 12px; min-width: 0; }
+.dev-calibration-workspace.is-measuring .dev-calibration-heading, .dev-calibration-workspace.is-measuring .dev-calibration-intent, .dev-calibration-workspace.is-measuring .dev-calibration-hint, .dev-calibration-workspace.is-measuring .dev-calibration-actions [data-calibration-start], .dev-calibration-workspace.is-measuring .dev-calibration-secondary { display: none; }
+.dev-calibration-workspace.is-measuring .dev-calibration-actions { display: grid; grid-template-columns: 1fr; }
+.dev-calibration-workspace.is-measuring .dev-calibration-actions button { width: 100%; min-height: 48px; font-size: 16px; }
+.dev-calibration-workspace.is-measuring .dev-calibration-main { grid-column: 1; grid-row: 1; grid-template-rows: minmax(0, 1fr) auto; align-content: stretch; min-height: 0; gap: 8px; }
+.dev-calibration-workspace.is-measuring .dev-calibration-area { min-height: 0; height: 100%; }
+.dev-calibration-workspace.is-measuring .dev-calibration-readout { grid-template-columns: max-content 1fr max-content 1fr; gap: 2px 8px; font-size: 11px; }
+.dev-calibration-workspace.is-measuring .dev-calibration-readout dt:nth-of-type(n+3), .dev-calibration-workspace.is-measuring .dev-calibration-readout dt:nth-of-type(n+3) ~ dd { display: none; }
+.dev-calibration-workspace.is-measuring .dev-calibration-status { padding: 10px; border-radius: 8px; background: white; color: var(--text); }
+@media (max-width: 620px) {
+  .dev-calibration-workspace.is-measuring { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .dev-calibration-workspace.is-measuring .dev-calibration-main { grid-column: 1; grid-row: 1; }
+  .dev-calibration-workspace.is-measuring .dev-calibration-action-strip { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; }
+  .dev-calibration-workspace.is-measuring .dev-calibration-status { grid-column: 1 / -1; grid-row: 2; }
+  .dev-calibration-workspace.is-measuring .dev-calibration-actions { grid-column: 2; grid-row: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .dev-calibration-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; pointer-events: none; }
 .dev-calibration-anchor, .dev-calibration-point { position: absolute; z-index: 1; display: grid; place-items: center; transform: translate(-50%, -50%); pointer-events: none; font-size: 10px; }
 .dev-calibration-anchor { width: 16px; height: 16px; border: 1px dashed #e53935; border-radius: 50%; color: #e53935; white-space: nowrap; }
@@ -1073,6 +1090,7 @@ body {
 .touch-settings-card .dev-settings-body { overflow: visible; padding: 0; }
 .touch-settings-card .dev-test-area { min-height: 180px; overflow: visible; }
 .touch-settings-card .dev-calibration-area { height: clamp(220px, calc(100vh - 400px), 320px); min-height: 220px; }
+.touch-settings-card .dev-calibration-workspace.is-measuring .dev-calibration-area { height: 100%; min-height: 0; }
 .touch-settings-card .dev-calibration-records { max-height: none; overflow: visible; }
 @media (min-width: 700px) {
   .dev-settings-body { grid-template-columns: 1fr; align-items: start; }
