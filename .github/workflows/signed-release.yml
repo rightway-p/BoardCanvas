@@ -162,6 +162,7 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "source_sha=$env:SOURCE_SHA" >> $env:GITHUB_OUTPUT
           'skip_release=false' >> $env:GITHUB_OUTPUT
+          exit 0
 
       - name: Setup Node.js
         if: steps.context.outputs.skip_release != 'true'

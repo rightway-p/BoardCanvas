@@ -18,3 +18,10 @@ Date: 2026-10-10 KST. Verdict: PASS for CI-only bootstrap target context; no old
 Independent actionlint 1.7.12 PASS on the added workflow. Existing environmental gate was independently checked in primary review: stable main-only, required owner reviewer, admin bypass false. Future stable v2 requires promoting the complete reviewed app/helper/signing source with consistent stable version and reviewed beta/hardware evidence; merely bootstrapping CI is not that promotion.
 
 Actionable findings: none for this target delta. False positives: none. Existing workflow fixes and limitations are preserved in `branch-release-pipeline-review.md` on the primary branch. No new architecture/dependencies added; no arbitrary code promotion. Reviewer wrote this record only; no commit/push/install/update/dispatch/release performed.
+## 2026-10-10 expected-404 CI exit correction
+
+Independent reviewer/operator `/root/recovery_design_review` verified the clean target at base `c510ed6`: only `.github/workflows/signed-release.yml` changes before this review appendix, adding one explicit successful-validator `exit 0`. No product/runtime/version file changes. Current workflow SHA-256 `2BF4B467A24B1718B7EDECB7009819FB9422A5FD1436166BD3EF2CA353D778C0` is byte-identical to primary's paired-reviewed correction.
+
+Primary actual AGY session `92b0f577-3fc3-45d8-8e61-ce1d6529e12f`, substantive NO_ACTIONABLE/exit 0, and independent packaging 3/3/actionlint PASS cover this exact one-line source change. No repeated AGY run is needed for byte-identical code; independent main-target context inspection was performed separately here. Existing path filter excludes workflow-only bootstrap pushes. Main remains legacy v1; full promoted v2 source and reviewed beta/hardware stable evidence are still required for any future stable release. No dispatch, publish, installation, commit or push by reviewer.
+
+Verdict: PASS for the identical corrective workflow and main bootstrap context; actual corrected public beta publication remains pending.
