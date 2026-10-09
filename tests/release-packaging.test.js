@@ -68,7 +68,7 @@ test("signed packaging emits the required camelCase metadata with an isolated fa
 });
 
 test("branch deployment maps dev to beta and main to reviewed stable publishing", () => {
-  const workflow = readFileSync(path.join(root, ".github", "workflows", "signed-release.yml"), "utf8");
+  const workflow = readFileSync(path.join(root, ".github", "workflows", "signed-release.yml"), "utf8").replace(/\r\n/g, "\n");
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- dev\s*\n\s+- main/);
   const pushPaths = workflow.match(/push:\s*\n(?:.*\n)*?\s+paths:\s*\n((?:\s+- .*\n)+)/)[1];
   assert.deepEqual(pushPaths.trim().split(/\r?\n/).map((line) => line.trim()), [
@@ -106,7 +106,7 @@ test("branch deployment maps dev to beta and main to reviewed stable publishing"
 });
 
 test("existing signed release reruns fail closed on incomplete assets or stale feeds", { skip: process.platform !== "win32" }, () => {
-  const workflow = readFileSync(path.join(root, ".github", "workflows", "signed-release.yml"), "utf8");
+  const workflow = readFileSync(path.join(root, ".github", "workflows", "signed-release.yml"), "utf8").replace(/\r\n/g, "\n");
   const start = workflow.indexOf("          # BEGIN existing immutable release verification\n");
   const end = workflow.indexOf("          # END existing immutable release verification\n", start);
   assert.ok(start >= 0 && end > start, "workflow replay verification block markers must exist");

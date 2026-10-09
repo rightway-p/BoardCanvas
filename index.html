@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Web Board</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.1-beta7-ui-r3" />
+  <link rel="stylesheet" href="styles.css?v=2.0.1-beta7-ui-r4" />
 </head>
 
 <body>
@@ -75,7 +75,7 @@
       <button id="redoButton" class="tool-button icon-tool-button" type="button" aria-label="다시 실행" title="다시 실행 (Ctrl/Cmd+Y 또는 Shift+Ctrl/Cmd+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"></path><path d="M20 12h-8a6 6 0 1 0 0 12"></path></svg></button>
       <div id="currentPenEditor" class="current-pen-editor toolbar-boundary"><label class="control"><span>현재 펜 색</span><button id="openPenColorButton" class="board-color-trigger" type="button" aria-label="현재 펜 색 선택" style="background-image:linear-gradient(#111,#111),conic-gradient(#d8dee7 25%,#fff 0 50%,#d8dee7 0 75%,#fff 0);background-size:auto,8px 8px">색 선택</button><input id="penColor" type="color" value="#111111" hidden /></label><label class="control" for="lineWidth"><span>현재 펜 굵기</span><div class="width-stepper"><button id="lineWidthDec" class="stepper-button" type="button" aria-label="굵기 감소">-</button><input id="lineWidth" type="number" min="1" max="40" step="1" value="5" inputmode="numeric" /><button id="lineWidthInc" class="stepper-button" type="button" aria-label="굵기 증가">+</button></div></label></div>
       <div class="preset-group toolbar-boundary" aria-label="펜 프리셋"><span class="preset-title">펜 프리셋</span><div id="penPresets" class="preset-list"></div></div>
-      <div id="presetHelp" class="preset-help-wrap"><button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" title="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button><div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 우클릭(또는 Shift+클릭) 저장</div></div>
+      <div id="presetHelp" class="preset-help-wrap"><button id="presetHelpButton" class="help-icon-button" type="button" aria-label="펜 프리셋 도움말" title="펜 프리셋 도움말" aria-expanded="false" aria-controls="presetHelpPopup">?</button><div id="presetHelpPopup" class="preset-help-popover is-hidden" role="tooltip">펜 프리셋: 클릭 적용 / 길게 누르기 편집 / 우클릭 또는 Shift+클릭 저장</div></div>
       <span id="modeLabel" class="mode-label">모드: 펜</span>
       <nav class="presentation-page-nav toolbar-boundary" aria-label="페이지 탐색"><button id="pdfPrevPage" type="button" aria-label="이전 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span id="pdfPageIndicator" class="page-indicator" aria-live="polite" aria-atomic="true" aria-label="페이지 없음"><span class="page-current">-</span><span class="page-separator" aria-hidden="true">/</span><span class="page-total">-</span></span><button id="pdfNextPage" type="button" aria-label="다음 페이지"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button></nav>
       <button id="fitPageButton" class="tool-button icon-tool-button toolbar-boundary" type="button" aria-label="페이지 맞춤" title="페이지 맞춤"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"></path><path d="M8 8l8 8m0-8-8 8"></path></svg></button><button id="fullscreenToggle" class="tool-button icon-tool-button" type="button" aria-label="전체화면 전환" title="전체화면 전환"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"></path></svg></button>
@@ -131,13 +131,13 @@
     </main>
   </div>
   <div id="replaceWorkDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="현재 작업 저장">
-    <div class="work-dialog-card"><strong>현재 작업을 바꿀까요?</strong><p>현재 PDF와 필기를 작업 파일로 저장하거나, 저장하지 않고 새 작업을 열 수 있습니다.</p><div><button id="saveAndReplaceButton" type="button">저장하고 열기</button><button id="discardAndReplaceButton" type="button">저장 없이 열기</button><button id="cancelReplaceButton" type="button">취소</button></div></div>
+    <div class="work-dialog-card"><strong>현재 작업을 바꿀까요?</strong><p>현재 PDF와 필기를 작업 파일로 저장하거나, 저장하지 않고 새 작업을 열 수 있습니다.</p><div class="work-dialog-actions"><button id="saveAndReplaceButton" class="document-action-button is-primary" type="button">저장하고 열기</button><button id="discardAndReplaceButton" class="document-action-button" type="button">저장 없이 열기</button><button id="cancelReplaceButton" class="document-action-button" type="button">취소</button></div></div>
   </div>
   <div id="driveDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="Google Drive PDF">
-    <div class="work-dialog-card drive-dialog-card"><header><strong>Google Drive PDF</strong><button id="closeDriveDialog" type="button" aria-label="닫기">×</button></header><p>데스크톱 앱에서 Google 계정으로 연결합니다.</p><div class="drive-actions"><button id="driveConnectButton" type="button">연결 / 목록 새로고침</button><button id="driveSignOutButton" type="button">연결 해제</button></div><p id="driveStatus" aria-live="polite">연결되지 않음</p><div id="driveFileList" class="drive-file-list"></div><label>PDF 캐시 한도 <span id="driveCacheLabel"></span><input id="driveCacheLimit" type="range" min="64" max="16384" step="64" value="2048"></label></div>
+    <div class="work-dialog-card drive-dialog-card"><header><strong>Google Drive PDF</strong><button id="closeDriveDialog" class="work-dialog-close" type="button" aria-label="닫기">×</button></header><p>데스크톱 앱에서 Google 계정으로 연결합니다.</p><div class="drive-actions"><button id="driveConnectButton" class="document-action-button is-primary" type="button">연결 / 목록 새로고침</button><button id="driveSignOutButton" class="document-action-button" type="button">연결 해제</button></div><p id="driveStatus" aria-live="polite">연결되지 않음</p><div id="driveFileList" class="drive-file-list"></div><label>PDF 캐시 한도 <span id="driveCacheLabel"></span><input id="driveCacheLimit" type="range" min="64" max="16384" step="64" value="2048"></label></div>
   </div>
   <div id="exportDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="판서 PDF 저장">
-    <div class="work-dialog-card"><strong>판서 포함 PDF 저장</strong><p>추가 옵션</p><div class="export-options"><label><input id="exportOutsideInk" type="checkbox"> PDF 바깥 필기도 포함</label><label><input id="exportBlankPages" type="checkbox"> 추가 칠판 페이지도 포함</label></div><div><button id="confirmExportButton" type="button">저장</button><button id="cancelExportButton" type="button">취소</button></div></div>
+    <div class="work-dialog-card"><strong>판서 포함 PDF 저장</strong><p>추가 옵션</p><div class="export-options"><label><input id="exportOutsideInk" type="checkbox"> PDF 바깥 필기도 포함</label><label><input id="exportBlankPages" type="checkbox"> 추가 칠판 페이지도 포함</label></div><div class="work-dialog-actions"><button id="confirmExportButton" class="document-action-button is-primary" type="button">저장</button><button id="cancelExportButton" class="document-action-button" type="button">취소</button></div></div>
   </div>
   <section id="setupWizard" class="setup-wizard is-hidden" hidden aria-hidden="true" aria-label="Board 첫 설정 마법사">
     <div class="setup-wizard-card"><aside class="setup-wizard-rail"><strong>Board</strong><p id="mobileProgress" data-wizard-progress>1 / 5 · 입력 방식</p><ol aria-label="설정 단계"><li class="step active" data-wizard-step>입력 방식</li><li class="step" data-wizard-step>펜·팔레트</li><li class="step" data-wizard-step>Google Drive</li><li class="step" data-wizard-step>동작 시험</li><li class="step" data-wizard-step>완료</li></ol></aside><div class="setup-wizard-content"><div id="setupWizardPanel" data-wizard-panel></div><footer><button id="setupWizardSkip" data-wizard-skip class="btn" type="button">전체 건너뛰기</button><div><button id="setupWizardBack" data-wizard-back class="btn" type="button" hidden>이전</button><button id="setupWizardNext" data-wizard-next class="btn primary" type="button">다음</button></div></footer></div></div>
@@ -154,12 +154,12 @@
   <script src="./js/presets-utils.js?v=wizard-palette-r1"></script>
   <script src="./js/presets-ui.js?v=wizard-palette-r1"></script>
   <script src="./js/pen-settings.js?v=2.0.1-beta7-ui-r1"></script>
-  <script src="./js/setup-wizard.js?v=wizard-palette-r1"></script>
+  <script src="./js/setup-wizard.js?v=ui-consistency-r1"></script>
   <script src="./js/strokes-core.js?v=wizard-palette-r1"></script>
   <script src="./js/strokes-history.js"></script>
   <script src="./js/stroke-eraser.js"></script>
   <script src="./js/board-export.js?v=2.0.1-blank-ink-r2"></script>
-  <script src="./js/render-doc-draw.js?v=wizard-palette-r1"></script>
+  <script src="./js/render-doc-draw.js?v=ui-consistency-r1"></script>
   <script src="./js/remote-controls.js?v=2.0.1-beta7-ui-r1"></script>
   <script src="./js/events-init.js?v=2.0.1-beta7-ui-r1"></script>
   <script src="./js/board-2.0.1-ui.js?v=2.0.1-beta7-policy-r1"></script>

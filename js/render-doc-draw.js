@@ -8,10 +8,10 @@ function updateToolUI() {
   pixelEraserModeButton.classList.toggle("is-active", eraserMode === "eraser");
   strokeEraserModeButton.classList.toggle("is-active", eraserMode === "strokeEraser");
   const modeText = mouseModeActive
-    ? "Mouse"
+    ? "마우스"
     : (tool === "pen"
-      ? "Pen"
-      : (tool === "eraser" ? "Eraser" : "StrokeEraser"));
+      ? "펜"
+      : (tool === "eraser" ? "지우개" : "획 지우개"));
   modeLabel.textContent = `모드: ${panMode ? "패닝" : modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
   if (overlayMousePassthrough) {
     canvas.style.cursor = "default";

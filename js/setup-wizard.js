@@ -112,7 +112,7 @@
         panel.innerHTML = `<p class="eyebrow">04 / 동작 시험</p><h1>화면 동작을 확인해 보세요</h1><p class="intro">선택 사항입니다. 기존 화면 설정의 실제 시험 영역을 엽니다. 시험하지 않아도 계속할 수 있습니다.</p><button class="btn primary" type="button" data-wizard-trial-open>화면 설정에서 동작 시험 열기</button><p class="inline-note" data-wizard-trial-status>아직 시험하지 않았습니다.</p>`;
       } else if (step === 5) {
         const driveConnected = typeof driveAuthenticated !== "undefined" && driveAuthenticated;
-        const driveStatus = driveConnected ? (document.getElementById("driveStatus")?.textContent || "연결됨") : "연결하지 않음 · 선택 사항";
+        const driveStatus = driveConnected ? (document.getElementById("driveStatus")?.textContent || "연결됨") : "연결하지 않음";
         panel.innerHTML = `<p class="eyebrow">05 / 최종 확인</p><h1>이 설정으로 시작할까요?</h1><p class="intro">선택한 항목만 적용하고 Board를 시작합니다.</p><div class="summary"><div class="summary-row"><strong>입력 방식</strong><span>${mode === "single" ? "단일 터치" : "두 손가락"}</span></div><div class="summary-row"><strong>현재 펜</strong><span>${penDraft.color} · ${penDraft.width}px</span></div><div class="summary-row"><strong>Google Drive</strong><span>선택 사항 · ${driveStatus}</span></div></div>`;
       } else {
         panel.innerHTML = `<div class="done"><div><div class="done-mark" aria-hidden="true">✓</div><h1>준비됐습니다</h1><p class="intro">초기 설정을 마쳤습니다. 설정에서 언제든 다시 열 수 있습니다.</p></div></div>`;
