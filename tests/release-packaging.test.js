@@ -110,7 +110,11 @@ test("existing signed release reruns fail closed on incomplete assets or stale f
   const start = workflow.indexOf("          # BEGIN existing immutable release verification\n");
   const end = workflow.indexOf("          # END existing immutable release verification\n", start);
   assert.ok(start >= 0 && end > start, "workflow replay verification block markers must exist");
-  const verification = workflow.slice(start, end).split(/\r?\n/).map((line) => line.slice(10)).join("\n");
+  const successOutput = workflow.indexOf("          'skip_release=false' >> $env:GITHUB_OUTPUT", end);
+  const successExit = workflow.indexOf("          exit 0", successOutput);
+  assert.ok(successOutput > end && successExit > successOutput, "workflow successful validation output and explicit exit must exist");
+  const verification = workflow.slice(start, successExit + "          exit 0".length)
+    .split(/\r?\n/).map((line) => line.slice(10)).join("\n");
   const fixture = mkdtempSync(path.join(os.tmpdir(), "boardcanvas-release-replay-"));
   try {
     const script = path.join(fixture, "verify-replay.ps1");
@@ -118,7 +122,7 @@ test("existing signed release reruns fail closed on incomplete assets or stale f
     const wrapper = String.raw`
 $ErrorActionPreference = 'Stop'
 function git {
-  if ($args[0] -eq 'ls-remote' -and $args[1] -eq '--tags') { $global:LASTEXITCODE = 0; return "$env:MOCK_SOURCE_SHA refs/tags/v$env:VERSION" }
+  if ($args[0] -eq 'ls-remote' -and $args[1] -eq '--tags') { $global:LASTEXITCODE = 0; if ($env:MOCK_NO_TAG -eq 'true') { return }; return "$env:MOCK_SOURCE_SHA refs/tags/v$env:VERSION" }
   if ($args[0] -eq 'ls-remote') { $global:LASTEXITCODE = 0; return "$env:MOCK_BRANCH_SHA $($args[-1])" }
   if ($args[0] -eq 'fetch') { $global:LASTEXITCODE = 0; return }
   if ($args[0] -eq 'rev-parse') { $global:LASTEXITCODE = 0; return $env:MOCK_SOURCE_SHA }
@@ -126,6 +130,8 @@ function git {
 }
 function gh {
   if ($args[0] -eq 'api') {
+    if ($args[1] -eq "repos/$env:REPOSITORY/releases/tags/v$env:VERSION" -and $env:MOCK_RELEASE_LOOKUP_ERROR -eq 'true') { $global:LASTEXITCODE = 1; return 'gh: Internal Server Error (HTTP 500)' }
+    if ($args[1] -eq "repos/$env:REPOSITORY/releases/tags/v$env:VERSION" -and $env:MOCK_RELEASE_NOT_FOUND -eq 'true') { $global:LASTEXITCODE = 1; return 'gh: Not Found (HTTP 404)' }
     if ($args[1] -eq "repos/$env:REPOSITORY/releases/tags/v$env:VERSION") { $global:LASTEXITCODE = 0; return $env:MOCK_VERSION_RELEASE }
     if ($args[1] -eq "repos/$env:REPOSITORY/releases/tags/board-beta") {
       if ($env:MOCK_FAIL_ON_FEED -eq 'true') { throw 'unexpected rolling feed inspection' }
@@ -147,7 +153,7 @@ function gh {
 }
 $version = $env:VERSION
 $channel = $env:CHANNEL
-` + verification;
+` + verification + "\nif (Test-Path variable:global:LASTEXITCODE) { exit $global:LASTEXITCODE }\n";
     writeFileSync(script, wrapper);
 
     const version = "2.0.1-beta.7";
@@ -160,7 +166,7 @@ $channel = $env:CHANNEL
     ].map((name) => ({ name }));
     const versionedRelease = { draft: false, prerelease: true, assets: completeAssets };
     const feedRelease = { draft: false, prerelease: true, assets: [{ name: "board-release.json" }, { name: "board-release.json.sig" }] };
-    const run = ({ release = versionedRelease, feed = feedRelease, manifest = { version, channel: "beta" }, feedSignature = "fixture-signature", versionSignature = "fixture-signature", branchSha = sourceSha, failOnFeed = false, channel = "beta", latest = { tagName: `v${version}` } } = {}) => {
+    const run = ({ release = versionedRelease, feed = feedRelease, manifest = { version, channel: "beta" }, feedSignature = "fixture-signature", versionSignature = "fixture-signature", branchSha = sourceSha, failOnFeed = false, channel = "beta", latest = { tagName: `v${version}` }, releaseNotFound = false, releaseLookupError = false } = {}) => {
       const env = {
         ...process.env,
         VERSION: version,
@@ -179,6 +185,9 @@ $channel = $env:CHANNEL
         MOCK_VERSION_SIGNATURE: versionSignature,
         MOCK_LATEST_RELEASE: JSON.stringify(latest),
         MOCK_FAIL_ON_FEED: failOnFeed ? "true" : "false",
+        MOCK_RELEASE_NOT_FOUND: releaseNotFound ? "true" : "false",
+        MOCK_RELEASE_LOOKUP_ERROR: releaseLookupError ? "true" : "false",
+        MOCK_NO_TAG: releaseNotFound ? "true" : "false",
       };
       for (const name of [`existing-version-metadata-${version}`, `existing-beta-feed-${version}`]) rmSync(path.join(fixture, name), { recursive: true, force: true });
       writeFileSync(outputPath, "");
@@ -220,6 +229,14 @@ $channel = $env:CHANNEL
     const completeStableReplay = run({ channel: "stable", release: { draft: false, prerelease: false, assets: completeAssets }, latest: { tagName: `v${version}` } });
     assert.equal(completeStableReplay.status, 0, completeStableReplay.stdout + completeStableReplay.stderr);
     assert.match(readFileSync(outputPath, "utf8"), /skip_release=true/);
+
+    const firstPublication = run({ releaseNotFound: true });
+    assert.equal(firstPublication.status, 0, `first publication should pass the GHA wrapper epilogue: ${firstPublication.stdout}\n${firstPublication.stderr}`);
+    assert.match(readFileSync(outputPath, "utf8"), /skip_release=false/);
+
+    const unknownReleaseLookupFailure = run({ releaseLookupError: true });
+    assert.notEqual(unknownReleaseLookupFailure.status, 0);
+    assert.match(unknownReleaseLookupFailure.stdout + unknownReleaseLookupFailure.stderr, /Could not determine whether this version has already been released/);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
