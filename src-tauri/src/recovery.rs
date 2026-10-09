@@ -202,15 +202,13 @@ pub fn validate_operation(current: &InstallRecord, target: &InstallRecord, opera
   let current_version = semver::Version::parse(&current.version).map_err(|_| "Current version is invalid.".to_string())?;
   let target_version = semver::Version::parse(&target.version).map_err(|_| "Target version is invalid.".to_string())?;
   match operation {
-    "update" if current.channel == target.channel && target_version > current_version => Ok(()),
-    "promotion" if current.channel == "beta" && target.channel == "stable"
-      && (current_version.major, current_version.minor, current_version.patch) == (target_version.major, target_version.minor, target_version.patch)
-      && target_version > current_version => Ok(()),
+    "update" if target_version > current_version => Ok(()),
+    "promotion" if current.channel == "beta" && target.channel == "stable" => Ok(()),
     "rollback" => Ok(()),
     "recover" if current == target => Ok(()),
     "recover" => Err("Interrupted recovery can reinstall only the journal's pinned current baseline.".into()),
-    "update" => Err("Normal updates must remain on the current channel and move to a newer version.".into()),
-    "promotion" => Err("Promotion requires an explicit beta-to-stable release with the same major, minor, and patch version.".into()),
+    "update" => Err("Normal updates must move to a newer version.".into()),
+    "promotion" => Err("Returning to stable requires an explicit beta-to-stable operation.".into()),
     _ => Err("Unsupported recovery operation.".into()),
   }
 }
@@ -256,6 +254,43 @@ pub fn installed_executable_path() -> Result<PathBuf, String> {
 
 pub fn state_root() -> Result<PathBuf, String> {
   Ok(current_user_root()?.join("com.rightway.boardcanvas-recovery"))
+}
+
+const BETA_UPDATES_FILE: &str = "beta-updates.json";
+
+pub fn beta_updates_enabled() -> Result<bool, String> {
+  beta_updates_enabled_at(&state_root()?)
+}
+
+pub fn beta_updates_enabled_at(root: &Path) -> Result<bool, String> {
+  reject_reparse_path(root)?;
+  let path = root.join(BETA_UPDATES_FILE);
+  reject_reparse_path(&path)?;
+  if !path.exists() { return Ok(false); }
+  let bytes = fs::read(path).map_err(|error| format!("Could not read beta update preference: {error}"))?;
+  let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "The beta update preference is invalid.".to_string())?;
+  value.get("enabled").and_then(serde_json::Value::as_bool).ok_or_else(|| "The beta update preference is invalid.".to_string())
+}
+
+pub fn set_beta_updates_enabled(enabled: bool) -> Result<(), String> {
+  let root = state_root()?;
+  fs::create_dir_all(&root).map_err(|error| format!("Could not save beta update preference: {error}"))?;
+  reject_managed_path(&root)?;
+  write_bytes_atomic(&root, BETA_UPDATES_FILE, format!("{{\"enabled\":{enabled}}}").as_bytes())
+}
+
+pub fn require_beta_opt_in(target: &InstallRecord, enabled: bool) -> Result<(), String> {
+  if target.channel == "beta" && !enabled {
+    Err("베타 업데이트가 꺼져 있어 설치를 중단했습니다. 설정에서 베타 업데이트를 다시 켜고 확인해 주세요.".into())
+  } else { Ok(()) }
+}
+
+pub fn require_target_beta_opt_in(target: &InstallRecord) -> Result<(), String> {
+  if target.channel == "beta" { require_beta_opt_in(target, beta_updates_enabled()?) } else { Ok(()) }
+}
+
+fn require_target_beta_opt_in_at(target: &InstallRecord, root: &Path) -> Result<(), String> {
+  if target.channel == "beta" { require_beta_opt_in(target, beta_updates_enabled_at(root)?) } else { Ok(()) }
 }
 
 pub fn profile_path() -> Result<PathBuf, String> {
@@ -724,15 +759,35 @@ mod tests {
   }
 
   #[test]
-  fn operation_policy_blocks_downgrade_and_requires_explicit_beta_promotion() {
+  fn operation_policy_allows_newer_cross_channel_updates_and_explicit_any_version_stable_return() {
     let beta_one = record("2.0.1-beta.1", "beta");
     let beta_two = record("2.0.1-beta.2", "beta");
     let stable = record("2.0.1", "stable");
     assert!(validate_operation(&beta_one, &beta_two, "update").is_ok());
     assert!(validate_operation(&beta_two, &beta_one, "update").is_err());
-    assert!(validate_operation(&beta_two, &stable, "update").is_err());
+    assert!(validate_operation(&beta_two, &stable, "update").is_ok());
     assert!(validate_operation(&beta_two, &stable, "promotion").is_ok());
-    assert!(validate_operation(&beta_one, &record("2.0.2", "stable"), "promotion").is_err());
+    assert!(validate_operation(&beta_two, &record("1.9.9", "stable"), "promotion").is_ok());
+    assert!(validate_operation(&beta_one, &record("2.0.2", "stable"), "update").is_ok());
+    assert!(validate_operation(&stable, &record("2.0.1-beta.1", "beta"), "update").is_err());
+  }
+
+  #[test]
+  fn beta_preference_defaults_off_persists_and_blocks_beta_targets_when_disabled() {
+    let directory = std::env::temp_dir().join(format!("board-beta-preference-{:016x}", rand::random::<u64>()));
+    fs::create_dir_all(&directory).unwrap();
+    assert!(!beta_updates_enabled_at(&directory).unwrap());
+    let beta = record("2.0.1-beta.2", "beta");
+    assert!(require_beta_opt_in(&beta, false).is_err());
+    assert!(require_beta_opt_in(&beta, true).is_ok());
+    assert!(require_beta_opt_in(&record("2.0.1", "stable"), false).is_ok());
+    write_bytes_atomic(&directory, BETA_UPDATES_FILE, b"{\"enabled\":true}").unwrap();
+    assert!(beta_updates_enabled_at(&directory).unwrap());
+    write_bytes_atomic(&directory, BETA_UPDATES_FILE, b"not-json").unwrap();
+    assert!(beta_updates_enabled_at(&directory).is_err());
+    assert!(require_target_beta_opt_in_at(&record("2.0.1", "stable"), &directory).is_ok());
+    assert!(require_target_beta_opt_in_at(&beta, &directory).is_err());
+    let _ = fs::remove_dir_all(directory);
   }
 
   #[test]

@@ -103,6 +103,9 @@ fn apply_authorized() -> Result<(), String> {
   let target_manifest = read_manifest(&operation_dir.join("target"))?;
   verify_record(&target_manifest, journal.target.as_ref().ok_or("The journal has no signed target.")?)?;
   recovery::validate_operation(&journal.current, journal.target.as_ref().unwrap(), &journal.operation)?;
+  if journal.operation == "update" {
+    recovery::require_target_beta_opt_in(journal.target.as_ref().unwrap())?;
+  }
   if journal.state != "authorized" { return Err("The operation is no longer authorized for installation.".into()); }
   let target_installer = managed_path(&state, journal.staged_installer.as_deref().ok_or("No staged installer is recorded.")?)?;
   let target_installer_guard = recovery::open_verified_installer(&target_manifest, &target_installer)?;

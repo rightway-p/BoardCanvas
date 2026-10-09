@@ -330,6 +330,21 @@ test("page fit is a single toolbar action available in every interaction mode", 
   assert.doesNotMatch(source, /updatePanFitButton|panFitButton/);
 });
 
+test("recovery refresh without preference data does not clear the beta setting", () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const updateUi = source.slice(source.indexOf("function updateRecoveryUi(info)"), source.indexOf("async function refreshUpdaterRecovery()"));
+  const elements = Object.fromEntries(["appVersion", "previousVersion", "rollbackUpdateButton", "openRecoveryToolButton", "promoteStableButton", "betaUpdatesToggle"]
+    .map((id) => [id, { hidden: false, checked: false, disabled: true, textContent: "" }]));
+  const context = { document: { getElementById: (id) => elements[id] || null } };
+  vm.createContext(context);
+  vm.runInContext(updateUi, context);
+
+  context.updateRecoveryUi({ channel: "beta", betaUpdatesEnabled: true });
+  assert.equal(elements.betaUpdatesToggle.checked, true);
+  context.updateRecoveryUi({ channel: "beta", canRollback: true, previousVersion: "2.0.1-beta.6" });
+  assert.equal(elements.betaUpdatesToggle.checked, true);
+});
+
 test("PDF fit follows rendered page bounds through portrait and landscape resizes, preserving manual views and ink", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
   const fitSource = source.slice(source.indexOf("function boardPageFitCamera"), source.indexOf("function boardWorkSnapshot"));

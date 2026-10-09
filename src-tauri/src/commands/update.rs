@@ -10,6 +10,7 @@ use tauri::AppHandle;
 #[serde(rename_all = "camelCase")]
 pub struct UpdaterStatus {
   channel: String,
+  beta_updates_enabled: bool,
   configured: bool,
   recovery_ready: bool,
   can_rollback: bool,
@@ -55,8 +56,10 @@ pub fn get_updater_status(app: AppHandle) -> UpdaterStatus {
   let previous_version = journal.as_ref().and_then(|journal| journal.previous.as_ref().map(|record| record.version.clone()));
   let recovery_ready = installed && state.as_ref().is_ok_and(|path| ensure_helper(&app, path).is_ok());
   let can_rollback = recovery_ready && journal.as_ref().is_some_and(|journal| journal.state == "confirmed" && journal.previous.is_some() && journal.baseline_installer.is_some());
+  let beta_updates_enabled = recovery::beta_updates_enabled().unwrap_or(false);
   UpdaterStatus {
-    channel: recovery::RELEASE_CHANNEL.into(),
+    channel: journal.as_ref().map_or_else(|| recovery::RELEASE_CHANNEL.to_string(), |value| value.current.channel.clone()),
+    beta_updates_enabled,
     configured,
     recovery_ready,
     can_rollback,
@@ -70,32 +73,38 @@ pub fn get_updater_status(app: AppHandle) -> UpdaterStatus {
 }
 
 #[tauri::command]
+pub fn set_beta_updates_enabled(enabled: bool) -> Result<(), String> {
+  recovery::set_beta_updates_enabled(enabled)
+}
+
+#[tauri::command]
 pub async fn check_board_update(app: AppHandle) -> UpdateCheck {
-  match check_latest(recovery::RELEASE_CHANNEL).await {
+  match check_update_candidate(recovery::beta_updates_enabled().unwrap_or(false)).await {
     Ok(manifest) => {
       let current = installed_version(&app);
       let newer = semver::Version::parse(&manifest.version).ok().zip(semver::Version::parse(&current).ok()).is_some_and(|(new, old)| new > old);
       let blocked = if recovery::install_executable().is_err() { Some("Updates are available only for the fixed current-user installation.".into()) }
-        else if manifest.channel != recovery::RELEASE_CHANNEL { Some("Normal updates stay on the current release channel.".into()) }
+        else if recovery::require_target_beta_opt_in(&InstallRecord::from_manifest(&manifest)).is_err() { Some("베타 업데이트가 꺼져 있습니다. 정식 버전 채널만 확인합니다.".into()) }
         else if !newer { None }
         else if !has_compatible_baseline(&manifest, &current).await { Some("A verified installer for the current installation is unavailable; updating is blocked.".into()) }
         else { None };
       UpdateCheck { should_update: newer && blocked.is_none(), manifest: Some(ManifestSummary { version: manifest.version, installer_size: manifest.installer.size }), blocked }
     }
-    Err(error) => UpdateCheck { should_update: false, manifest: None, blocked: Some(error) },
+    Err(_) => UpdateCheck { should_update: false, manifest: None, blocked: Some("아직 정식 버전이 준비되지 않았습니다. 서명된 정식 버전을 확인할 수 있을 때 다시 시도해 주세요.".into()) },
   }
 }
 
 #[tauri::command]
 pub async fn prepare_board_update(app: AppHandle) -> Result<(), String> {
   let current_version = installed_version(&app);
-  let target = check_latest(recovery::RELEASE_CHANNEL).await?;
+  let target = check_update_candidate(recovery::beta_updates_enabled().unwrap_or(false)).await?;
+  recovery::require_target_beta_opt_in(&InstallRecord::from_manifest(&target))?;
   stage_update(target, &current_version, "update").await
 }
 
 #[tauri::command]
 pub async fn check_stable_release(app: AppHandle) -> UpdateCheck {
-  if recovery::RELEASE_CHANNEL != "beta" {
+  if installed_channel() != "beta" {
     return UpdateCheck { should_update: false, manifest: None, blocked: Some("Stable promotion is available only from the beta channel.".into()) };
   }
   match check_latest("stable").await {
@@ -110,13 +119,13 @@ pub async fn check_stable_release(app: AppHandle) -> UpdateCheck {
         else { None };
       UpdateCheck { should_update: blocked.is_none(), manifest: Some(ManifestSummary { version: manifest.version, installer_size: manifest.installer.size }), blocked }
     }
-    Err(error) => UpdateCheck { should_update: false, manifest: None, blocked: Some(error) },
+    Err(_) => UpdateCheck { should_update: false, manifest: None, blocked: Some("아직 사용할 수 있는 서명된 정식 버전이 없습니다. 나중에 다시 확인해 주세요.".into()) },
   }
 }
 
 #[tauri::command]
 pub async fn prepare_board_promotion(app: AppHandle) -> Result<(), String> {
-  if recovery::RELEASE_CHANNEL != "beta" { return Err("Stable promotion is available only from the beta channel.".into()); }
+  if installed_channel() != "beta" { return Err("Stable return is available only from the beta channel.".into()); }
   let current_version = installed_version(&app);
   let target = check_latest("stable").await?;
   stage_update(target, &current_version, "promotion").await
@@ -128,6 +137,7 @@ async fn stage_update(target: ReleaseManifest, current_version: &str, operation:
   fs::create_dir_all(&state).map_err(|error| format!("Could not prepare the recovery area: {error}"))?;
   recovery::reject_managed_path(&state)?;
   let _lock = recovery::OperationLock::acquire(&state)?;
+  if target.channel == "beta" { recovery::require_target_beta_opt_in(&InstallRecord::from_manifest(&target))?; }
   if let Some(journal) = recovery::read_journal(&state)? {
     if matches!(journal.state.as_str(), "prepared" | "authorized" | "closed" | "checkpointed" | "installing" | "needs-verification" | "failed") {
       return Err("A previous update or recovery operation needs attention before another can start.".into());
@@ -175,6 +185,7 @@ async fn stage_update(target: ReleaseManifest, current_version: &str, operation:
     baseline_installer: Some(format!("operations/{operation_id}/baseline-installer.exe")),
     message: None,
   };
+  if operation == "update" { recovery::require_target_beta_opt_in(journal.target.as_ref().unwrap())?; }
   recovery::write_journal_atomic(&state, &journal)?;
   Ok(())
 }
@@ -198,6 +209,9 @@ pub fn authorize_prepared_operation(work_saved: bool, pdfs_saved: bool) -> Resul
   let _lock = recovery::OperationLock::acquire(&state)?;
   let mut journal = recovery::read_journal(&state)?.ok_or("No prepared update or promotion was found.")?;
   if journal.state != "prepared" { return Err("The prepared operation is no longer waiting for save confirmation.".into()); }
+  if journal.operation == "update" {
+    if let Some(target) = &journal.target { recovery::require_target_beta_opt_in(target)?; }
+  }
   journal.state = "authorized".into();
   recovery::write_journal_atomic(&state, &journal)
 }
@@ -270,6 +284,7 @@ fn require_authorized_operation(operation: &str) -> Result<(), String> {
   let state = recovery::state_root()?;
   let journal = recovery::read_journal(&state)?.ok_or("No prepared update or promotion was found.")?;
   if journal.state != "authorized" || journal.operation != operation { return Err("The operation has not been authorized after successful save confirmation.".into()); }
+  if operation == "update" { if let Some(target) = &journal.target { recovery::require_target_beta_opt_in(target)?; } }
   Ok(())
 }
 
@@ -355,7 +370,23 @@ pub fn open_recovery_tool(app: AppHandle) -> Result<(), String> {
 
 async fn check_latest(channel: &str) -> Result<ReleaseManifest, String> {
   let (metadata, signature) = fetch_signed_metadata(recovery::latest_metadata_url_for(channel)?).await?;
-  recovery::parse_manifest(&metadata, &signature)
+  let manifest = recovery::parse_manifest(&metadata, &signature)?;
+  if manifest.channel != channel { return Err("The signed release channel does not match the requested feed.".into()); }
+  Ok(manifest)
+}
+
+async fn check_update_candidate(beta_enabled: bool) -> Result<ReleaseManifest, String> {
+  let mut candidates = Vec::new();
+  let stable = check_latest("stable").await;
+  if let Ok(value) = stable { candidates.push(value); }
+  if beta_enabled {
+    if let Ok(value) = check_latest("beta").await { candidates.push(value); }
+  }
+  if candidates.is_empty() {
+    return Err("서명된 업데이트를 확인하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.".into());
+  }
+  candidates.into_iter().max_by(|left, right| semver::Version::parse(&left.version).ok().cmp(&semver::Version::parse(&right.version).ok()))
+    .ok_or_else(|| "서명된 업데이트를 확인하지 못했습니다.".into())
 }
 
 async fn signed_version(version: &str) -> Result<ReleaseManifest, String> {
@@ -401,6 +432,10 @@ async fn has_compatible_baseline(target: &ReleaseManifest, current_version: &str
 
 fn installed_version(app: &AppHandle) -> String {
   recovery::state_root().ok().and_then(|state| recovery::read_journal(&state).ok().flatten()).map(|journal| journal.current.version).unwrap_or_else(|| app_version(app))
+}
+
+fn installed_channel() -> String {
+  recovery::state_root().ok().and_then(|state| recovery::read_journal(&state).ok().flatten()).map(|journal| journal.current.channel).unwrap_or_else(|| recovery::RELEASE_CHANNEL.to_string())
 }
 
 fn ensure_helper(app: &AppHandle, state: &Path) -> Result<PathBuf, String> {

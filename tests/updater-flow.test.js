@@ -198,6 +198,18 @@ test("stable promotion is a separate confirmed action staged before saving", asy
   assert.match(statuses.at(-1), /앱이 종료/);
 });
 
+test("explicit stable return warns that the latest stable can be older than beta", async () => {
+  let confirmation = "";
+  const { flow, calls } = await makeFlow({
+    checkPromotion: async () => ({ shouldUpdate: true, manifest: { version: "1.9.9" } }),
+    confirmPromotion: async (message) => { confirmation = message; return false; },
+  });
+
+  assert.equal(await flow.promote(), true);
+  assert.match(confirmation, /현재 버전보다 낮을 수도/);
+  assert.deepEqual(calls, []);
+});
+
 test("a rejected promotion confirmation fails closed and preserves the native string error", async () => {
   const { flow, calls, statuses } = await makeFlow({ confirmPromotion: async () => { throw "ACK native String error"; } });
 

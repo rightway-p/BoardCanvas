@@ -447,7 +447,7 @@ function requestBoardWorkReplacement(action) {
 let updaterFlow;
 async function getUpdaterFlow(invoke, setStatus) {
   if (!updaterFlow) {
-    updaterFlow = import("./updater-flow.mjs?v=2.0.1-recovery-r1").then(({ createUpdaterFlow }) => createUpdaterFlow({
+    updaterFlow = import("./updater-flow.mjs?v=2.0.1-beta7-policy-r1").then(({ createUpdaterFlow }) => createUpdaterFlow({
       getStatus: () => invoke("get_updater_status"),
       checkUpdate: () => invoke("check_board_update"),
       prepareUpdate: () => invoke("prepare_board_update"),
@@ -486,11 +486,13 @@ function updateRecoveryUi(info) {
   const rollback = document.getElementById("rollbackUpdateButton");
   const openTool = document.getElementById("openRecoveryToolButton");
   const promote = document.getElementById("promoteStableButton");
+  const betaToggle = document.getElementById("betaUpdatesToggle");
   if (info?.currentVersion && version) version.textContent = `버전 ${info.currentVersion}`;
   if (previous) previous.textContent = info?.canRollback ? `직전 버전: ${info.previousVersion}` : (info?.message || "복구 가능한 직전 버전 없음");
   if (rollback) rollback.hidden = !info?.canRollback;
   if (openTool) openTool.hidden = !info?.recoveryToolAvailable;
   if (promote) promote.hidden = info?.channel !== "beta";
+  if (betaToggle && typeof info?.betaUpdatesEnabled === "boolean") { betaToggle.checked = info.betaUpdatesEnabled; betaToggle.disabled = false; }
 }
 async function refreshUpdaterRecovery() {
   const invoke = getTauriInvoke();
@@ -1134,6 +1136,20 @@ function initUpdaterWiring() {
   document.getElementById("reopenReleaseNotesButton")?.addEventListener("click", openReleaseNotes);
   document.getElementById("rollbackUpdateButton").addEventListener("click", () => { void runUpdaterAction("rollback"); });
   document.getElementById("promoteStableButton").addEventListener("click", () => { void runUpdaterAction("promote"); });
+  document.getElementById("betaUpdatesToggle")?.addEventListener("change", async (event) => {
+    const toggle = event.currentTarget;
+    const enabled = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const invoke = getTauriInvoke();
+      if (!invoke) throw new Error("데스크톱 앱에서만 베타 업데이트 설정을 저장할 수 있습니다.");
+      await invoke("set_beta_updates_enabled", { enabled });
+      document.getElementById("updateStatus").textContent = enabled ? "베타 업데이트를 켰습니다." : "정식 버전 업데이트만 확인합니다.";
+    } catch (error) {
+      toggle.checked = !enabled;
+      document.getElementById("updateStatus").textContent = error?.message || "베타 업데이트 설정을 저장하지 못했습니다.";
+    } finally { toggle.disabled = false; }
+  });
   document.getElementById("openRecoveryToolButton").addEventListener("click", () => { void runUpdaterAction("openRecovery"); });
   document.getElementById("reopenSetupWizardButton")?.addEventListener("click", () => {
     closeDocumentPopup();
@@ -1156,7 +1172,7 @@ async function checkReleaseNotesAfterStartup(previousVersion) {
   if (typeof getVersion !== "function") return;
   try {
     const version = await getVersion();
-    const releaseNotesApi = await import("./release-notes.mjs?v=2.0.1-beta7-ui-r1");
+    const releaseNotesApi = await import("./release-notes.mjs?v=2.0.1-beta7-policy-r1");
     const { releaseNotesFor, shouldShowReleaseNotes } = releaseNotesApi;
     releaseNotesSeenKey = releaseNotesApi.releaseNotesSeenKey;
     recordReleaseNotesShown = releaseNotesApi.recordReleaseNotesShown;

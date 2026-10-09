@@ -12,7 +12,7 @@ test("release notes show once after an evidenced upgrade, never on first install
   const shown = new Set([releaseNotesSeenKey("2.0.1-beta.7")]);
   assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.7", previousVersion: "2.0.1-beta.6", versionShown: shown.has(releaseNotesSeenKey("2.0.1-beta.7")) }), false);
   assert.notEqual(releaseNotesSeenKey("2.0.1-beta.7"), releaseNotesSeenKey("2.0.1-beta.8"));
-  assert.equal(releaseNotesFor("2.0.1-beta.7").length, 3);
+  assert.equal(releaseNotesFor("2.0.1-beta.7").length, 4);
 });
 
 test("a no-notes launch records its running version so a later notes version is detected", () => {

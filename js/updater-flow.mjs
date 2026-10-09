@@ -112,7 +112,7 @@ export function createUpdaterFlow({ getStatus, checkUpdate, prepareUpdate, autho
   async function promoteToStable() {
     const capability = await getStatus();
     if (capability.channel !== "beta") {
-      setStatus(capability.message || "베타 버전에서만 정식 버전 전환을 요청할 수 있습니다.");
+      setStatus(capability.message || "베타 버전에서만 최신 정식 버전으로 돌아갈 수 있습니다.");
       return false;
     }
     setStatus("정식 버전 배포를 확인 중…");
@@ -126,13 +126,13 @@ export function createUpdaterFlow({ getStatus, checkUpdate, prepareUpdate, autho
       return false;
     }
     const version = result.manifest?.version || "정식 버전";
-    if ((await confirmPromotion(`${version} 정식 버전으로 전환할까요? 서명된 설치본을 먼저 확인한 뒤 현재 작업을 저장하고 앱을 다시 시작합니다.`)) !== true) {
+    if ((await confirmPromotion(`${version} 정식 버전으로 돌아갈까요? 현재 버전보다 낮을 수도 있습니다. 서명된 설치본과 데이터 호환성을 확인한 뒤 현재 작업을 저장하고 앱을 다시 시작합니다.`)) !== true) {
       setStatus("정식 버전 전환을 취소했습니다.");
       return true;
     }
     setStatus(`${version} 정식 버전을 확인하고 준비하는 중…`);
     await stageAndLaunch(preparePromotion, authorizePrepared, launchPromotion, "현재 작업을 저장하지 못해 정식 버전 전환을 중단했습니다.");
-    setStatus("정식 버전으로 전환을 시작합니다. 앱이 종료됩니다.");
+    setStatus("정식 버전으로 돌아가기를 시작합니다. 앱이 종료됩니다.");
     return true;
   }
 

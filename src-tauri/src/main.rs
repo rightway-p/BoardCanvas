@@ -32,6 +32,7 @@ fn main() {
       commands::drive::drive_set_cache_limit,
       commands::drive::drive_sign_out,
       commands::update::get_updater_status,
+      commands::update::set_beta_updates_enabled,
       commands::update::check_board_update,
       commands::update::check_stable_release,
       commands::update::prepare_board_update,
