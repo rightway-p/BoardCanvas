@@ -127,6 +127,7 @@
   function handleKeyEvent(event) {
     const developerSettings = document.getElementById("developerSettings");
     if (developerSettings && !developerSettings.hidden) return false;
+    if (document.getElementById("releaseNotesDialog")?.open) { event.stopImmediatePropagation(); return false; }
     const pressed = chord(event);
     const code = pressed.code;
     const inSettings = settingsOpen && remoteSettingsActive;

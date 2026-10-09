@@ -1474,7 +1474,6 @@ function applyOverlayMouseModeUI(active) {
   app.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
   document.body.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
   document.documentElement.classList.toggle("overlay-mouse-mode", overlayMousePassthrough);
-  if (typeof updatePanFitButton === "function") updatePanFitButton();
   updateOverlayMouseModeButton();
   updateToolUI();
 }

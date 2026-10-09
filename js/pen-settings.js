@@ -21,6 +21,7 @@
   let pickerTarget = null;
   let pickerCallback = null;
   let pickerCloseCallback = null;
+  let pickerPointerId = null;
   let pickerDraft = { color: "#111111", opacity: 1, hsv: hsvFromHex("#111111") };
   const pickerElements = () => ({ dialog: document.getElementById("penColorPicker"), sv: document.getElementById("penPickerSv"), cursor: document.getElementById("penPickerCursor"), hue: document.getElementById("penPickerHue"), hex: document.getElementById("penPickerHex"), opacity: document.getElementById("penPickerOpacity"), opacityValue: document.getElementById("penPickerOpacityValue"), preview: document.getElementById("penPickerPreview") });
   function updatePicker() {
@@ -30,10 +31,42 @@
     el.hex.value = pickerDraft.color;
     el.opacity.value = String(Math.round((1 - pickerDraft.opacity) * 100));
     el.opacityValue.value = `${el.opacity.value}%`;
+    el.opacity.style.setProperty("--pen-picker-color", pickerDraft.color);
     el.sv.style.background = `linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),hsl(${pickerDraft.hsv.h} 100% 50%)`;
     el.cursor.style.left = `${pickerDraft.hsv.s}%`;
     el.cursor.style.top = `${100 - pickerDraft.hsv.v}%`;
     el.preview.style.setProperty("--pen-picker-rgba", rgba(pickerDraft.color, pickerDraft.opacity));
+  }
+  function updateSvFromPointer(event) {
+    const el = pickerElements(), rect = el.sv.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    pickerDraft.hsv.s = clamp((event.clientX - rect.left) / rect.width * 100, 0, 100);
+    pickerDraft.hsv.v = clamp((1 - (event.clientY - rect.top) / rect.height) * 100, 0, 100);
+    pickerDraft.color = hexFromHsv(pickerDraft.hsv.h, pickerDraft.hsv.s, pickerDraft.hsv.v);
+    updatePicker();
+    return true;
+  }
+  function handleSvPointer(event) {
+    const el = pickerElements();
+    if (event.type === "pointerdown") {
+      if (event.isPrimary === false || pickerPointerId !== null) return false;
+      pickerPointerId = event.pointerId;
+      el.sv.setPointerCapture(event.pointerId);
+      return updateSvFromPointer(event);
+    }
+    if (pickerPointerId !== event.pointerId) return false;
+    if (event.type === "pointermove") return updateSvFromPointer(event);
+    if (["pointerup", "pointercancel", "lostpointercapture"].includes(event.type)) {
+      clearPickerPointer();
+      return true;
+    }
+    return false;
+  }
+  function clearPickerPointer() {
+    const id = pickerPointerId;
+    pickerPointerId = null;
+    const sv = pickerElements().sv;
+    if (id !== null && sv.hasPointerCapture?.(id)) sv.releasePointerCapture(id);
   }
   function openPicker(target, index, onApplied = null) {
     pickerTarget = { type: target, index };
@@ -131,13 +164,18 @@
   function init() {
     document.getElementById("openPenColorButton")?.addEventListener("click", () => openPicker("current", -1));
     const el = pickerElements();
+    el.dialog?.addEventListener("close", clearPickerPointer);
     document.getElementById("cancelPenPicker")?.addEventListener("click", () => { const close = pickerCloseCallback; pickerCloseCallback = null; pickerTarget = null; pickerCallback = null; el.dialog.close(); close?.(); });
     el.dialog?.addEventListener("cancel", (event) => { event.preventDefault(); const close = pickerCloseCallback; pickerCloseCallback = null; pickerTarget = null; pickerCallback = null; el.dialog.close(); close?.(); });
     document.getElementById("applyPenPicker")?.addEventListener("click", applyPicker);
     el.hue?.addEventListener("input", event => { pickerDraft.hsv.h = Number(event.target.value); pickerDraft.color = hexFromHsv(pickerDraft.hsv.h, pickerDraft.hsv.s, pickerDraft.hsv.v); updatePicker(); });
     el.hex?.addEventListener("change", event => { const color = normalizeHex(event.target.value); if (color) { pickerDraft.color = color; pickerDraft.hsv = hsvFromHex(color); updatePicker(); } else event.target.value = pickerDraft.color; });
     el.opacity?.addEventListener("input", event => { pickerDraft.opacity = 1 - clamp(event.target.value, 0, 100) / 100; updatePicker(); });
-    el.sv?.addEventListener("pointerdown", event => { const rect = el.sv.getBoundingClientRect(); pickerDraft.hsv.s = clamp((event.clientX - rect.left) / rect.width * 100, 0, 100); pickerDraft.hsv.v = clamp((1 - (event.clientY - rect.top) / rect.height) * 100, 0, 100); pickerDraft.color = hexFromHsv(pickerDraft.hsv.h, pickerDraft.hsv.s, pickerDraft.hsv.v); updatePicker(); });
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture"]) {
+      el.sv?.addEventListener(type, event => {
+        if (handleSvPointer(event) && type === "pointerdown") event.preventDefault();
+      });
+    }
     window.renderPenPaletteSettings = renderPaletteSettings;
     window.openSharedPenPicker = openPicker;
     window.BoardPenColorPicker = { open: openExternalPicker };

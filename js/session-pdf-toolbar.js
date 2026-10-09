@@ -1153,7 +1153,6 @@ function setToolbarFloatingPosition(x, y, persist = true) {
   toolbarLayout.floatX = clamped.x;
   toolbarLayout.floatY = clamped.y;
   applyToolbarFloatingPositionVariables();
-  if (typeof updatePanFitButton === "function") requestAnimationFrame(updatePanFitButton);
 
   if (persist) {
     saveToolbarLayout();

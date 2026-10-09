@@ -16,7 +16,6 @@ const deleteBlankPageButton = document.getElementById("deleteBlankPage");
 const pageStructureUndoButton = document.getElementById("pageStructureUndo");
 const pageStructureRedoButton = document.getElementById("pageStructureRedo");
 const fitPageButton = document.getElementById("fitPageButton");
-const panFitButton = document.getElementById("panFitButton");
 const saveBoardWorkButton = document.getElementById("saveBoardWorkButton");
 const openBoardWorkButton = document.getElementById("openBoardWorkButton");
 const boardWorkInput = document.getElementById("boardWorkInput");

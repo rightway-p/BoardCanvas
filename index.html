@@ -5,14 +5,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Web Board</title>
-  <link rel="stylesheet" href="styles.css?v=wizard-palette-r1" />
+  <link rel="stylesheet" href="styles.css?v=2.0.1-beta7-ui-r3" />
 </head>
 
 <body>
   <div class="app toolbar-placement-top">
-    <button id="panFitButton" class="pan-fit-button" type="button" aria-label="화면 맞춤" title="화면 맞춤" hidden>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h10l6 6v10H4z"></path><path d="M14 4v6h6M8 16v-3m0 0 2 2m-2-2-2 2m10-3v3m0 0 2-2m-2 2-2-2"></path></svg>
-    </button>
     <header class="toolbar" aria-label="칠판 도구 모음">
       <button id="toolbarDragHandle" class="toolbar-drag-handle" type="button" aria-label="툴바 도킹 위치 이동"
         title="드래그해서 상하좌우 도킹 위치 변경">
@@ -117,7 +114,7 @@
                   </div>
                 </section>
                 <section data-settings-panel="remote" hidden><h3>리모컨</h3><div id="remoteSettingsContent"></div></section>
-                <section data-settings-panel="about" hidden><h3>앱 정보</h3><div class="settings-card about-card"><strong>BoardCanvas</strong><p>현재 버전과 업데이트 상태를 확인하고 이전 버전 복구를 실행합니다.</p><div class="about-version"><span>현재 버전</span><span id="appVersion" class="about-version-value">버전 2.0.1-beta.6</span></div><div class="settings-card-actions"><button id="checkUpdateButton" class="document-action-button" type="button">업데이트 확인</button><button id="promoteStableButton" class="document-action-button" type="button" hidden>정식 버전으로 전환</button><button id="reopenSetupWizardButton" class="document-action-button" type="button">초기 설정 다시 실행</button></div><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><div class="settings-card-actions"><button id="rollbackUpdateButton" class="document-action-button" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" class="document-action-button" type="button" hidden>복구 도구 열기</button></div><span id="updateStatus" aria-live="polite"></span></div></section>
+                <section data-settings-panel="about" hidden><h3>앱 정보</h3><div class="settings-card about-card"><strong>BoardCanvas</strong><p>현재 버전과 업데이트 상태를 확인하고 이전 버전 복구를 실행합니다.</p><div class="about-version"><span>현재 버전</span><span id="appVersion" class="about-version-value">버전 2.0.1-beta.6</span></div><div class="settings-card-actions"><button id="checkUpdateButton" class="document-action-button" type="button">업데이트 확인</button><button id="reopenReleaseNotesButton" class="document-action-button" type="button" hidden>이번 업데이트 내용</button><button id="promoteStableButton" class="document-action-button" type="button" hidden>정식 버전으로 전환</button><button id="reopenSetupWizardButton" class="document-action-button" type="button">초기 설정 다시 실행</button></div><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><div class="settings-card-actions"><button id="rollbackUpdateButton" class="document-action-button" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" class="document-action-button" type="button" hidden>복구 도구 열기</button></div><span id="updateStatus" aria-live="polite"></span></div></section>
               </div>
             </div>
           </section>
@@ -145,7 +142,8 @@
   <section id="setupWizard" class="setup-wizard is-hidden" hidden aria-hidden="true" aria-label="Board 첫 설정 마법사">
     <div class="setup-wizard-card"><aside class="setup-wizard-rail"><strong>Board</strong><p id="mobileProgress" data-wizard-progress>1 / 5 · 입력 방식</p><ol aria-label="설정 단계"><li class="step active" data-wizard-step>입력 방식</li><li class="step" data-wizard-step>펜·팔레트</li><li class="step" data-wizard-step>Google Drive</li><li class="step" data-wizard-step>동작 시험</li><li class="step" data-wizard-step>완료</li></ol></aside><div class="setup-wizard-content"><div id="setupWizardPanel" data-wizard-panel></div><footer><button id="setupWizardSkip" data-wizard-skip class="btn" type="button">전체 건너뛰기</button><div><button id="setupWizardBack" data-wizard-back class="btn" type="button" hidden>이전</button><button id="setupWizardNext" data-wizard-next class="btn primary" type="button">다음</button></div></footer></div></div>
   </section>
-  <dialog id="penColorPicker" class="pen-color-picker" aria-labelledby="penColorPickerTitle"><h2 id="penColorPickerTitle">색 선택</h2><div id="penPickerSv" class="pen-picker-sv" aria-label="채도와 명도 선택"><span id="penPickerCursor"></span></div><label for="penPickerHue">색상</label><input id="penPickerHue" type="range" min="0" max="360" value="0"><label for="penPickerHex">HEX</label><input id="penPickerHex" type="text" maxlength="7" inputmode="text" value="#111111"><div id="penPickerPreview" class="pen-picker-preview"></div><label for="penPickerOpacity">투명도 <output id="penPickerOpacityValue">0%</output></label><input id="penPickerOpacity" type="range" min="0" max="100" value="0"><p class="hint">0%=불투명 · 100%=완전 투명</p><div class="picker-actions"><button id="cancelPenPicker" class="btn" type="button">취소</button><button id="applyPenPicker" class="btn primary" type="button">적용</button></div></dialog>
+  <dialog id="penColorPicker" class="pen-color-picker" aria-labelledby="penColorPickerTitle"><h2 id="penColorPickerTitle">색 선택</h2><div id="penPickerSv" class="pen-picker-sv" aria-label="채도와 명도 선택"><span id="penPickerCursor"></span></div><label for="penPickerHue">색상</label><input id="penPickerHue" type="range" min="0" max="360" value="0"><label for="penPickerHex">HEX</label><input id="penPickerHex" type="text" maxlength="7" inputmode="text" value="#111111"><div id="penPickerPreview" class="pen-picker-preview"></div><label for="penPickerOpacity">투명도 <output id="penPickerOpacityValue">0%</output></label><input id="penPickerOpacity" type="range" min="0" max="100" value="0"><p class="hint">0%=불투명 · 100%=완전 투명</p><div class="picker-actions"><button id="cancelPenPicker" class="document-action-button" type="button">취소</button><button id="applyPenPicker" class="document-action-button is-primary" type="button">적용</button></div></dialog>
+  <dialog id="releaseNotesDialog" class="release-notes-dialog" aria-labelledby="releaseNotesTitle"><h2 id="releaseNotesTitle">이번 업데이트</h2><ul id="releaseNotesList"></ul><div class="picker-actions"><button id="closeReleaseNotesButton" class="document-action-button" type="button">확인</button></div></dialog>
 
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/pdf-lib.min.js"></script>
@@ -155,16 +153,16 @@
   <script src="./js/session-pdf-toolbar.js?v=2.0.1-beta4-ux-r1"></script>
   <script src="./js/presets-utils.js?v=wizard-palette-r1"></script>
   <script src="./js/presets-ui.js?v=wizard-palette-r1"></script>
-  <script src="./js/pen-settings.js?v=wizard-palette-r1"></script>
+  <script src="./js/pen-settings.js?v=2.0.1-beta7-ui-r1"></script>
   <script src="./js/setup-wizard.js?v=wizard-palette-r1"></script>
   <script src="./js/strokes-core.js?v=wizard-palette-r1"></script>
   <script src="./js/strokes-history.js"></script>
   <script src="./js/stroke-eraser.js"></script>
   <script src="./js/board-export.js?v=2.0.1-blank-ink-r2"></script>
   <script src="./js/render-doc-draw.js?v=wizard-palette-r1"></script>
-  <script src="./js/remote-controls.js?v=2.0.1-remote-clear-r3"></script>
-  <script src="./js/events-init.js?v=wizard-palette-r1"></script>
-  <script src="./js/board-2.0.1-ui.js?v=wizard-palette-r2"></script>
+  <script src="./js/remote-controls.js?v=2.0.1-beta7-ui-r1"></script>
+  <script src="./js/events-init.js?v=2.0.1-beta7-ui-r1"></script>
+  <script src="./js/board-2.0.1-ui.js?v=2.0.1-beta7-ui-r1"></script>
 </body>
 
 </html>

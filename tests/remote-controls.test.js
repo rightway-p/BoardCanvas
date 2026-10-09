@@ -11,7 +11,7 @@ function setup() {
   const calls = [];
   const documentListeners = {};
   const documentChildren = [];
-  const modalState = { developerSettings: null };
+  const modalState = { developerSettings: null, releaseNotesDialog: { open: false } };
   function element(tagName) {
     const handlers = {};
     const attributes = {};
@@ -28,7 +28,7 @@ function setup() {
     };
   }
   const context = {
-    document: { createElement: element, getElementById: (id) => id === "developerSettings" ? modalState.developerSettings : null, addEventListener: (name, callback) => { documentListeners[name] = callback; }, body: { appendChild: (child) => documentChildren.push(child) } },
+    document: { createElement: element, getElementById: (id) => id === "developerSettings" ? modalState.developerSettings : id === "releaseNotesDialog" ? modalState.releaseNotesDialog : null, addEventListener: (name, callback) => { documentListeners[name] = callback; }, body: { appendChild: (child) => documentChildren.push(child) } },
     window: {
       localStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
       addEventListener: (name, callback, capture) => { listeners[name] = { callback, capture }; }
@@ -44,7 +44,7 @@ function setup() {
     ],
     showHint: (message) => hints.push(message)
   });
-  return { remote: context.window.BoardRemote, listeners, documentListeners, documentChildren, storage, hints, calls, setDeveloperSettingsOpen: (open) => { modalState.developerSettings = open ? { hidden: false } : null; } };
+  return { remote: context.window.BoardRemote, listeners, documentListeners, documentChildren, storage, hints, calls, setDeveloperSettingsOpen: (open) => { modalState.developerSettings = open ? { hidden: false } : null; }, setReleaseNotesOpen: (open) => { modalState.releaseNotesDialog.open = open; } };
 }
 
 function key(code, options = {}) {
@@ -114,6 +114,17 @@ test("developer settings modal blocks remote shortcuts without consuming input",
   const input = key("ArrowRight");
   assert.equal(remote.handleKeyEvent(input), false);
   assert.notEqual(input.stopped, true);
+  assert.deepEqual(calls, []);
+});
+
+test("release notes dialog blocks mapped remote shortcuts without preventing native dialog keys", () => {
+  const { remote, calls, setReleaseNotesOpen } = setup();
+  remote.setMappings([{ actionId: "nextPage", code: "ArrowRight" }]);
+  setReleaseNotesOpen(true);
+  const input = key("ArrowRight");
+  assert.equal(remote.handleKeyEvent(input), false);
+  assert.equal(input.stopped, true);
+  assert.equal(input.prevented, undefined);
   assert.deepEqual(calls, []);
 });
 

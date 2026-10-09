@@ -294,7 +294,7 @@ test("touch settings stay embedded and leave focus handling to the parent Settin
 test("floating toolbar viewport updates reclamp its saved position to the measured size", () => {
   const uiSource = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
   const toolbarSource = fs.readFileSync(require.resolve("../js/session-pdf-toolbar.js"), "utf8");
-  const viewport = uiSource.slice(uiSource.indexOf("function updateBoardViewport"), uiSource.indexOf("function updatePanFitButton"));
+  const viewport = uiSource.slice(uiSource.indexOf("function updateBoardViewport"), uiSource.indexOf("function setPanMode"));
   const setter = toolbarSource.slice(toolbarSource.indexOf("function clampToolbarFloatingPosition"), toolbarSource.indexOf("function setToolbarPlacement"));
   const events = [];
   const context = {
@@ -304,7 +304,6 @@ test("floating toolbar viewport updates reclamp its saved position to the measur
     app: { style: { setProperty(name, value) { events.push(`${name}:${value}`); } } },
     window: { innerWidth: 1280, innerHeight: 720, requestAnimationFrame() { events.push("raf"); } },
     requestAnimationFrame() { events.push("raf"); },
-    updatePanFitButton() {},
     setCanvasSize() { events.push("canvas"); },
     saveToolbarLayout() { throw new Error("floating viewport resize must not persist"); },
   };
@@ -313,7 +312,7 @@ test("floating toolbar viewport updates reclamp its saved position to the measur
   context.updateBoardViewport();
   assert.equal(context.toolbarLayout.floatY, 12);
   assert.equal(context.boardWrapper.style.inset, "0");
-  assert.deepEqual(events, ["--toolbar-float-x:433px", "--toolbar-float-y:12px", "raf", "canvas"]);
+  assert.deepEqual(events, ["--toolbar-float-x:433px", "--toolbar-float-y:12px", "canvas"]);
 
   context.toolbar = null;
   assert.doesNotThrow(() => context.updateBoardViewport());
@@ -322,47 +321,13 @@ test("floating toolbar viewport updates reclamp its saved position to the measur
   assert.doesNotThrow(() => context.updateBoardViewport());
 });
 
-test("pan fit button tracks pan mode and fits PDF to the available board viewport", () => {
+test("page fit is a single toolbar action available in every interaction mode", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const fitSource = source.slice(source.indexOf("function boardPageFitCamera"), source.indexOf("function boardWorkSnapshot"));
-  const positionSource = source.slice(source.indexOf("function updatePanFitButton"), source.indexOf("function setPanMode"));
-  const button = { hidden: true, style: {} };
-  let finished = false, applied = false;
-  const context = {
-    panMode: false, overlayMousePassthrough: false,
-    toolbarLayout: { placement: "right" },
-    toolbar: { getBoundingClientRect: () => ({ left: 120, right: 148, top: 20, bottom: 300, width: 28, height: 280 }) },
-    panFitButton: button,
-    pageModeToggleButton: { getBoundingClientRect: () => ({ left: 90, right: 118, top: 40, bottom: 68, width: 28, height: 28 }) },
-    window: { innerWidth: 500, innerHeight: 400 },
-    boardWrapper: { getBoundingClientRect: () => ({ width: 300, height: 200 }) },
-    currentBoardPage: () => ({ kind: "pdf", pdfContentBounds: { x: 0, y: 0, width: 600, height: 400 } }),
-    pixelRatio: 1, boardCamera: {},
-    finishActiveBoardInput() { finished = true; },
-    saveBoardPageView() {}, applyBoardCamera() { applied = true; }, scheduleSessionAutosave() {},
-  };
-  vm.createContext(context);
-  vm.runInContext(`${fitSource}\n${positionSource}`, context);
-  context.updatePanFitButton();
-  assert.equal(button.hidden, true);
-  context.panMode = true;
-  context.updatePanFitButton();
-  assert.equal(button.hidden, false);
-  assert.equal(button.style.left, "88px");
-  assert.equal(button.style.top, "40px");
-  context.fitCurrentBoardPage();
-  assert.equal(finished, true);
-  assert.equal(context.boardCamera.scale, 0.5);
-  assert.equal(context.boardCamera.x, 0);
-  assert.equal(context.boardCamera.y, 0);
-  assert.equal(applied, true);
-  context.currentBoardPage = () => ({ kind: "blank" });
-  context.fitCurrentBoardPage();
-  assert.deepEqual({ ...context.boardCamera }, { x: 0, y: 0, scale: 1 });
-  assert.equal(button.hidden, false);
-  context.overlayMousePassthrough = true;
-  context.updatePanFitButton();
-  assert.equal(button.hidden, true);
+  const html = fs.readFileSync(require.resolve("../index.html"), "utf8");
+  assert.match(html, /id="fitPageButton"/);
+  assert.doesNotMatch(html, /panFitButton|화면 맞춤/);
+  assert.match(source, /fitPageButton\.addEventListener\("click", fitCurrentBoardPage\)/);
+  assert.doesNotMatch(source, /updatePanFitButton|panFitButton/);
 });
 
 test("PDF fit follows rendered page bounds through portrait and landscape resizes, preserving manual views and ink", () => {

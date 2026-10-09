@@ -584,7 +584,6 @@ async function openBoardWorkFile(file) {
 }
 function updateBoardViewport() {
   if (!toolbar || !boardWrapper) return;
-  updatePanFitButton();
   if (toolbarLayout.placement === "floating") {
     setToolbarFloatingPosition(toolbarLayout.floatX, toolbarLayout.floatY, false);
     boardWrapper.style.inset = "0"; setCanvasSize(); return;
@@ -595,29 +594,6 @@ function updateBoardViewport() {
   else if (toolbarLayout.placement === "left") boardWrapper.style.inset = `0 0 0 ${Math.ceil(rect.right - appRect.left)}px`;
   else if (toolbarLayout.placement === "right") boardWrapper.style.inset = `0 ${Math.ceil(appRect.right - rect.left)}px 0 0`;
   setCanvasSize();
-}
-function updatePanFitButton() {
-  if (!panFitButton || !pageModeToggleButton) return;
-  const visible = panMode && !overlayMousePassthrough;
-  panFitButton.hidden = !visible;
-  if (!visible) return;
-  const toggle = pageModeToggleButton.getBoundingClientRect();
-  const rail = toolbar.getBoundingClientRect();
-  const size = Math.max(toggle.width, toggle.height);
-  const gap = 4;
-  let left = toggle.left, top = toggle.top;
-  if (toolbarLayout.placement === "right") left = rail.left - size - gap;
-  else if (toolbarLayout.placement === "left") left = rail.right + gap;
-  else if (toolbarLayout.placement === "bottom") top = rail.top - size - gap;
-  else if (toolbarLayout.placement === "floating") {
-    left = toggle.right + gap;
-    if (left + size > window.innerWidth) left = toggle.left - size - gap;
-    top = toggle.top;
-  } else top = rail.bottom + gap;
-  panFitButton.style.left = `${Math.max(4, Math.min(window.innerWidth - size - 4, left))}px`;
-  panFitButton.style.top = `${Math.max(4, Math.min(window.innerHeight - size - 4, top))}px`;
-  panFitButton.style.width = `${size}px`;
-  panFitButton.style.height = `${size}px`;
 }
 function setPanMode(enabled) {
   if (Boolean(enabled) !== panMode) finishActiveBoardInput();
@@ -631,7 +607,6 @@ function setPanMode(enabled) {
   pageModeToggleButton.innerHTML = panMode
     ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12V5a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v8-4a1.5 1.5 0 0 1 3 0v7c0 4-2 6-6 6h-2c-2 0-3.5-1-5-3l-3-4a1.5 1.5 0 0 1 2-2z"></path></svg>'
     : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1.1L19 8.1 15.9 5 5.1 15.8 4 20z"></path><path d="M14.8 6.1l3.1 3.1"></path></svg>';
-  updatePanFitButton();
   updateToolUI();
 }
 function setBoardInteractionMode(mode) {
@@ -1155,6 +1130,8 @@ function loadDevSettings() { try { return normalizeDevSettings(JSON.parse(window
 function initUpdaterWiring() {
   if (!document.getElementById("appVersion")) return;
   document.getElementById("checkUpdateButton").addEventListener("click", () => { void runUpdaterCheck(true); });
+  document.getElementById("closeReleaseNotesButton")?.addEventListener("click", () => document.getElementById("releaseNotesDialog")?.close());
+  document.getElementById("reopenReleaseNotesButton")?.addEventListener("click", openReleaseNotes);
   document.getElementById("rollbackUpdateButton").addEventListener("click", () => { void runUpdaterAction("rollback"); });
   document.getElementById("promoteStableButton").addEventListener("click", () => { void runUpdaterAction("promote"); });
   document.getElementById("openRecoveryToolButton").addEventListener("click", () => { void runUpdaterAction("openRecovery"); });
@@ -1162,6 +1139,54 @@ function initUpdaterWiring() {
     closeDocumentPopup();
     window.BoardSetupWizard?.open?.();
   });
+}
+let releaseNotesVersion = null;
+let releaseNotesSeenKey = null;
+let recordReleaseNotesShown = null;
+let recordReleaseNotesRunningVersion = null;
+function openReleaseNotes() {
+  const dialog = document.getElementById("releaseNotesDialog");
+  if (!dialog || !releaseNotesVersion) return;
+  if (!dialog.open) dialog.showModal();
+  try { recordReleaseNotesShown?.(releaseNotesVersion, window.localStorage); } catch {}
+  document.getElementById("closeReleaseNotesButton")?.focus();
+}
+async function checkReleaseNotesAfterStartup(previousVersion) {
+  const getVersion = window.__TAURI__?.app?.getVersion;
+  if (typeof getVersion !== "function") return;
+  try {
+    const version = await getVersion();
+    const releaseNotesApi = await import("./release-notes.mjs?v=2.0.1-beta7-ui-r1");
+    const { releaseNotesFor, shouldShowReleaseNotes } = releaseNotesApi;
+    releaseNotesSeenKey = releaseNotesApi.releaseNotesSeenKey;
+    recordReleaseNotesShown = releaseNotesApi.recordReleaseNotesShown;
+    recordReleaseNotesRunningVersion = releaseNotesApi.recordReleaseNotesRunningVersion;
+    const notes = releaseNotesFor(version);
+    if (!notes) { recordReleaseNotesRunningVersion?.(version, window.localStorage); return; }
+    releaseNotesVersion = version;
+    document.getElementById("releaseNotesTitle").textContent = `${version} 업데이트`;
+    const list = document.getElementById("releaseNotesList");
+    notes.forEach((note) => { const item = document.createElement("li"); item.textContent = note; list.append(item); });
+    document.getElementById("reopenReleaseNotesButton").hidden = false;
+    let lastRunningVersion = null, versionShown = false;
+    try {
+      lastRunningVersion = window.localStorage.getItem("board.release-notes.last-running-version.v1");
+      versionShown = window.localStorage.getItem(releaseNotesSeenKey(version)) === "true";
+    } catch {}
+    const shouldShow = shouldShowReleaseNotes({ version, previousVersion, lastRunningVersion, versionShown });
+    if (!shouldShow) { recordReleaseNotesRunningVersion?.(version, window.localStorage); return; }
+    const wizard = document.getElementById("setupWizard");
+    if (wizard && !wizard.hidden && !window.BoardSetupWizard?.isComplete()) {
+      const observer = new MutationObserver(() => {
+        if (!wizard.hidden || !window.BoardSetupWizard?.isComplete()) return;
+        observer.disconnect();
+        openReleaseNotes();
+      });
+      observer.observe(wizard, { attributes: true, attributeFilter: ["hidden"] });
+      return;
+    }
+    openReleaseNotes();
+  } catch {}
 }
 function initBoard201Ui() {
   devSettings = loadDevSettings();
@@ -1175,7 +1200,6 @@ function initBoard201Ui() {
   pageStructureUndoButton.addEventListener("click", () => runPageStructureUndo(false));
   pageStructureRedoButton.addEventListener("click", () => runPageStructureUndo(true));
   fitPageButton.addEventListener("click", fitCurrentBoardPage);
-  panFitButton.addEventListener("click", fitCurrentBoardPage);
   saveBoardWorkButton.addEventListener("click", () => { void saveBoardWorkFile(); });
   openBoardWorkButton.addEventListener("click", () => { boardWorkInput.value = ""; boardWorkInput.click(); });
   boardWorkInput.addEventListener("change", async () => {
@@ -1276,13 +1300,18 @@ function initBoard201Ui() {
     if (!invoke) {
       if (!restoreResult?.success) return false;
       setSessionPersistenceHeld(false);
-      return runUpdaterCheck(false).then((result) => { launchSetupWizard(restoreResult, true); return result; });
+      return runUpdaterCheck(false).then(async (result) => { launchSetupWizard(restoreResult, true); await checkReleaseNotesAfterStartup(null); return result; });
     }
     return acknowledgeUpdaterRecovery(invoke, restoreResult)
       .then((acknowledged) => {
         if (!acknowledged) return false;
         setSessionPersistenceHeld(false);
-        return runUpdaterCheck(false).then((result) => { launchSetupWizard(restoreResult, true); return result; });
+        return runUpdaterCheck(false).then(async (result) => {
+          launchSetupWizard(restoreResult, true);
+          const status = await invoke("get_updater_status");
+          await checkReleaseNotesAfterStartup(status?.previousVersion);
+          return result;
+        });
       })
       .catch((error) => { document.getElementById("updateStatus").textContent = error?.message || "복구 완료를 확인하지 못해 업데이트 확인을 보류했습니다."; return false; });
   });
