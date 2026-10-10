@@ -323,12 +323,14 @@ function isBrowserFullscreenSupported() {
   );
 }
 
+let fullscreenToggleInProgress = false;
+
 function isFullscreenSupported() {
   return isBrowserFullscreenSupported() || Boolean(getTauriAppWindow());
 }
 
 function isFullscreenActive() {
-  return Boolean(getFullscreenElement()) || nativeFullscreenActive || nativeWindowMaximized;
+  return Boolean(getFullscreenElement()) || nativeFullscreenActive;
 }
 
 async function refreshNativeFullscreenState() {
@@ -352,7 +354,7 @@ async function refreshNativeFullscreenState() {
     nativeWindowMaximized = nextMaximizedState;
   }
 
-  return nativeFullscreenActive || nativeWindowMaximized;
+  return nativeFullscreenActive;
 }
 
 async function requestNativeFullscreenLike(appWindowRef) {
@@ -368,7 +370,7 @@ async function requestNativeFullscreenLike(appWindowRef) {
   });
   const setFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", true);
   await refreshNativeFullscreenState();
-  if (nativeFullscreenActive || nativeWindowMaximized) {
+  if (nativeFullscreenActive) {
     queueRuntimeLog("fullscreen.native.enter.success", {
       step: "setFullscreen-state",
       nativeFullscreenActive,
@@ -378,30 +380,8 @@ async function requestNativeFullscreenLike(appWindowRef) {
   }
   if (setFullscreenResult !== null) {
     nativeFullscreenActive = true;
-    nativeWindowMaximized = false;
     queueRuntimeLog("fullscreen.native.enter.success", {
       step: "setFullscreen-result",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-
-  const maximizeResult = await callWindowMethod(appWindowRef, "maximize");
-  await refreshNativeFullscreenState();
-  if (nativeFullscreenActive || nativeWindowMaximized) {
-    queueRuntimeLog("fullscreen.native.enter.success", {
-      step: "maximize-state",
-      nativeFullscreenActive,
-      nativeWindowMaximized
-    });
-    return true;
-  }
-  if (maximizeResult !== null) {
-    nativeFullscreenActive = false;
-    nativeWindowMaximized = true;
-    queueRuntimeLog("fullscreen.native.enter.success", {
-      step: "maximize-result",
       nativeFullscreenActive,
       nativeWindowMaximized
     });
@@ -426,9 +406,8 @@ async function requestNativeExitFullscreenLike(appWindowRef) {
     nativeWindowMaximized
   });
   const exitFullscreenResult = await callWindowMethod(appWindowRef, "setFullscreen", false);
-  const unmaximizeResult = await callWindowMethod(appWindowRef, "unmaximize");
   await refreshNativeFullscreenState();
-  if (!nativeFullscreenActive && !nativeWindowMaximized) {
+  if (!nativeFullscreenActive) {
     queueRuntimeLog("fullscreen.native.exit.success", {
       step: "state-cleared",
       nativeFullscreenActive,
@@ -437,9 +416,8 @@ async function requestNativeExitFullscreenLike(appWindowRef) {
     return true;
   }
 
-  if (exitFullscreenResult !== null || unmaximizeResult !== null) {
+  if (exitFullscreenResult !== null) {
     nativeFullscreenActive = false;
-    nativeWindowMaximized = false;
     queueRuntimeLog("fullscreen.native.exit.success", {
       step: "method-result",
       nativeFullscreenActive,
@@ -690,6 +668,11 @@ async function exitFullscreen() {
 }
 
 async function toggleFullscreen() {
+  if (fullscreenToggleInProgress) {
+    queueRuntimeLog("fullscreen.toggle.skipped", { reason: "transition-in-progress" });
+    return;
+  }
+
   if (overlayMode || overlayTransitionInProgress) {
     queueRuntimeLog("fullscreen.toggle.skipped", {
       reason: "overlay-active",
@@ -699,16 +682,22 @@ async function toggleFullscreen() {
     return;
   }
 
-  if (isDesktopAppRuntime()) {
-    await refreshNativeFullscreenState();
-  }
+  fullscreenToggleInProgress = true;
+  try {
+    if (isDesktopAppRuntime()) {
+      await refreshNativeFullscreenState();
+    }
 
-  if (isFullscreenActive()) {
-    await exitFullscreen();
-    return;
-  }
+    if (isFullscreenActive()) {
+      await exitFullscreen();
+      return;
+    }
 
-  await enterFullscreen();
+    await enterFullscreen();
+  } finally {
+    fullscreenToggleInProgress = false;
+    updateFullscreenButtons();
+  }
 }
 
 function getTauriWindowApi() {

@@ -1,14 +1,20 @@
 const APP_CHUNK_SCRIPTS = [
-  "./js/globals.js",
+  "./js/domain/board-state.js",
+  "./js/globals.js?v=wizard-palette-r1",
   "./js/runtime-overlay.js",
   "./js/session-pdf-toolbar.js",
-  "./js/presets-utils.js",
-  "./js/presets-ui.js",
-  "./js/strokes-core.js",
+  "./js/presets-utils.js?v=wizard-palette-r1",
+  "./js/presets-ui.js?v=wizard-palette-r1",
+  "./js/pen-settings.js?v=wizard-palette-r1",
+  "./js/strokes-core.js?v=wizard-palette-r1",
   "./js/strokes-history.js",
   "./js/stroke-eraser.js",
-  "./js/render-doc-draw.js",
-  "./js/events-init.js"
+  "./js/board-export.js",
+  "./js/render-doc-draw.js?v=wizard-palette-r1",
+  "./js/remote-controls.js",
+  "./js/events-init.js?v=wizard-palette-r1",
+  "./js/setup-wizard.js?v=wizard-palette-r1",
+  "./js/board-2.0.1-ui.js?v=wizard-palette-r2"
 ];
 
 function loadScriptSequentially(source) {

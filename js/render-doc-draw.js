@@ -1,16 +1,18 @@
+let lastCanvasCssViewport = null;
+
 function updateToolUI() {
   const mouseModeActive = overlayMousePassthrough;
-  penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen");
+  penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen" && !panMode);
   const eraserSelected = tool === "eraser" || tool === "strokeEraser";
   eraserToolButton.classList.toggle("is-active", !mouseModeActive && eraserSelected);
   pixelEraserModeButton.classList.toggle("is-active", eraserMode === "eraser");
   strokeEraserModeButton.classList.toggle("is-active", eraserMode === "strokeEraser");
   const modeText = mouseModeActive
-    ? "Mouse"
+    ? "마우스"
     : (tool === "pen"
-      ? "Pen"
-      : (tool === "eraser" ? "Eraser" : "StrokeEraser"));
-  modeLabel.textContent = `Mode: ${modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
+      ? "펜"
+      : (tool === "eraser" ? "지우개" : "획 지우개"));
+  modeLabel.textContent = `모드: ${panMode ? "패닝" : modeText}${qualityLevel === "low" ? " | LowSpec" : ""}`;
   if (overlayMousePassthrough) {
     canvas.style.cursor = "default";
     return;
@@ -37,28 +39,12 @@ function renderBoardBackground() {
     return;
   }
 
-  const fitScale = Math.min(
-    backgroundCanvas.width / pdfPageRasterCanvas.width,
-    backgroundCanvas.height / pdfPageRasterCanvas.height
-  );
-  const drawWidth = Math.max(1, Math.floor(pdfPageRasterCanvas.width * fitScale));
-  const drawHeight = Math.max(1, Math.floor(pdfPageRasterCanvas.height * fitScale));
-  const drawX = Math.floor((backgroundCanvas.width - drawWidth) / 2);
-  const drawY = Math.floor((backgroundCanvas.height - drawHeight) / 2);
-
+  backgroundCtx.save();
+  backgroundCtx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
   backgroundCtx.imageSmoothingEnabled = true;
   backgroundCtx.imageSmoothingQuality = "high";
-  backgroundCtx.drawImage(
-    pdfPageRasterCanvas,
-    0,
-    0,
-    pdfPageRasterCanvas.width,
-    pdfPageRasterCanvas.height,
-    drawX,
-    drawY,
-    drawWidth,
-    drawHeight
-  );
+  backgroundCtx.drawImage(pdfPageRasterCanvas, 0, 0);
+  backgroundCtx.restore();
 }
 
 async function releasePdfDocument(documentRef) {
@@ -78,6 +64,7 @@ async function unloadPdfDocument(updateStatus = true) {
     return;
   }
 
+  if (typeof finishActiveBoardInput === "function") finishActiveBoardInput();
   saveCurrentStrokeState();
   clearPdfRenderDebounce();
   stopPdfRenderTask();
@@ -87,6 +74,11 @@ async function unloadPdfDocument(updateStatus = true) {
   const previousDocument = pdfDocument;
   pdfDocument = null;
   pdfPageNumber = 1;
+  boardPageSequence = BoardState.createPageSequence(0);
+  boardPageIndex = 0;
+  pageStructureUndo.length = 0;
+  pageStructureRedo.length = 0;
+  boardCamera = { x: 0, y: 0, scale: 1 };
   pdfPageRasterCanvas = null;
   loadedDocumentName = "";
   loadedPdfBytes = null;
@@ -145,22 +137,25 @@ async function renderPdfPage(pageNumber) {
     }
 
     const baseViewport = page.getViewport({ scale: 1 });
-    const maxWidth = Math.max(1, backgroundCanvas.width);
-    const maxHeight = Math.max(1, backgroundCanvas.height);
+    const boardPage = typeof currentBoardPage === "function" ? currentBoardPage() : null;
+    const storedSize = boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage ? boardPage.pdfWorldSize : null;
+    const maxWidth = Math.max(1, storedSize && storedSize.width || backgroundCanvas.width);
+    const maxHeight = Math.max(1, storedSize && storedSize.height || backgroundCanvas.height);
     const fitScale = Math.min(maxWidth / baseViewport.width, maxHeight / baseViewport.height);
     const viewport = page.getViewport({ scale: fitScale });
 
     const rasterCanvas = document.createElement("canvas");
-    rasterCanvas.width = Math.max(1, Math.floor(viewport.width));
-    rasterCanvas.height = Math.max(1, Math.floor(viewport.height));
+    rasterCanvas.width = maxWidth;
+    rasterCanvas.height = maxHeight;
 
-    const rasterContext = rasterCanvas.getContext("2d", { alpha: false });
+    const rasterContext = rasterCanvas.getContext("2d", { alpha: true });
     if (!rasterContext) {
       setDocumentStatus("Could not create a PDF rendering context.", "error");
       return;
     }
     rasterContext.imageSmoothingEnabled = true;
     rasterContext.imageSmoothingQuality = "high";
+    rasterContext.translate((maxWidth - viewport.width) / 2, (maxHeight - viewport.height) / 2);
 
     pdfRenderTask = page.render({
       canvasContext: rasterContext,
@@ -173,7 +168,20 @@ async function renderPdfPage(pageNumber) {
     }
 
     pdfPageRasterCanvas = rasterCanvas;
-    renderBoardBackground();
+    if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage && !boardPage.pdfWorldSize) {
+      boardPage.pdfWorldSize = { width: maxWidth, height: maxHeight };
+    }
+    if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage) {
+      boardPage.pdfContentBounds = {
+        x: (maxWidth - viewport.width) / 2,
+        y: (maxHeight - viewport.height) / 2,
+        width: viewport.width,
+        height: viewport.height
+      };
+    }
+    const initiallyFitted = typeof fitBoardPageAfterPdfRender === "function" && fitBoardPageAfterPdfRender(boardPage);
+    const zoomAdjusted = !initiallyFitted && typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
+    if (!zoomAdjusted) renderBoardBackground();
     updatePdfNavigationUI();
     setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
   } catch (error) {
@@ -189,92 +197,35 @@ async function renderPdfPage(pageNumber) {
   }
 }
 
-async function exportAnnotatedPdf() {
+async function exportAnnotatedPdf(options = {}) {
   if (pdfExportInProgress) {
     return;
   }
 
-  if (!(await ensurePdfExportEngineAvailable())) {
-    return;
-  }
-
+  if (!window.BoardExport || !window.PDFLib) { setDocumentStatus("PDF 내보내기 기능을 불러오지 못했습니다.", "error"); return; }
   saveCurrentStrokeState();
   pdfExportInProgress = true;
   updatePdfNavigationUI();
 
-  const hasPdf = hasLoadedPdfDocument();
-  const statusName = hasPdf ? (loadedDocumentName || "PDF") : "Board";
-  const totalPages = hasPdf ? Math.max(1, Number(pdfDocument.numPages) || 1) : 1;
   const outputFileName = getAnnotatedPdfFileName();
 
   try {
-    const exportWidth = Math.max(1, Math.floor(backgroundCanvas.width));
-    const exportHeight = Math.max(1, Math.floor(backgroundCanvas.height));
-    const boardColor = normalizeHexColor(boardColorInput.value) || "#ffffff";
-    const outputPdf = await window.PDFLib.PDFDocument.create();
-
-    const mergedCanvas = document.createElement("canvas");
-    mergedCanvas.width = exportWidth;
-    mergedCanvas.height = exportHeight;
-    const mergedContext = mergedCanvas.getContext("2d", { alpha: false });
-    if (!mergedContext) {
-      throw new Error("Could not create output context.");
+    const outputBytes = await window.BoardExport.exportSequence({ pages: boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []) })), pdfBytes: loadedPdfBytes, PDFLib: window.PDFLib, includeOutsideInk: Boolean(options.includeOutsideInk), includeBlankPages: Boolean(options.includeBlankPages), drawStrokePath });
+    if (!BoardState.isByteLengthWithinLimit(outputBytes && outputBytes.byteLength, BoardState.MAX_SAVED_DOCUMENT_BYTES)) throw new Error("PDF 내보내기 결과는 512 MiB 이하만 저장할 수 있습니다. 판서 영역을 줄인 뒤 다시 내보내세요.");
+    const invoke = getTauriInvoke();
+    if (invoke) {
+      let binary = "";
+      const bytes = new Uint8Array(outputBytes);
+      for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      const result = await invoke("save_document_file", { suggestedName: outputFileName, contentsBase64: btoa(binary), kind: "pdf" });
+      setDocumentStatus(result && result.saved === true ? `${outputFileName} 저장 완료` : "PDF 저장을 취소했습니다.", result && result.saved === true ? "success" : "warning");
+      return;
     }
-
-    const annotationCanvas = document.createElement("canvas");
-    annotationCanvas.width = exportWidth;
-    annotationCanvas.height = exportHeight;
-    const annotationContext = annotationCanvas.getContext("2d", { alpha: true });
-    if (!annotationContext) {
-      throw new Error("Could not create annotation context.");
-    }
-
-    for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
-      setDocumentStatus(`${statusName}: exporting ${pageNumber}/${totalPages}...`);
-
-      mergedContext.setTransform(1, 0, 0, 1, 0, 0);
-      mergedContext.globalCompositeOperation = "source-over";
-      mergedContext.clearRect(0, 0, exportWidth, exportHeight);
-      mergedContext.fillStyle = boardColor;
-      mergedContext.fillRect(0, 0, exportWidth, exportHeight);
-
-      if (hasPdf) {
-        await drawPdfPageToContext(pageNumber, mergedContext, exportWidth, exportHeight);
-      }
-
-      annotationContext.setTransform(1, 0, 0, 1, 0, 0);
-      annotationContext.globalCompositeOperation = "source-over";
-      annotationContext.clearRect(0, 0, exportWidth, exportHeight);
-      annotationContext.lineJoin = "round";
-      annotationContext.lineCap = "round";
-
-      const pageStrokes = hasPdf
-        ? (pdfPageStrokeSnapshots.get(pageNumber) || [])
-        : boardStrokeSnapshot;
-      for (const stroke of pageStrokes) {
-        drawStrokePath(stroke, annotationContext);
-      }
-
-      annotationContext.globalCompositeOperation = "source-over";
-      mergedContext.drawImage(annotationCanvas, 0, 0);
-
-      const pageImageBytes = await canvasToJpegBytes(mergedCanvas);
-      const embeddedImage = await outputPdf.embedJpg(pageImageBytes);
-      const outputPage = outputPdf.addPage([exportWidth, exportHeight]);
-      outputPage.drawImage(embeddedImage, {
-        x: 0,
-        y: 0,
-        width: exportWidth,
-        height: exportHeight
-      });
-    }
-
-    const outputBytes = await outputPdf.save();
     const outputBlob = new Blob([outputBytes], { type: "application/pdf" });
     downloadBlobFile(outputBlob, outputFileName);
-    setDocumentStatus(`${outputFileName} saved.`, "success");
+    setDocumentStatus(`${outputFileName} 다운로드를 요청했습니다. 파일 저장 여부를 확인해 주세요.`, "warning");
   } catch (error) {
-    setDocumentStatus("Failed to save annotated PDF.", "error");
+    setDocumentStatus(error && error.message ? error.message : "판서 PDF를 만들지 못했습니다.", "error");
   } finally {
     pdfExportInProgress = false;
     updatePdfNavigationUI();
@@ -282,13 +233,14 @@ async function exportAnnotatedPdf() {
 }
 
 function schedulePdfPageRerender() {
-  if (!hasLoadedPdfDocument()) {
+  if (!hasLoadedPdfDocument() || (typeof currentBoardPage === "function" && currentBoardPage()?.kind !== "pdf")) {
     return;
   }
 
   clearPdfRenderDebounce();
   pdfRenderDebounceTimer = window.setTimeout(() => {
     pdfRenderDebounceTimer = null;
+    if (typeof currentBoardPage === "function" && currentBoardPage()?.kind !== "pdf") return;
     renderPdfPage(pdfPageNumber);
   }, 120);
 }
@@ -296,11 +248,16 @@ function schedulePdfPageRerender() {
 async function loadPdfFromFile(file) {
   if (pdfExportInProgress) {
     setDocumentStatus("Wait until export finishes.", "warning");
-    return;
+    return false;
+  }
+
+  if (!BoardState.isByteLengthWithinLimit(file && file.size, BoardState.MAX_PDF_BYTES)) {
+    setDocumentStatus("PDF 파일은 256 MiB 이하만 불러올 수 있습니다.", "error");
+    return false;
   }
 
   if (!(await configurePdfWorker())) {
-    return;
+    return false;
   }
 
   const token = ++pdfLoadingToken;
@@ -313,11 +270,12 @@ async function loadPdfFromFile(file) {
     token
   });
 
+  let replacementBackup = null;
   try {
     const source = await file.arrayBuffer();
     if (token !== pdfLoadingToken) {
       queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-before-open" });
-      return;
+      return false;
     }
 
     let nextDocument = null;
@@ -359,17 +317,38 @@ async function loadPdfFromFile(file) {
     if (token !== pdfLoadingToken) {
       await releasePdfDocument(nextDocument);
       queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-after-open" });
-      return;
+      return false;
     }
 
     saveCurrentStrokeState();
     const previousDocument = pdfDocument;
+    replacementBackup = {
+      document: previousDocument,
+      pageNumber: pdfPageNumber,
+      sequence: structuredClone(boardPageSequence),
+      index: boardPageIndex,
+      camera: { ...boardCamera },
+      raster: pdfPageRasterCanvas,
+      name: loadedDocumentName,
+      bytes: loadedPdfBytes && loadedPdfBytes.slice(),
+      dirty: sessionPdfBytesDirty,
+      boardStrokes: cloneStrokeCollection(boardStrokeSnapshot),
+      strokes: cloneStrokeCollection(strokes),
+      pageSnapshots: new Map(Array.from(pdfPageStrokeSnapshots, ([page, value]) => [page, cloneStrokeCollection(value)])),
+      history: new Map(Array.from(strokeHistoryByContext, ([key, entry]) => [key, { undo: entry.undo.map(cloneStrokeCollection), redo: entry.redo.map(cloneStrokeCollection) }]))
+    };
     clearPdfRenderDebounce();
     stopPdfRenderTask();
 
     pdfPageStrokeSnapshots.clear();
     pdfDocument = nextDocument;
     pdfPageNumber = 1;
+    boardPageSequence = BoardState.createPageSequence(Number(nextDocument.numPages));
+      boardPageSequence.forEach((page) => { page.strokes = []; page.pdfWorldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; });
+    boardPageIndex = 0;
+    pageStructureUndo.length = 0;
+    pageStructureRedo.length = 0;
+    boardCamera = { x: 0, y: 0, scale: 1 };
     pdfPageRasterCanvas = null;
     loadedDocumentName = fileName;
     loadedPdfBytes = sourceBytes.slice();
@@ -377,6 +356,7 @@ async function loadPdfFromFile(file) {
     restoreCurrentStrokeState();
 
     await renderPdfPage(1);
+    if (!pdfPageRasterCanvas) throw new Error("PDF page rendering failed.");
     queueRuntimeLog("pdf.load.success", {
       fileName,
       pages: Number.isFinite(nextDocument.numPages) ? nextDocument.numPages : null,
@@ -388,13 +368,39 @@ async function loadPdfFromFile(file) {
     if (pdfPageRasterCanvas) {
       closeDocumentPopup();
     }
-    await releasePdfDocument(previousDocument);
     clearAllStrokeHistory();
     scheduleSessionAutosave();
+    replacementBackup = null;
+    await releasePdfDocument(previousDocument);
+    return true;
   } catch (error) {
+    if (replacementBackup) {
+      const failedDocument = pdfDocument;
+      stopPdfRenderTask();
+      pdfRenderToken += 1;
+      pdfDocument = replacementBackup.document;
+      pdfPageNumber = replacementBackup.pageNumber;
+      boardPageSequence = replacementBackup.sequence;
+      boardPageIndex = replacementBackup.index;
+      boardCamera = replacementBackup.camera;
+      pdfPageRasterCanvas = replacementBackup.raster;
+      loadedDocumentName = replacementBackup.name;
+      loadedPdfBytes = replacementBackup.bytes;
+      sessionPdfBytesDirty = replacementBackup.dirty;
+      boardStrokeSnapshot = replacementBackup.boardStrokes;
+      pdfPageStrokeSnapshots.clear();
+      for (const [page, value] of replacementBackup.pageSnapshots) pdfPageStrokeSnapshots.set(page, value);
+      strokeHistoryByContext.clear();
+      for (const [key, value] of replacementBackup.history) strokeHistoryByContext.set(key, value);
+      replaceVisibleStrokes(replacementBackup.strokes);
+      renderBoardBackground();
+      if (typeof applyBoardCamera === "function") applyBoardCamera();
+      replacementBackup = null;
+      if (failedDocument && failedDocument !== pdfDocument) await releasePdfDocument(failedDocument);
+    }
     if (token !== pdfLoadingToken) {
       queueRuntimeLog("pdf.load.canceled", { fileName, token, reason: "token-mismatch-on-error" });
-      return;
+      return false;
     }
 
     const reason = error && typeof error.message === "string"
@@ -411,6 +417,7 @@ async function loadPdfFromFile(file) {
       error: toRuntimeLogError(error),
       reason: trimRuntimeLogValue(reason || "")
     });
+    return false;
   } finally {
     updatePdfNavigationUI();
   }
@@ -430,7 +437,11 @@ async function handleDocumentInputChange(event) {
   }
 
   if (isPdfFile(file)) {
-    await loadPdfFromFile(file);
+    requestBoardWorkReplacement(async () => {
+      const loaded = await loadPdfFromFile(file);
+      if (loaded && typeof clearActiveDrivePin === "function") await clearActiveDrivePin();
+      return loaded;
+    });
     return;
   }
 
@@ -443,19 +454,11 @@ async function handleDocumentInputChange(event) {
 }
 
 function goToPreviousPdfPage() {
-  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber <= 1) {
-    return;
-  }
-
-  renderPdfPage(pdfPageNumber - 1);
+  if (typeof goToBoardPage === "function") goToBoardPage(-1);
 }
 
 function goToNextPdfPage() {
-  if (pdfExportInProgress || sessionRestoreInProgress || !hasLoadedPdfDocument() || pdfPageNumber >= Number(pdfDocument.numPages)) {
-    return;
-  }
-
-  renderPdfPage(pdfPageNumber + 1);
+  if (typeof goToBoardPage === "function") goToBoardPage(1);
 }
 
 async function requestDocumentFileSelection() {
@@ -502,13 +505,17 @@ function isEditableEventTarget(target) {
 }
 
 function setCanvasSize() {
-  const rect = canvas.getBoundingClientRect();
+  const rect = boardWrapper.getBoundingClientRect();
   const previousWidth = canvas.width;
   const previousHeight = canvas.height;
   const previousBackgroundWidth = backgroundCanvas.width;
   const previousBackgroundHeight = backgroundCanvas.height;
 
+  const previousPixelRatio = pixelRatio;
+  const previousRect = lastCanvasCssViewport || { width: previousWidth / previousPixelRatio, height: previousHeight / previousPixelRatio };
   pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
+  const wasFitted = typeof isCurrentBoardPageFitted === "function"
+    && isCurrentBoardPageFitted(previousRect, previousPixelRatio);
   const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
   const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
 
@@ -517,7 +524,13 @@ function setCanvasSize() {
     && nextHeight === previousHeight
     && nextWidth === previousBackgroundWidth
     && nextHeight === previousBackgroundHeight
+    && pixelRatio === previousPixelRatio
   ) {
+    lastCanvasCssViewport = { width: rect.width, height: rect.height };
+    if (typeof refitBoardPageAfterViewportResize === "function") {
+      refitBoardPageAfterViewportResize(previousRect, previousPixelRatio);
+    }
+    if (typeof enforcePdfZoomMinimum === "function") enforcePdfZoomMinimum();
     return;
   }
 
@@ -532,23 +545,32 @@ function setCanvasSize() {
   ctx.lineCap = "round";
 
   if (previousWidth > 0 && previousHeight > 0) {
-    scaleStoredStrokes(nextWidth / previousWidth, nextHeight / previousHeight);
+    if (previousPixelRatio > 0 && previousPixelRatio !== pixelRatio) {
+      scaleStoredStrokes(pixelRatio / previousPixelRatio, pixelRatio / previousPixelRatio);
+    }
     redrawAllStrokes();
     scheduleSessionAutosave();
   }
 
   renderBoardBackground();
   schedulePdfPageRerender();
+  lastCanvasCssViewport = { width: rect.width, height: rect.height };
+  if (previousPixelRatio !== pixelRatio) {
+    if (wasFitted && typeof fitCurrentBoardPage === "function") fitCurrentBoardPage(false);
+  } else if (typeof refitBoardPageAfterViewportResize === "function") {
+    refitBoardPageAfterViewportResize(previousRect, previousPixelRatio);
+  }
+  if (typeof enforcePdfZoomMinimum === "function") enforcePdfZoomMinimum();
 }
 
 function getCanvasPoint(event) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  const rect = boardWrapper.getBoundingClientRect();
+  const screenPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  const worldPoint = BoardState.pointToWorld(screenPoint, boardCamera);
 
   return {
-    x: (event.clientX - rect.left) * scaleX,
-    y: (event.clientY - rect.top) * scaleY
+    x: worldPoint.x * pixelRatio,
+    y: worldPoint.y * pixelRatio
   };
 }
 
@@ -561,10 +583,18 @@ function getMidpoint(a, b) {
 
 function applyCurrentBrush() {
   ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
-  ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
-  ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : penColorInput.value;
+  ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
+  ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
   const width = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
   ctx.lineWidth = Math.max(1, width * pixelRatio);
+}
+
+function redrawVisibleStrokesWithActive() {
+  redrawAllStrokes();
+  if (!activeStroke) return;
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
+  drawStrokePath(activeStroke);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function smoothInputPoint(point, forceFull) {
@@ -686,6 +716,7 @@ function processPendingPoints(maxPoints, frameBudgetMs) {
 
   if (didStroke) {
     ctx.stroke();
+    if (tool === "pen" && penOpacity < 1) redrawVisibleStrokesWithActive();
   }
 
   if (pendingHead >= pendingPoints.length) {
@@ -748,6 +779,7 @@ function startDrawing(event) {
   frameRequested = false;
   activeStroke = createStrokeRecord(tool === "eraser" ? "pixel-eraser" : "pen", point);
 
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
   applyCurrentBrush();
   canvas.setPointerCapture(event.pointerId);
   updateUndoRedoUI();
@@ -803,6 +835,8 @@ function stopDrawing(event) {
     pendingQualityResize = false;
   }
 
+  redrawAllStrokes();
+
   updateUndoRedoUI();
 }
 
@@ -810,6 +844,8 @@ function handlePointerDown(event) {
   if (overlayMousePassthrough) {
     return;
   }
+  if (panMode || !event.isPrimary || currentInputPointerId !== null) return;
+  currentInputPointerId = event.pointerId;
 
   if (tool === "strokeEraser") {
     startStrokeErasing(event);
@@ -820,6 +856,7 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  if (!BoardState.isActivePointer(currentInputPointerId, event.pointerId)) return;
   if (strokeEraserActive) {
     continueStrokeErasing(event);
     return;
@@ -831,6 +868,7 @@ function handlePointerMove(event) {
 }
 
 function handlePointerEnd(event) {
+  if (!BoardState.isActivePointer(currentInputPointerId, event.pointerId)) return;
   if (strokeEraserActive) {
     stopStrokeErasing(event);
   }
@@ -838,6 +876,7 @@ function handlePointerEnd(event) {
   if (drawing) {
     stopDrawing(event);
   }
+  if (currentInputPointerId === event.pointerId) currentInputPointerId = null;
 }
 
 function clearBoard() {
@@ -847,7 +886,7 @@ function clearBoard() {
 
   saveUndoSnapshotForCurrentContext();
   strokes.length = 0;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  redrawAllStrokes();
   finalizeStrokeMutation();
 }
 

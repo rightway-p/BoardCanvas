@@ -2,6 +2,18 @@ function clonePoint(point) {
   return { x: point.x, y: point.y };
 }
 
+function normalizeStrokeOpacity(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const opacity = Number(value);
+  return Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1;
+}
+
+function strokeRgba(color, opacity) {
+  const value = String(color || "#111111").replace("#", "");
+  const rgb = value.length === 3 ? value.split("").map((part) => part + part) : [value.slice(0, 2), value.slice(2, 4), value.slice(4, 6)];
+  return `rgba(${parseInt(rgb[0], 16)}, ${parseInt(rgb[1], 16)}, ${parseInt(rgb[2], 16)}, ${normalizeStrokeOpacity(opacity)})`;
+}
+
 function cloneStroke(stroke) {
   return {
     ...stroke,
@@ -60,6 +72,7 @@ function normalizeStrokeCollection(collection) {
       kind: sourceStroke.kind === "pixel-eraser" ? "pixel-eraser" : "pen",
       color: normalizeHexColor(sourceStroke.color) || "#111111",
       widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
+      opacity: normalizeStrokeOpacity(sourceStroke.opacity),
       points,
       minX,
       minY,
@@ -81,6 +94,7 @@ function createStrokeRecord(kind, startPoint) {
   return {
     kind,
     color: penColorInput.value,
+    opacity: kind === "pixel-eraser" ? 1 : normalizeStrokeOpacity(penOpacity),
     widthPx,
     points: [point],
     minX: point.x,
@@ -108,8 +122,8 @@ function drawStrokePath(stroke, targetContext = ctx) {
   targetContext.lineJoin = "round";
   targetContext.lineCap = "round";
   targetContext.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
-  targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
-  targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : stroke.color;
+  targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : strokeRgba(stroke.color, stroke.opacity);
+  targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : strokeRgba(stroke.color, stroke.opacity);
   targetContext.lineWidth = Math.max(1, Number(stroke.widthPx));
 
   if (stroke.points.length === 1) {
@@ -139,13 +153,16 @@ function drawStrokePath(stroke, targetContext = ctx) {
 }
 
 function redrawAllStrokes() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
 
   for (const stroke of strokes) {
     drawStrokePath(stroke);
   }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function scaleStrokeCollection(collection, scaleX, scaleY) {
@@ -186,7 +203,32 @@ function scaleStoredStrokes(scaleX, scaleY) {
   scaleStrokeCollection(strokes, scaleX, scaleY);
   scaleStrokeCollection(boardStrokeSnapshot, scaleX, scaleY);
 
+  if (typeof boardPageSequence !== "undefined") {
+    for (const page of boardPageSequence) {
+      scaleStrokeCollection(page.strokes, scaleX, scaleY);
+      if (page.pdfWorldSize) {
+        page.pdfWorldSize.width *= scaleX;
+        page.pdfWorldSize.height *= scaleY;
+      }
+      if (page.pdfContentBounds) {
+        page.pdfContentBounds.x *= scaleX;
+        page.pdfContentBounds.y *= scaleY;
+        page.pdfContentBounds.width *= scaleX;
+        page.pdfContentBounds.height *= scaleY;
+      }
+      if (page.worldSize) {
+        page.worldSize.width *= scaleX;
+        page.worldSize.height *= scaleY;
+      }
+    }
+  }
+
   for (const snapshot of pdfPageStrokeSnapshots.values()) {
     scaleStrokeCollection(snapshot, scaleX, scaleY);
+  }
+  if (typeof strokeHistoryByContext !== "undefined") {
+    for (const entry of strokeHistoryByContext.values()) {
+      for (const snapshot of entry.undo.concat(entry.redo)) scaleStrokeCollection(snapshot, scaleX, scaleY);
+    }
   }
 }

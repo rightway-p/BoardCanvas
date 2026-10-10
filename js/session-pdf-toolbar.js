@@ -1,3 +1,5 @@
+let sessionPersistenceHeld = true;
+
 function isBoardColorPopupOpen() {
   return !boardColorPopup.classList.contains("is-hidden");
 }
@@ -46,11 +48,22 @@ function isDocumentPopupOpen() {
 }
 
 function setDocumentPopupOpen(open) {
+  const wasOpen = isDocumentPopupOpen();
   documentPopup.classList.toggle("is-hidden", !open);
   openDocumentPopupButton.setAttribute("aria-expanded", String(open));
+  boardWrapper.inert = open;
+  document.querySelectorAll(".presentation-page-nav").forEach((nav) => { nav.inert = open; });
+  [...toolbar.children].forEach((child) => { if (child !== documentEditor) child.inert = open; });
+  if (open) {
+    document.getElementById("closeSettingsButton").focus();
+  } else if (wasOpen) {
+    openDocumentPopupButton.focus();
+  }
 }
 
 function closeDocumentPopup() {
+  if (typeof discardTouchSettingsDraft === "function") discardTouchSettingsDraft();
+  if (window.BoardRemote) window.BoardRemote.closeSettings();
   setDocumentPopupOpen(false);
 }
 
@@ -76,6 +89,9 @@ function hasLoadedPdfDocument() {
 }
 
 function getStrokeHistoryContextKey() {
+  if (typeof currentBoardPage === "function" && currentBoardPage()) {
+    return `page:${currentBoardPage().id}`;
+  }
   if (hasLoadedPdfDocument()) {
     return `pdf:${Math.max(1, Math.round(Number(pdfPageNumber) || 1))}`;
   }
@@ -122,6 +138,21 @@ function updateUndoRedoUI() {
   }
 }
 
+function updatePageIndicator(element, current, total) {
+  if (!element) return;
+  const currentLabel = Number.isFinite(current) && current > 0 ? String(current) : "-";
+  const totalLabel = Number.isFinite(total) && total > 0 ? String(total) : "-";
+  const currentSpan = element.querySelector(".page-current");
+  const totalSpan = element.querySelector(".page-total");
+  if (currentSpan && totalSpan) {
+    currentSpan.textContent = currentLabel;
+    totalSpan.textContent = totalLabel;
+  } else {
+    element.textContent = `${currentLabel} / ${totalLabel}`;
+  }
+  element.setAttribute("aria-label", currentLabel === "-" ? "페이지 없음" : `페이지 ${currentLabel} / ${totalLabel}`);
+}
+
 function updatePdfNavigationUI() {
   const hasPdf = hasLoadedPdfDocument();
   const controlsLocked = pdfExportInProgress || sessionRestoreInProgress;
@@ -138,7 +169,7 @@ function updatePdfNavigationUI() {
     exportAnnotatedPdfButton.disabled = controlsLocked;
   }
   removeDocumentButton.disabled = !hasPdf || controlsLocked;
-  pdfPageIndicator.textContent = indicatorText;
+  updatePageIndicator(pdfPageIndicator, currentPage, totalPages);
 
   if (toolbarPdfPageIndicator) {
     toolbarPdfPageIndicator.textContent = indicatorText;
@@ -147,6 +178,7 @@ function updatePdfNavigationUI() {
 
   updateUndoRedoUI();
   updateOverlayModeButton();
+  if (typeof updateBoardSequenceUI === "function") updateBoardSequenceUI();
 }
 
 function getPreferredPdfWorkerSource() {
@@ -303,36 +335,6 @@ function openSessionDatabase() {
   });
 }
 
-async function saveSessionPdfBytes(pdfBytes) {
-  if (!(pdfBytes instanceof Uint8Array) || pdfBytes.length <= 0) {
-    return;
-  }
-
-  let database;
-  try {
-    database = await openSessionDatabase();
-    if (!database) {
-      return;
-    }
-
-    await new Promise((resolve, reject) => {
-      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
-      transaction.oncomplete = () => resolve();
-      transaction.onabort = () => reject(transaction.error || new Error("PDF save aborted."));
-      transaction.onerror = () => reject(transaction.error || new Error("Failed to save PDF data."));
-
-      const store = transaction.objectStore(SESSION_DB_STORE);
-      store.put(pdfBytes, SESSION_DB_PDF_KEY);
-    });
-  } catch (error) {
-    // Ignore persistence failures for optional PDF recovery.
-  } finally {
-    if (database) {
-      database.close();
-    }
-  }
-}
-
 async function loadSessionPdfBytes() {
   let database;
   try {
@@ -375,30 +377,194 @@ async function loadSessionPdfBytes() {
   }
 }
 
-async function clearSessionPdfBytes() {
+function normalizeSessionPdfBytes(value) {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+  }
+  return null;
+}
+
+async function updateSessionPdfBytesWithBackup(rawSnapshot, pdfBytes) {
   let database;
   try {
     database = await openSessionDatabase();
-    if (!database) {
-      return;
-    }
+    if (!database) return false;
 
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
-      transaction.oncomplete = () => resolve();
-      transaction.onabort = () => reject(transaction.error || new Error("PDF clear aborted."));
-      transaction.onerror = () => reject(transaction.error || new Error("Failed to clear PDF data."));
-
       const store = transaction.objectStore(SESSION_DB_STORE);
-      store.delete(SESSION_DB_PDF_KEY);
+      let failed = false;
+      const request = store.get(SESSION_DB_PDF_KEY);
+      request.onerror = () => {
+        failed = true;
+        reject(request.error || new Error("Failed to back up PDF data."));
+      };
+      request.onsuccess = () => {
+        const previousBytes = normalizeSessionPdfBytes(request.result);
+        if (request.result !== undefined && !previousBytes) {
+          failed = true;
+          transaction.abort();
+          reject(new Error("Cached PDF data cannot be backed up."));
+          return;
+        }
+
+        store.put({
+          rawSnapshot,
+          hasPdfBytes: previousBytes !== null,
+          pdfBytes: previousBytes
+        }, SESSION_DB_PENDING_WRITE_KEY);
+        if (pdfBytes) store.put(pdfBytes, SESSION_DB_PDF_KEY);
+        else store.delete(SESSION_DB_PDF_KEY);
+      };
+      transaction.oncomplete = () => { if (!failed) resolve(); };
+      transaction.onabort = () => { if (!failed) reject(transaction.error || new Error("PDF save aborted.")); };
+      transaction.onerror = () => { if (!failed) reject(transaction.error || new Error("Failed to save PDF data.")); };
+    });
+    return true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
+  }
+}
+
+async function recoverPendingSessionWrite(forceRollback = false) {
+  let database;
+  let backup;
+  try {
+    database = await openSessionDatabase();
+    if (!database) return true;
+    backup = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readonly");
+      const request = transaction.objectStore(SESSION_DB_STORE).get(SESSION_DB_PENDING_WRITE_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("Failed to read pending session backup."));
+      transaction.onabort = () => reject(transaction.error || new Error("Pending session backup read aborted."));
     });
   } catch (error) {
-    // Ignore persistence failures for optional PDF recovery.
+    return false;
   } finally {
-    if (database) {
-      database.close();
+    if (database) database.close();
+  }
+
+  if (!backup) return true;
+  if (backup.committed && !forceRollback) {
+    try {
+      database = await openSessionDatabase();
+      if (!database) return false;
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+        transaction.objectStore(SESSION_DB_STORE).delete(SESSION_DB_PENDING_WRITE_KEY);
+        transaction.oncomplete = resolve;
+        transaction.onabort = () => reject(transaction.error || new Error("Pending session cleanup aborted."));
+        transaction.onerror = () => reject(transaction.error || new Error("Pending session cleanup failed."));
+      });
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      if (database) database.close();
     }
   }
+  if (backup.rawSnapshot !== null && typeof backup.rawSnapshot !== "string") return false;
+  if (backup.hasPdfBytes && !normalizeSessionPdfBytes(backup.pdfBytes)) return false;
+
+  try {
+    if (backup.rawSnapshot === null) window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    else window.localStorage.setItem(SESSION_STORAGE_KEY, backup.rawSnapshot);
+    if (window.localStorage.getItem(SESSION_STORAGE_KEY) !== backup.rawSnapshot) return false;
+  } catch (error) {
+    return false;
+  }
+
+  try {
+    database = await openSessionDatabase();
+    if (!database) return false;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      if (backup.hasPdfBytes) store.put(normalizeSessionPdfBytes(backup.pdfBytes), SESSION_DB_PDF_KEY);
+      else store.delete(SESSION_DB_PDF_KEY);
+      store.delete(SESSION_DB_PENDING_WRITE_KEY);
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error("Pending session rollback aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Pending session rollback failed."));
+    });
+    return true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
+  }
+}
+
+async function markSessionWriteCommitted() {
+  let database;
+  try {
+    database = await openSessionDatabase();
+    if (!database) return false;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(SESSION_DB_STORE, "readwrite");
+      const store = transaction.objectStore(SESSION_DB_STORE);
+      let foundBackup = false;
+      const request = store.get(SESSION_DB_PENDING_WRITE_KEY);
+      request.onsuccess = () => {
+        if (!request.result) {
+          transaction.abort();
+          reject(new Error("Session backup is missing."));
+          return;
+        }
+        foundBackup = true;
+        store.put({ ...request.result, committed: true }, SESSION_DB_PENDING_WRITE_KEY);
+      };
+      request.onerror = () => reject(request.error || new Error("Failed to finalize session backup."));
+      transaction.oncomplete = () => { if (foundBackup) resolve(); };
+      transaction.onabort = () => reject(transaction.error || new Error("Session backup finalization aborted."));
+      transaction.onerror = () => reject(transaction.error || new Error("Session backup finalization failed."));
+    });
+    return true;
+  } catch (error) {
+    return false;
+  } finally {
+    if (database) database.close();
+  }
+}
+
+function setSessionPersistenceHeld(held) {
+  const wasHeld = sessionPersistenceHeld;
+  sessionPersistenceHeld = Boolean(held);
+  if (sessionPersistenceHeld && !wasHeld) {
+    sessionLockWarningShown = true;
+    setDocumentStatus("세션 원본 복구에 실패해 캐시 저장을 일시 중지했습니다. 기존 백업을 보존합니다.", "warning");
+  }
+}
+
+const SESSION_DB_PENDING_WRITE_KEY = "last-pdf-pending-write";
+let sessionPersistenceQueue = Promise.resolve();
+let sessionLockWarningShown = false;
+const SESSION_PERSISTENCE_LOCK = "board-session-persistence-v1";
+
+async function withSessionPersistenceLock(callback) {
+  try {
+    if (typeof navigator === "undefined" || !navigator.locks || typeof navigator.locks.request !== "function") {
+      throw new Error("Web Locks API unavailable.");
+    }
+    return await navigator.locks.request(SESSION_PERSISTENCE_LOCK, { mode: "exclusive" }, callback);
+  } catch (error) {
+    setSessionPersistenceHeld(true);
+    if (!sessionLockWarningShown) {
+      sessionLockWarningShown = true;
+      setDocumentStatus("세션 원본 복구에 실패해 캐시 저장을 일시 중지했습니다. 기존 백업을 보존합니다.", "warning");
+    }
+    return { lockFailed: true };
+  }
+}
+
+function failedSessionRestore(hadSnapshot) {
+  setDocumentStatus("복원에 실패해 저장을 일시 중지했습니다. 원본 세션을 보존합니다.", "warning");
+  return { success: false, pdfSuccess: false, hadSnapshot };
 }
 
 function serializeSessionSnapshot() {
@@ -419,12 +585,16 @@ function serializeSessionSnapshot() {
     loadedDocumentName,
     pdfPageNumber: Math.max(1, Math.round(Number(pdfPageNumber) || 1)),
     boardStrokes,
-    pdfPages
+    pdfPages,
+    boardPageIndex,
+    pageSequence: typeof boardPageSequence !== "undefined"
+      ? boardPageSequence.map((page) => ({ ...page, strokes: cloneStrokeCollection(page.strokes || []), view: page.view ? { ...page.view } : null, worldSize: page.worldSize ? { ...page.worldSize } : null, pdfWorldSize: page.pdfWorldSize ? { ...page.pdfWorldSize } : null, pdfContentBounds: page.pdfContentBounds ? { ...page.pdfContentBounds } : null }))
+      : null
   };
 }
 
 function scheduleSessionAutosave() {
-  if (sessionRestoreInProgress) {
+  if (sessionPersistenceHeld || sessionRestoreInProgress) {
     return;
   }
 
@@ -474,46 +644,149 @@ function parseSessionSnapshot(rawValue) {
       : "",
     pdfPageNumber: Math.max(1, Math.round(Number(rawValue.pdfPageNumber) || 1)),
     boardStrokes,
-    pdfPageMap
+    pdfPageMap,
+    boardPageIndex: Math.max(0, Math.floor(Number(rawValue.boardPageIndex) || 0)),
+    pageSequence: Array.isArray(rawValue.pageSequence) && rawValue.pageSequence.length <= 1000
+      ? rawValue.pageSequence.filter((page) => page && (page.kind === "pdf" || page.kind === "blank"))
+        .map((page, index) => ({
+          id: typeof page.id === "string" ? page.id.slice(0, 80) : `${page.kind}:${index + 1}`,
+          kind: page.kind,
+          ...(page.kind === "pdf" ? { pdfPage: Math.max(1, Math.floor(Number(page.pdfPage) || 1)) } : { background: normalizeHexColor(page.background) || "#ffffff" }),
+          strokes: normalizeStrokeCollection(page.strokes),
+          view: null,
+          pdfWorldSize: page.kind === "pdf" && page.pdfWorldSize && Number.isFinite(Number(page.pdfWorldSize.width)) && Number.isFinite(Number(page.pdfWorldSize.height))
+            ? { width: Math.max(1, Number(page.pdfWorldSize.width)), height: Math.max(1, Number(page.pdfWorldSize.height)) }
+            : null,
+          pdfContentBounds: page.kind === "pdf" && page.pdfContentBounds && [page.pdfContentBounds.x, page.pdfContentBounds.y, page.pdfContentBounds.width, page.pdfContentBounds.height].every((value) => Number.isFinite(Number(value))) && Number(page.pdfContentBounds.width) > 0 && Number(page.pdfContentBounds.height) > 0
+            ? { x: Number(page.pdfContentBounds.x), y: Number(page.pdfContentBounds.y), width: Number(page.pdfContentBounds.width), height: Number(page.pdfContentBounds.height) }
+            : null,
+          worldSize: page.kind === "blank" && page.worldSize && Number.isFinite(Number(page.worldSize.width)) && Number.isFinite(Number(page.worldSize.height))
+            ? { width: Math.max(1, Number(page.worldSize.width)), height: Math.max(1, Number(page.worldSize.height)) }
+            : null
+        }))
+      : null
   };
 }
 
 async function persistSessionState() {
-  if (sessionRestoreInProgress) {
-    return;
+  if (sessionPersistenceHeld || sessionRestoreInProgress) {
+    return false;
   }
 
+  let request;
   try {
     const snapshot = serializeSessionSnapshot();
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
-
-    if (snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0) {
-      if (sessionPdfBytesDirty) {
-        await saveSessionPdfBytes(loadedPdfBytes);
-        sessionPdfBytesDirty = false;
-      }
-    } else {
-      await clearSessionPdfBytes();
-      sessionPdfBytesDirty = false;
-    }
+    request = {
+      snapshot,
+      serialized: JSON.stringify(snapshot),
+      pdfSource: loadedPdfBytes,
+      pdfBytes: snapshot.hasPdf && loadedPdfBytes instanceof Uint8Array && loadedPdfBytes.length > 0
+        ? loadedPdfBytes.slice()
+        : null,
+      dirty: sessionPdfBytesDirty
+    };
   } catch (error) {
-    // localStorage/IndexedDB can be unavailable; skip recovery persistence.
+    return false;
+  }
+
+  const pending = sessionPersistenceQueue.then(() => persistSessionSnapshot(request));
+  sessionPersistenceQueue = pending.catch(() => false);
+  return pending;
+}
+
+async function persistSessionSnapshot(request) {
+  if (sessionPersistenceHeld || sessionRestoreInProgress) return false;
+
+  const result = await withSessionPersistenceLock(() => persistSessionSnapshotLocked(request));
+  return result?.lockFailed ? false : result;
+}
+
+async function persistSessionSnapshotLocked(request) {
+  if (!(await recoverPendingSessionWrite())) {
+    setSessionPersistenceHeld(true);
+    return false;
+  }
+
+  let previousRaw;
+  let backupPending = false;
+  let storageChanged = false;
+  try {
+    const { snapshot, serialized, pdfSource, pdfBytes, dirty } = request;
+    if (snapshot.hasPdf && !pdfBytes) return false;
+    previousRaw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+
+    if (pdfSource !== loadedPdfBytes) return false;
+    if (!(await updateSessionPdfBytesWithBackup(previousRaw, pdfBytes))) return false;
+    backupPending = true;
+    if (pdfSource !== loadedPdfBytes) {
+      if (!(await recoverPendingSessionWrite(true))) setSessionPersistenceHeld(true);
+      return false;
+    }
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    storageChanged = true;
+    if (window.localStorage.getItem(SESSION_STORAGE_KEY) !== serialized || pdfSource !== loadedPdfBytes) {
+      throw new Error("Session snapshot changed while saving.");
+    }
+
+    if (backupPending) {
+      if (!(await markSessionWriteCommitted())) throw new Error("Session backup finalization failed.");
+      if (pdfSource !== loadedPdfBytes) {
+        if (!(await recoverPendingSessionWrite(true))) setSessionPersistenceHeld(true);
+        return false;
+      }
+    }
+    if (dirty && pdfSource === loadedPdfBytes) sessionPdfBytesDirty = false;
+    return true;
+  } catch (error) {
+    let restored = true;
+    if (backupPending) {
+      restored = await recoverPendingSessionWrite(true);
+    } else if (storageChanged) {
+      try {
+        if (previousRaw === null) window.localStorage.removeItem(SESSION_STORAGE_KEY);
+        else window.localStorage.setItem(SESSION_STORAGE_KEY, previousRaw);
+        restored = window.localStorage.getItem(SESSION_STORAGE_KEY) === previousRaw;
+      } catch (restoreError) {
+        restored = false;
+      }
+    }
+    if (!restored) setSessionPersistenceHeld(true);
+    return false;
   }
 }
 
 async function restoreSessionState() {
   if (sessionRestoreInProgress) {
-    return;
+    return { success: false, pdfSuccess: false, hadSnapshot: false };
   }
 
+  setSessionPersistenceHeld(true);
   sessionRestoreInProgress = true;
   updateUndoRedoUI();
+  let hadSnapshot = false;
 
   try {
-    const rawSnapshot = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const readPair = await withSessionPersistenceLock(async () => {
+      if (!(await recoverPendingSessionWrite())) return { failed: true };
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      let parsed;
+      try { parsed = raw === null ? null : JSON.parse(raw); } catch (error) { return { failed: true }; }
+      const bytes = parsed && parsed.hasPdf ? await loadSessionPdfBytes() : null;
+      return { raw, bytes };
+    });
+    if (readPair?.lockFailed) return { success: false, pdfSuccess: false, hadSnapshot: true };
+    if (readPair?.failed) return failedSessionRestore(true);
+    const rawSnapshot = readPair.raw;
+    const recoveredPdfBytes = readPair.bytes;
+
+    hadSnapshot = rawSnapshot !== null;
+    if (!hadSnapshot) {
+      return { success: true, pdfSuccess: true, hadSnapshot: false };
+    }
     const snapshot = parseSessionSnapshot(rawSnapshot ? JSON.parse(rawSnapshot) : null);
     if (!snapshot) {
-      return;
+      return failedSessionRestore(true);
     }
 
     boardStrokeSnapshot = cloneStrokeCollection(snapshot.boardStrokes);
@@ -521,35 +794,36 @@ async function restoreSessionState() {
     for (const [pageNumber, pageStrokes] of snapshot.pdfPageMap.entries()) {
       pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
     }
+    if (!snapshot.hasPdf) {
+      if (snapshot.pageSequence && snapshot.pageSequence.length) boardPageSequence = snapshot.pageSequence;
+      else boardPageSequence = BoardState.createPageSequence(0);
+      boardPageIndex = Math.min(snapshot.boardPageIndex, boardPageSequence.length - 1);
+    }
     restoreCurrentStrokeState();
 
     if (!snapshot.hasPdf) {
       clearAllStrokeHistory();
       updateUndoRedoUI();
-      return;
+      return { success: true, pdfSuccess: true, hadSnapshot: true };
     }
 
-    const recoveredPdfBytes = await loadSessionPdfBytes();
     if (!(recoveredPdfBytes instanceof Uint8Array) || recoveredPdfBytes.length <= 0) {
       loadedPdfBytes = null;
       sessionPdfBytesDirty = false;
       pdfPageStrokeSnapshots.clear();
-      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
       clearAllStrokeHistory();
       updateUndoRedoUI();
-      return;
+      return failedSessionRestore(true);
     }
 
     const recoveredFileName = snapshot.loadedDocumentName || "recovered.pdf";
     const recoveredFile = new File([recoveredPdfBytes], recoveredFileName, { type: "application/pdf" });
-    await loadPdfFromFile(recoveredFile);
-    if (!hasLoadedPdfDocument()) {
+    if (!(await loadPdfFromFile(recoveredFile)) || !hasLoadedPdfDocument()) {
       loadedPdfBytes = null;
       sessionPdfBytesDirty = false;
       pdfPageStrokeSnapshots.clear();
-      setDocumentStatus("Recovered board state. Reload PDF file to restore document pages.", "warning");
       clearAllStrokeHistory();
-      return;
+      return failedSessionRestore(true);
     }
 
     // Reload saved page-level annotations after document load resets snapshots.
@@ -558,16 +832,54 @@ async function restoreSessionState() {
       pdfPageStrokeSnapshots.set(pageNumber, cloneStrokeCollection(pageStrokes));
     }
 
+    if (snapshot.pageSequence && snapshot.pageSequence.length) {
+      const pageCount = Number(pdfDocument.numPages) || 1;
+      boardPageSequence = snapshot.pageSequence.filter((page) => page.kind !== "pdf" || page.pdfPage <= pageCount);
+      boardPageSequence.forEach((page) => { if (page.kind === "pdf" && !page.pdfWorldSize) page.pdfWorldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; if (page.kind === "blank" && !page.worldSize) page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height }; });
+      if (!boardPageSequence.some((page) => page.kind === "pdf")) boardPageSequence.unshift(...BoardState.createPageSequence(pageCount));
+      boardPageIndex = Math.min(snapshot.boardPageIndex, boardPageSequence.length - 1);
+    } else {
+      for (const page of boardPageSequence) {
+        if (page.kind === "pdf") page.strokes = cloneStrokeCollection(snapshot.pdfPageMap.get(page.pdfPage) || []);
+      }
+    }
+
     const targetPage = Math.min(
       Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
       snapshot.pdfPageNumber
     );
-    await renderPdfPage(targetPage);
+    pdfPageRasterCanvas = null;
+    let finalRenderSucceeded;
+    if (snapshot.pageSequence && snapshot.pageSequence.length) {
+      const active = boardPageSequence[boardPageIndex];
+      boardPageIndex = active ? boardPageIndex : 0;
+      await renderBoardPage(boardPageIndex);
+      finalRenderSucceeded = boardPageSequence[boardPageIndex]?.kind === "blank"
+        || (Boolean(pdfPageRasterCanvas)
+          && hasLoadedPdfDocument()
+          && boardPageSequence[boardPageIndex]?.kind === "pdf"
+          && boardPageSequence[boardPageIndex].pdfPage === pdfPageNumber);
+    } else {
+      const pageIndex = boardPageSequence.findIndex((page) => page.kind === "pdf" && page.pdfPage === targetPage);
+      boardPageIndex = Math.max(0, pageIndex);
+      await renderPdfPage(targetPage);
+      finalRenderSucceeded = Boolean(pdfPageRasterCanvas)
+        && hasLoadedPdfDocument()
+        && pdfPageNumber === targetPage;
+      if (finalRenderSucceeded) fitCurrentBoardPage(false);
+    }
+    if (!finalRenderSucceeded) {
+      return failedSessionRestore(true);
+    }
     setDocumentStatus(`${loadedDocumentName || "PDF"} recovered.`, "success");
     clearAllStrokeHistory();
+    pageStructureUndo.length = 0;
+    pageStructureRedo.length = 0;
     updateUndoRedoUI();
+    return { success: true, pdfSuccess: true, hadSnapshot: true };
   } catch (error) {
     // Ignore recovery failures and continue with a clean runtime state.
+    return failedSessionRestore(hadSnapshot);
   } finally {
     sessionRestoreInProgress = false;
     updatePdfNavigationUI();
@@ -850,6 +1162,7 @@ function setToolbarFloatingPosition(x, y, persist = true) {
 function setToolbarPlacement(placement, persist = true) {
   toolbarLayout.placement = normalizeToolbarPlacement(placement, toolbarLayout.placement);
   applyToolbarPlacementClass();
+  if (typeof updateBoardViewport === "function") requestAnimationFrame(updateBoardViewport);
 
   if (persist) {
     saveToolbarLayout();

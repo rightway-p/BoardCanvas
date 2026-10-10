@@ -32,6 +32,16 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
+      - name: Build recovery helper
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --bin boardcanvas-recovery --features recovery-helper-build --release
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          Copy-Item -LiteralPath src-tauri/target/release/boardcanvas-recovery.exe -Destination src-tauri/resources/boardcanvas-recovery.exe -Force
+
       - name: Build desktop binary
         run: npm run desktop:build
 
