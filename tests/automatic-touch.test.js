@@ -42,7 +42,7 @@ function harness(overrides = {}) {
     continueStrokeErasing(event) { context.eraserMoves += 1; }, eraserMoves: 0,
     stopStrokeErasing(event) { context.strokeEraserActive = false; context.strokeEraserPointerId = null; context.eraserStops.push(event.type); }, eraserStops: [],
     stopDrawing(event) { context.stopTypes.push(event.type); context.drawing = false; context.activeStroke = null; }, stopTypes: [],
-    strokes: [{ id: "committed" }], undoSnapshots: ["before"], activeStroke: null, lastPoint: null, lastMidPoint: null, filteredPoint: null,
+    strokes: [{ id: "committed" }], undoSnapshots: ["before"], activeStroke: null, lastPoint: null,
     pixelRatio: 1, pendingQualityResize: false,
     saveBoardPageView() {}, scheduleSessionAutosave() {}, applyBoardCamera() {}, zoomBoardCameraAt(camera, anchor, factor) { return BoardState.zoomAt(camera, anchor, factor); },
     ...overrides,

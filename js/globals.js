@@ -119,15 +119,11 @@ const PDF_WORKER_SOURCES = [
 const QUALITY_PRESETS = {
   normal: {
     dprCap: 2,
-    minSegmentLength: 1.0,
-    inputSmoothing: 0.22,
     maxPointsPerFrame: 48,
     frameBudgetMs: 6
   },
   low: {
     dprCap: 1,
-    minSegmentLength: 1.4,
-    inputSmoothing: 0.28,
     maxPointsPerFrame: 28,
     frameBudgetMs: 4
   }
@@ -146,8 +142,6 @@ let quality = QUALITY_PRESETS[qualityLevel];
 let drawing = false;
 let hasStrokeMoved = false;
 let lastPoint = null;
-let lastMidPoint = null;
-let filteredPoint = null;
 let pixelRatio = 1;
 let frameCostAverage = 0;
 let pendingQualityResize = false;

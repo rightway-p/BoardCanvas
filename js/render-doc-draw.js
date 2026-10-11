@@ -601,50 +601,16 @@ function redrawVisibleStrokesWithActive() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-function smoothInputPoint(point, forceFull) {
-  if (!filteredPoint || forceFull) {
-    filteredPoint = point;
-    return point;
-  }
-
-  const distance = Math.hypot(point.x - filteredPoint.x, point.y - filteredPoint.y);
-  const speedBoost = Math.min(0.25, distance / (24 * pixelRatio));
-  const alpha = Math.min(0.72, quality.inputSmoothing + speedBoost);
-
-  filteredPoint = {
-    x: filteredPoint.x + ((point.x - filteredPoint.x) * alpha),
-    y: filteredPoint.y + ((point.y - filteredPoint.y) * alpha)
-  };
-
-  return filteredPoint;
-}
-
-function appendSmoothSegment(rawPoint, forceFull = false) {
+function appendRawPoint(rawPoint) {
   if (!lastPoint) {
-    lastPoint = smoothInputPoint(rawPoint, forceFull);
-    lastMidPoint = lastPoint;
+    lastPoint = rawPoint;
     return false;
   }
-
-  const targetPoint = smoothInputPoint(rawPoint, forceFull);
-  const dx = targetPoint.x - lastPoint.x;
-  const dy = targetPoint.y - lastPoint.y;
-  const distance = Math.hypot(dx, dy);
-
-  if (distance < 0.01) {
-    return false;
-  }
-
-  if (!forceFull && distance < quality.minSegmentLength * pixelRatio) {
-    return false;
-  }
-
-  const mid = getMidpoint(lastPoint, targetPoint);
-  ctx.quadraticCurveTo(lastPoint.x, lastPoint.y, mid.x, mid.y);
-  lastPoint = targetPoint;
-  lastMidPoint = mid;
+  if (rawPoint.x === lastPoint.x && rawPoint.y === lastPoint.y) return false;
+  ctx.lineTo(rawPoint.x, rawPoint.y);
+  lastPoint = rawPoint;
   if (activeStroke) {
-    appendPointToStroke(activeStroke, targetPoint);
+    appendPointToStroke(activeStroke, rawPoint);
   }
   return true;
 }
@@ -658,15 +624,17 @@ function requestDrawFrame() {
   window.requestAnimationFrame(processDrawFrame);
 }
 
-function enqueueEventPoints(event, forceFull) {
-  const sourceEvents = typeof event.getCoalescedEvents === "function"
-    ? event.getCoalescedEvents()
-    : [event];
+function enqueueEventPoints(event) {
+  const coalesced = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
+  const sourceEvents = coalesced && coalesced.length ? Array.from(coalesced) : [event];
+  if (event.type === "pointerup") {
+    const last = sourceEvents[sourceEvents.length - 1];
+    if (!last || last.clientX !== event.clientX || last.clientY !== event.clientY) sourceEvents.push(event);
+  }
 
   for (const sourceEvent of sourceEvents) {
     pendingPoints.push({
-      point: getCanvasPoint(sourceEvent),
-      forceFull
+      point: getCanvasPoint(sourceEvent)
     });
   }
 
@@ -698,9 +666,7 @@ function processPendingPoints(maxPoints, frameBudgetMs) {
   const startedAt = performance.now();
 
   ctx.beginPath();
-  if (lastMidPoint) {
-    ctx.moveTo(lastMidPoint.x, lastMidPoint.y);
-  } else if (lastPoint) {
+  if (lastPoint) {
     ctx.moveTo(lastPoint.x, lastPoint.y);
   }
 
@@ -709,7 +675,7 @@ function processPendingPoints(maxPoints, frameBudgetMs) {
     pendingHead += 1;
     processedCount += 1;
 
-    if (appendSmoothSegment(item.point, item.forceFull)) {
+    if (appendRawPoint(item.point)) {
       didStroke = true;
       hasStrokeMoved = true;
     }
@@ -778,8 +744,6 @@ function startDrawing(event) {
   drawing = true;
   hasStrokeMoved = false;
   lastPoint = point;
-  lastMidPoint = point;
-  filteredPoint = point;
   clearPendingPoints();
   frameRequested = false;
   activeStroke = createStrokeRecord(tool === "eraser" ? "pixel-eraser" : "pen", point);
@@ -796,7 +760,7 @@ function draw(event) {
     return;
   }
 
-  enqueueEventPoints(event, false);
+  enqueueEventPoints(event);
 }
 
 function stopDrawing(event) {
@@ -805,7 +769,7 @@ function stopDrawing(event) {
   }
 
   if (event.type !== "pointercancel") {
-    enqueueEventPoints(event, true);
+    enqueueEventPoints(event);
   }
   flushPendingPoints();
 
@@ -827,8 +791,6 @@ function stopDrawing(event) {
   drawing = false;
   hasStrokeMoved = false;
   lastPoint = null;
-  lastMidPoint = null;
-  filteredPoint = null;
   activeStroke = null;
   clearPendingPoints();
   frameRequested = false;
@@ -852,8 +814,6 @@ function discardDrawingForTouchTakeover() {
   drawing = false;
   hasStrokeMoved = false;
   lastPoint = null;
-  lastMidPoint = null;
-  filteredPoint = null;
   activeStroke = null;
   clearPendingPoints();
   frameRequested = false;

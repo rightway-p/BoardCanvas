@@ -8,7 +8,8 @@ function loadStrokes() {
   const context = {
     normalizeHexColor: value => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value).toLowerCase() : "",
     penColorInput: { value: "#111111" }, lineWidthInput: { value: "5" }, eraserWidthInput: { value: "14" },
-    penOpacity: 1, pixelRatio: 1, ctx: null, boardCamera: { x: 0, y: 0, scale: 1 }, canvas: {}, strokes: []
+    penOpacity: 1, pixelRatio: 1, ctx: null, boardCamera: { x: 0, y: 0, scale: 1 }, canvas: {}, strokes: [],
+    getMidpoint: (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/strokes-core.js"), "utf8"), context);
@@ -26,16 +27,28 @@ test("stroke opacity defaults to opaque while preserving explicit zero", () => {
 test("pen and eraser stroke records carry independent opacity", () => {
   const context = loadStrokes();
   context.penOpacity = 0.35;
-  assert.equal(context.createStrokeRecord("pen", { x: 1, y: 2 }).opacity, 0.35);
+  const rawPen = context.createStrokeRecord("pen", { x: 1, y: 2 });
+  assert.equal(rawPen.opacity, 0.35);
+  assert.equal(rawPen.smoothing, false);
+  assert.equal(context.cloneStrokeCollection([rawPen])[0].smoothing, false);
+  assert.equal(context.normalizeStrokeCollection([rawPen])[0].smoothing, false);
+  assert.equal(context.normalizeStrokeCollection([{ points: [{ x: 1, y: 2 }] }])[0].smoothing, true);
   assert.equal(context.createStrokeRecord("pixel-eraser", { x: 1, y: 2 }).opacity, 1);
 });
 
-test("drawStrokePath uses alpha for pen and destination-out for eraser", () => {
+test("drawStrokePath preserves legacy curves and renders new raw strokes as lines", () => {
   const context = loadStrokes();
   const calls = [];
-  const target = { set strokeStyle(value) { calls.push(["strokeStyle", value]); }, set fillStyle(value) { calls.push(["fillStyle", value]); }, set globalCompositeOperation(value) { calls.push(["composite", value]); }, set lineWidth(value) { calls.push(["width", value]); }, beginPath() {}, arc() {}, fill() {}, moveTo() {}, quadraticCurveTo() {}, stroke() {} };
-  context.drawStrokePath({ kind: "pen", color: "#112233", opacity: 0.4, widthPx: 4, points: [{ x: 1, y: 2 }] }, target);
+  const target = { set strokeStyle(value) { calls.push(["strokeStyle", value]); }, set fillStyle(value) { calls.push(["fillStyle", value]); }, set globalCompositeOperation(value) { calls.push(["composite", value]); }, set lineWidth(value) { calls.push(["width", value]); }, beginPath() {}, arc() {}, fill() {}, moveTo(x, y) { calls.push(["moveTo", x, y]); }, lineTo(x, y) { calls.push(["lineTo", x, y]); }, quadraticCurveTo(cx, cy, x, y) { calls.push(["quadratic", cx, cy, x, y]); }, stroke() {} };
+  const points = [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 7 }];
+  context.drawStrokePath({ kind: "pen", color: "#112233", opacity: 0.4, widthPx: 4, smoothing: false, points }, target);
   assert.ok(calls.some(([name, value]) => name === "strokeStyle" && value.includes("0.4")));
+  assert.deepEqual(calls.filter(([name]) => name === "lineTo"), [["lineTo", 3, 4], ["lineTo", 5, 7]]);
+  assert.equal(calls.some(([name]) => name === "quadratic"), false);
+  calls.length = 0;
+  context.drawStrokePath({ kind: "pen", color: "#112233", opacity: 0.4, widthPx: 4, points }, target);
+  assert.equal(calls.filter(([name]) => name === "quadratic").length, 2);
+  assert.deepEqual(calls.filter(([name]) => name === "lineTo"), []);
   calls.length = 0;
   context.drawStrokePath({ kind: "pixel-eraser", color: "#112233", opacity: 0.1, widthPx: 4, points: [{ x: 1, y: 2 }] }, target);
   assert.ok(calls.some(([name, value]) => name === "composite" && value === "destination-out"));

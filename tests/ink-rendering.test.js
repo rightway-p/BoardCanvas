@@ -4,12 +4,16 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
+const strokesSource = fs.readFileSync(require.resolve("../js/strokes-core.js"), "utf8");
 const range = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+const strokeRange = (start, end) => strokesSource.slice(strokesSource.indexOf(start), strokesSource.indexOf(end, strokesSource.indexOf(start)));
 const productionFunctions = [
   range("function setCanvasSize", "function getCanvasPoint"),
-  range("function redrawVisibleStrokesWithActive", "function smoothInputPoint"),
-  range("function smoothInputPoint", "function processDrawFrame"),
+  range("function redrawVisibleStrokesWithActive", "function appendRawPoint"),
+  range("function appendRawPoint", "function processDrawFrame"),
   range("function stopDrawing", "function discardDrawingForTouchTakeover"),
+  strokeRange("function normalizeStrokeOpacity", "function cloneStroke"),
+  strokeRange("function drawStrokePath", "function redrawAllStrokes"),
 ].join("\n");
 
 function harness(pixelRatio, penOpacity = 1, tool = "pen") {
@@ -20,6 +24,7 @@ function harness(pixelRatio, penOpacity = 1, tool = "pen") {
   const ctx = {
     setTransform(...next) { transform = next; },
     beginPath() {}, moveTo(x, y) { pathPoints.push(transformPoint(x, y)); },
+    lineTo(x, y) { pathPoints.push(transformPoint(x, y)); },
     quadraticCurveTo(_cx, _cy, x, y) { pathPoints.push(transformPoint(x, y)); },
     arc(x, y, radius) { arcs.push({ ...transformPoint(x, y), radius: radius * transform[0] }); },
     stroke() {}, fill() {},
@@ -30,17 +35,19 @@ function harness(pixelRatio, penOpacity = 1, tool = "pen") {
   let app;
   app = {
     ctx, boardCamera: camera, pixelRatio, penOpacity, tool, drawing: true, hasStrokeMoved: false,
-    quality: { minSegmentLength: 0, inputSmoothing: 0.5 }, frameCostAverage: 0,
+    quality: { maxPointsPerFrame: 48, frameBudgetMs: 6 }, frameCostAverage: 0,
     pendingQualityResize: false, setCanvasSize() {},
-    pendingPoints: [], pendingHead: 0, frameRequested: false, activeStroke: { points: [] },
-    lastPoint: null, lastMidPoint: null, filteredPoint: null, strokes: [],
+    pendingPoints: [], pendingHead: 0, frameRequested: false, activeStroke: { smoothing: false, points: [] },
+    lastPoint: null, strokes: [], MAX_QUEUE_POINTS: 320,
     lineWidthInput: { value: "4" }, eraserWidthInput: { value: "10" },
     canvas: { width: 2000, height: 1600, hasPointerCapture: () => false, releasePointerCapture() {} },
     performance: { now: () => 0 }, window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {} },
+    processDrawFrame() {},
     clearPendingPoints() { app.pendingPoints.length = 0; app.pendingHead = 0; },
+    getCanvasPoint(event) { return { x: event.clientX, y: event.clientY }; },
     getMidpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; },
     appendPointToStroke(stroke, point) { stroke.points.push({ ...point }); },
-    applyCurrentBrush() {}, drawStrokePath() {},
+    applyCurrentBrush() {},
     enqueueEventPoints() {}, flushPendingPoints() {}, saveUndoSnapshotForCurrentContext() {}, finalizeStrokeMutation() {},
     redrawAllStrokes() { ctx.setTransform(1, 0, 0, 1, 0, 0); }, updateUndoRedoUI() {},
     pathPoints, arcs,
@@ -78,7 +85,6 @@ function resizeHarness({ pixelRatio = 2, devicePixelRatio = 1, width = 100, poin
     lastCanvasCssViewport: { width: 100, height: 100 }, boardCamera: { x: 0, y: 0, scale: 1 },
     drawing: true, hasStrokeMoved: true, currentInputPointerId: pointerId,
     activeStroke: { widthPx: 4, points: [{ x: 80, y: 100 }] }, lastPoint: { x: 80, y: 100 },
-    lastMidPoint: { x: 80, y: 100 }, filteredPoint: { x: 80, y: 100 },
     pendingQualityResize, pendingPoints: [], pendingHead: 0, frameRequested: false,
     strokes: [{ widthPx: 4, points: [{ x: 20, y: 30 }] }], undoSnapshots: [], tool: "pen", penOpacity: 1,
     lineWidthInput: { value: "4" }, eraserWidthInput: { value: "10" },
@@ -105,26 +111,48 @@ function resizeHarness({ pixelRatio = 2, devicePixelRatio = 1, width = 100, poin
   return app;
 }
 
-test("incremental batches restore the camera transform after transparent redraws at either DPR", () => {
+test("raw small and non-collinear samples render exactly through live and saved paths", () => {
   for (const pixelRatio of [1, 2]) for (const penOpacity of [1, 0.5]) {
     const app = harness(pixelRatio, penOpacity);
-    const first = stored(400, 400, pixelRatio), second = stored(600, 400, pixelRatio);
-    app.lastPoint = { ...first }; app.lastMidPoint = { ...first }; app.filteredPoint = { ...first };
+    const cssPoints = [{ x: 400, y: 400 }, { x: 400.25, y: 400.5 }, { x: 401, y: 400.75 }, { x: 401, y: 400.75 }, { x: 406.5, y: 397.25 }];
+    const points = cssPoints.map(({ x, y }) => stored(x, y, pixelRatio));
+    const first = points[0];
+    app.lastPoint = { ...first };
     app.activeStroke.points = [{ ...first }];
-    app.pendingPoints = [{ point: second, forceFull: true }];
+    app.pendingPoints = points.slice(1).map((point) => ({ point: { ...point } }));
     const originalPoints = JSON.parse(JSON.stringify(app.pendingPoints));
     app.processPendingPoints(10, 10);
-    assertPoint(app.pathPoints.at(-1), { x: 500 * pixelRatio, y: 400 * pixelRatio });
+    const expectedCss = cssPoints.filter((point, index) => index === 0 || point.x !== cssPoints[index - 1].x || point.y !== cssPoints[index - 1].y);
+    const expectedPath = expectedCss.map(({ x, y }) => ({ x: x * pixelRatio, y: y * pixelRatio }));
+    for (let index = 0; index < expectedPath.length; index += 1) assertPoint(app.pathPoints[index], expectedPath[index]);
     assert.deepEqual(app.pendingPoints, []);
+    assert.deepEqual(app.activeStroke.points, points.filter((point, index) => index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y));
+    assert.deepEqual(originalPoints.map(({ point }) => point), points.slice(1));
 
-    if (penOpacity === 1) app.redrawVisibleStrokesWithActive();
-    const third = stored(800, 400, pixelRatio);
-    app.pendingPoints = [{ point: third, forceFull: true }];
+    app.pathPoints.length = 0;
+    app.redrawVisibleStrokesWithActive();
+    assert.equal(app.pathPoints.length, expectedPath.length);
+    for (let index = 0; index < expectedPath.length; index += 1) assertPoint(app.pathPoints[index], expectedPath[index]);
+
+    const next = stored(407, 397, pixelRatio);
+    app.pendingPoints = [{ point: next }];
     app.processPendingPoints(10, 10);
-    assertPoint(app.pathPoints.at(-1), { x: 700 * pixelRatio, y: 400 * pixelRatio });
-    assert.deepEqual(originalPoints[0].point, second);
-    assert.deepEqual(app.activeStroke.points.at(-1), third);
+    assertPoint(app.pathPoints.at(-1), { x: 407 * pixelRatio, y: 397 * pixelRatio });
   }
+});
+
+test("pointerup falls back to its endpoint for empty coalesced samples and adds omitted terminal coordinates once", () => {
+  const app = harness(1);
+  const up = (x, y, samples) => ({ type: "pointerup", clientX: x, clientY: y, getCoalescedEvents: () => samples });
+  app.enqueueEventPoints(up(12, 13, []));
+  assert.deepEqual(app.pendingPoints.map(({ point }) => point), [{ x: 12, y: 13 }]);
+  app.clearPendingPoints();
+
+  app.enqueueEventPoints(up(20, 21, [{ clientX: 18, clientY: 19 }, { clientX: 19, clientY: 20 }]));
+  assert.deepEqual(app.pendingPoints.map(({ point }) => point), [{ x: 18, y: 19 }, { x: 19, y: 20 }, { x: 20, y: 21 }]);
+  app.clearPendingPoints();
+  app.enqueueEventPoints(up(20, 21, [{ clientX: 19, clientY: 20 }, { clientX: 20, clientY: 21 }]));
+  assert.deepEqual(app.pendingPoints.map(({ point }) => point), [{ x: 19, y: 20 }, { x: 20, y: 21 }]);
 });
 
 test("terminal pen and pixel-eraser dots use the same camera transform as committed ink", () => {

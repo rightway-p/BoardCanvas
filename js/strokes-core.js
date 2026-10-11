@@ -73,6 +73,7 @@ function normalizeStrokeCollection(collection) {
       color: normalizeHexColor(sourceStroke.color) || "#111111",
       widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
       opacity: normalizeStrokeOpacity(sourceStroke.opacity),
+      smoothing: sourceStroke.smoothing !== false,
       points,
       minX,
       minY,
@@ -96,6 +97,7 @@ function createStrokeRecord(kind, startPoint) {
     color: penColorInput.value,
     opacity: kind === "pixel-eraser" ? 1 : normalizeStrokeOpacity(penOpacity),
     widthPx,
+    smoothing: false,
     points: [point],
     minX: point.x,
     minY: point.y,
@@ -135,18 +137,18 @@ function drawStrokePath(stroke, targetContext = ctx) {
   }
 
   const points = stroke.points;
-  let previous = points[0];
-  let previousMidpoint = previous;
-
   targetContext.beginPath();
-  targetContext.moveTo(previousMidpoint.x, previousMidpoint.y);
-
-  for (let index = 1; index < points.length; index += 1) {
-    const current = points[index];
-    const midpoint = getMidpoint(previous, current);
-    targetContext.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
-    previous = current;
-    previousMidpoint = midpoint;
+  targetContext.moveTo(points[0].x, points[0].y);
+  if (stroke.smoothing === false) {
+    for (let index = 1; index < points.length; index += 1) targetContext.lineTo(points[index].x, points[index].y);
+  } else {
+    let previous = points[0];
+    for (let index = 1; index < points.length; index += 1) {
+      const current = points[index];
+      const midpoint = getMidpoint(previous, current);
+      targetContext.quadraticCurveTo(previous.x, previous.y, midpoint.x, midpoint.y);
+      previous = current;
+    }
   }
 
   targetContext.stroke();
