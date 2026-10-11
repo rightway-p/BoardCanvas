@@ -1200,12 +1200,50 @@ body {
 .app.toolbar-placement-left .presentation-page-nav,
 .app.toolbar-placement-right .presentation-page-nav,
 .app.toolbar-placement-floating .presentation-page-nav { flex-direction: column; gap: 0; width: 100%; }
+.app.toolbar-placement-left .presentation-page-nav button svg,
+.app.toolbar-placement-right .presentation-page-nav button svg,
+.app.toolbar-placement-floating .presentation-page-nav button svg { transform: rotate(90deg); }
 .app.toolbar-placement-left .presentation-page-nav .page-indicator,
 .app.toolbar-placement-right .presentation-page-nav .page-indicator,
-.app.toolbar-placement-floating .presentation-page-nav .page-indicator { flex-direction: column; width: 100%; padding-block: var(--space-1); }
+.app.toolbar-placement-floating .presentation-page-nav .page-indicator {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: center;
+  justify-items: center;
+  width: 100%;
+  padding: 2px 0;
+  row-gap: 0;
+  column-gap: 1px;
+  line-height: 1;
+}
+.app.toolbar-placement-left .presentation-page-nav .page-current,
+.app.toolbar-placement-right .presentation-page-nav .page-current,
+.app.toolbar-placement-floating .presentation-page-nav .page-current {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 16px;
+}
 .app.toolbar-placement-left .presentation-page-nav .page-separator,
 .app.toolbar-placement-right .presentation-page-nav .page-separator,
-.app.toolbar-placement-floating .presentation-page-nav .page-separator { width: calc(100% - (var(--space-2) * 2)); padding: 0; border-top: 1px solid var(--line); font-size: 0; line-height: 0; }
+.app.toolbar-placement-floating .presentation-page-nav .page-separator {
+  width: auto;
+  padding: 0;
+  border: 0;
+}
+.app.toolbar-placement-left .presentation-page-nav .page-separator,
+.app.toolbar-placement-right .presentation-page-nav .page-separator,
+.app.toolbar-placement-floating .presentation-page-nav .page-separator,
+.app.toolbar-placement-left .presentation-page-nav .page-total,
+.app.toolbar-placement-right .presentation-page-nav .page-total,
+.app.toolbar-placement-floating .presentation-page-nav .page-total {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 13px;
+}
 .toolbar > #overlayModeToggle { display: none !important; }
 #boardBackground,
 #board {
