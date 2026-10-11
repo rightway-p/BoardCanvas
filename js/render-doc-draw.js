@@ -782,6 +782,7 @@ function startDrawing(event) {
   ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
   applyCurrentBrush();
   canvas.setPointerCapture(event.pointerId);
+  redrawVisibleStrokesWithActive();
   updateUndoRedoUI();
 }
 
@@ -840,7 +841,23 @@ function stopDrawing(event) {
   updateUndoRedoUI();
 }
 
+function discardDrawingForTouchTakeover() {
+  if (!drawing) return false;
+  drawing = false;
+  hasStrokeMoved = false;
+  lastPoint = null;
+  lastMidPoint = null;
+  filteredPoint = null;
+  activeStroke = null;
+  clearPendingPoints();
+  frameRequested = false;
+  currentInputPointerId = null;
+  redrawAllStrokes();
+  return true;
+}
+
 function handlePointerDown(event) {
+  if (event.boardTouchHandled) return;
   if (overlayMousePassthrough) {
     return;
   }
@@ -856,6 +873,7 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  if (event.boardTouchHandled) return;
   if (!BoardState.isActivePointer(currentInputPointerId, event.pointerId)) return;
   if (strokeEraserActive) {
     continueStrokeErasing(event);
@@ -868,6 +886,7 @@ function handlePointerMove(event) {
 }
 
 function handlePointerEnd(event) {
+  if (event.boardTouchHandled) return;
   if (!BoardState.isActivePointer(currentInputPointerId, event.pointerId)) return;
   if (strokeEraserActive) {
     stopStrokeErasing(event);

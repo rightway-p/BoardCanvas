@@ -10,7 +10,7 @@ penToolButton.addEventListener("click", async () => {
     setPanMode(false);
     tool = "pen";
   } else {
-    setPanMode(!panMode);
+    setPanMode(boardInteractionMode === "multi" ? false : !panMode);
   }
   updateToolUI();
 });

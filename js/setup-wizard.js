@@ -6,7 +6,7 @@
   const safeGet = (key) => { try { return window.localStorage.getItem(key); } catch { return null; } };
   const safeSet = (key, value) => { try { window.localStorage.setItem(key, value); } catch {} };
   const isComplete = () => safeGet(COMPLETE_KEY) === "true";
-  const normalizeMode = (value) => value === "multi" || value === "two" ? "multi" : "single";
+  const normalizeMode = (value) => value == null || value === "" || value === "multi" || value === "two" ? "multi" : "single";
   const normalizeColor = (value) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value).toLowerCase() : "#111111";
 
   function createController(root) {
@@ -100,7 +100,7 @@
       renderRail();
       if (!panel) return;
       if (step === 1) {
-        panel.innerHTML = `<p class="eyebrow">01 / 입력 방식</p><h1>칠판을 어떻게 조작할까요?</h1><p class="intro">선택 사항입니다. 나중에 화면 설정에서 다시 바꿀 수 있습니다.</p><div class="choices" role="radiogroup" aria-label="입력 방식 선택"><button class="choice ${mode === "single" ? "selected" : ""}" data-wizard-mode="single" role="radio" aria-checked="${mode === "single"}" type="button"><strong>단일 터치</strong><span>한 손가락 패닝과 길게 누르는 확대·축소를 사용합니다.</span></button><button class="choice ${mode === "multi" ? "selected" : ""}" data-wizard-mode="multi" role="radio" aria-checked="${mode === "multi"}" type="button"><strong>두 손가락</strong><span>두 손가락으로 패닝과 핀치 확대·축소를 사용합니다.</span></button></div>`;
+        panel.innerHTML = `<p class="eyebrow">01 / 입력 방식</p><h1>칠판을 어떻게 조작할까요?</h1><p class="intro">선택 사항입니다. 나중에 화면 설정에서 다시 바꿀 수 있습니다.</p><div class="choices" role="radiogroup" aria-label="입력 방식 선택"><button class="choice ${mode === "single" ? "selected" : ""}" data-wizard-mode="single" role="radio" aria-checked="${mode === "single"}" type="button"><strong>한 손가락</strong><span>한 손가락 패닝과 길게 누르는 확대·축소를 사용합니다.</span></button><button class="choice ${mode === "multi" ? "selected" : ""}" data-wizard-mode="multi" role="radio" aria-checked="${mode === "multi"}" type="button"><strong>자동 터치</strong><span>펜은 바로 필기하고, 다른 손가락이 빠르게 합류하면 패닝이나 핀치 줌으로 전환합니다.</span></button></div>`;
       } else if (step === 2) {
         const paletteCards = paletteDraft.length ? paletteDraft.map((item, index) => `<span class="pen-palette-item" aria-label="팔레트 ${index + 1} ${normalizeColor(item.color)}"><span class="pen-palette-swatch" style="background:${normalizeColor(item.color)}"></span></span>`).join("") : `<span class="inline-note">팔레트가 없습니다.</span>`;
         panel.innerHTML = `<p class="eyebrow">02 / 펜·팔레트</p><h1>처음 사용할 펜을 정해 보세요</h1><p class="intro">현재 펜과 팔레트를 확인하고 필요한 항목만 조정합니다.</p><section class="control-card"><div class="control-row"><span>현재 펜 색</span><button type="button" class="btn" data-wizard-pen-picker>색 선택</button></div><label class="control-row">굵기 <input data-wizard-pen-width type="range" min="1" max="40" value="${penDraft.width}"><output data-wizard-pen-width-value>${penDraft.width}px</output></label><div class="pen-palette-list" aria-label="현재 팔레트">${paletteCards}</div><button type="button" class="btn" data-wizard-palette-open>팔레트 관리</button></section>`;
@@ -113,7 +113,7 @@
       } else if (step === 5) {
         const driveConnected = typeof driveAuthenticated !== "undefined" && driveAuthenticated;
         const driveStatus = driveConnected ? (document.getElementById("driveStatus")?.textContent || "연결됨") : "연결하지 않음";
-        panel.innerHTML = `<p class="eyebrow">05 / 최종 확인</p><h1>이 설정으로 시작할까요?</h1><p class="intro">선택한 항목만 적용하고 Board를 시작합니다.</p><div class="summary"><div class="summary-row"><strong>입력 방식</strong><span>${mode === "single" ? "단일 터치" : "두 손가락"}</span></div><div class="summary-row"><strong>현재 펜</strong><span>${penDraft.color} · ${penDraft.width}px</span></div><div class="summary-row"><strong>Google Drive</strong><span>선택 사항 · ${driveStatus}</span></div></div>`;
+        panel.innerHTML = `<p class="eyebrow">05 / 최종 확인</p><h1>이 설정으로 시작할까요?</h1><p class="intro">선택한 항목만 적용하고 Board를 시작합니다.</p><div class="summary"><div class="summary-row"><strong>입력 방식</strong><span>${mode === "single" ? "한 손가락" : "자동 터치"}</span></div><div class="summary-row"><strong>현재 펜</strong><span>${penDraft.color} · ${penDraft.width}px</span></div><div class="summary-row"><strong>Google Drive</strong><span>선택 사항 · ${driveStatus}</span></div></div>`;
       } else {
         panel.innerHTML = `<div class="done"><div><div class="done-mark" aria-hidden="true">✓</div><h1>준비됐습니다</h1><p class="intro">초기 설정을 마쳤습니다. 설정에서 언제든 다시 열 수 있습니다.</p></div></div>`;
       }
@@ -159,7 +159,7 @@
       window.setTimeout(() => {
         const tab = document.getElementById(mode === "multi" ? "devMultiTab" : "devSingleTab");
         tab?.click();
-        document.querySelector(mode === "multi" ? "[data-calibration-area]" : "[data-dev-test]")?.focus();
+        document.querySelector(mode === "multi" ? "[data-auto-touch-key]" : "[data-dev-test]")?.focus();
       }, 0);
     }
 

@@ -91,6 +91,27 @@
     };
   }
 
+  function normalizeAutomaticTouchSettings(value = {}) {
+    const normalize = (key, fallback, min, max) => {
+      const number = value[key];
+      return typeof number === "number" && Number.isFinite(number) ? Math.max(min, Math.min(max, Math.round(number))) : fallback;
+    };
+    return {
+      touchJoinWindowMs: normalize("touchJoinWindowMs", 120, 40, 500),
+      touchInkLockDistance: normalize("touchInkLockDistance", 8, 2, 30),
+      touchPairSeparation: normalize("touchPairSeparation", 90, 30, 250),
+    };
+  }
+
+  function canJoinTouchForNavigation(elapsedMs, maxMovement, settings) {
+    const normalized = normalizeAutomaticTouchSettings(settings);
+    return Number(elapsedMs) <= normalized.touchJoinWindowMs && Number(maxMovement) <= normalized.touchInkLockDistance;
+  }
+
+  function classifyAutomaticTouchPair(initialSeparation, settings) {
+    return Number(initialSeparation) < normalizeAutomaticTouchSettings(settings).touchPairSeparation ? "pan" : "zoom";
+  }
+
   function measureTouchPair(initial, current, intent, thresholds) {
     const anchor = { x: (initial[0].x + initial[1].x) / 2, y: (initial[0].y + initial[1].y) / 2 };
     const midpoint = { x: (current[0].x + current[1].x) / 2, y: (current[0].y + current[1].y) / 2 };
@@ -213,5 +234,5 @@
     };
   }
 
-  return { MAX_PDF_BYTES, MAX_WORK_FILE_BYTES, MAX_SAVED_DOCUMENT_BYTES, isByteLengthWithinLimit, base64DecodedByteLength, isBase64WithinLimit, createBlankPage, createPageSequence, canDeletePage, applyStructureOperation, pointToWorld, zoomAt, canActivateZoomHold, isActivePointer, normalizeTouchCalibration, measureTouchPair, createTouchCalibrationTracker, appendTouchCalibrationRecord, applyTouchCalibrationRecord, savePageState, pageForRender, createReplacementManager };
+  return { MAX_PDF_BYTES, MAX_WORK_FILE_BYTES, MAX_SAVED_DOCUMENT_BYTES, isByteLengthWithinLimit, base64DecodedByteLength, isBase64WithinLimit, createBlankPage, createPageSequence, canDeletePage, applyStructureOperation, pointToWorld, zoomAt, canActivateZoomHold, isActivePointer, normalizeTouchCalibration, normalizeAutomaticTouchSettings, canJoinTouchForNavigation, classifyAutomaticTouchPair, measureTouchPair, createTouchCalibrationTracker, appendTouchCalibrationRecord, applyTouchCalibrationRecord, savePageState, pageForRender, createReplacementManager };
 });

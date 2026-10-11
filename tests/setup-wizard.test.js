@@ -50,10 +50,18 @@ test("final start applies the latest real pen opacity and interaction mode", () 
   const app = harness();
   app.context.window.BoardSetupWizard.open();
   for (let index = 0; index < 5; index += 1) app.next.click();
-  assert.equal(app.mode, "single");
+  assert.equal(app.mode, "multi");
   assert.equal(app.applied, 1);
   assert.equal(app.appliedOpacity, 0);
   assert.equal(app.root.hidden, true);
+});
+
+test("setup wizard preserves an explicitly saved single-touch legacy mode", () => {
+  const app = harness();
+  app.storage.set("board.settings.interactionMode.v1", "single");
+  app.context.window.BoardSetupWizard.open();
+  for (let index = 0; index < 5; index += 1) app.next.click();
+  assert.equal(app.mode, "single");
 });
 
 test("skip from final review still preserves all draft settings", () => {

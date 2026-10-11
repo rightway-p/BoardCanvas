@@ -4,6 +4,19 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const boardState = require("../js/domain/board-state.js");
 
+test("automatic touch thresholds normalize CSS pixel values and lock gesture intent at pairing", () => {
+  const defaults = boardState.normalizeAutomaticTouchSettings({});
+  assert.deepEqual(defaults, { touchJoinWindowMs: 120, touchInkLockDistance: 8, touchPairSeparation: 90 });
+  assert.deepEqual(boardState.normalizeAutomaticTouchSettings({ touchJoinWindowMs: 999, touchInkLockDistance: -3, touchPairSeparation: 89.6 }), {
+    touchJoinWindowMs: 500, touchInkLockDistance: 2, touchPairSeparation: 90,
+  });
+  assert.equal(boardState.canJoinTouchForNavigation(120, 8, defaults), true);
+  assert.equal(boardState.canJoinTouchForNavigation(121, 0, defaults), false);
+  assert.equal(boardState.canJoinTouchForNavigation(100, 8.1, defaults), false);
+  assert.equal(boardState.classifyAutomaticTouchPair(89.9, defaults), "pan");
+  assert.equal(boardState.classifyAutomaticTouchPair(90, defaults), "zoom");
+});
+
 test("touch calibration normalizes thresholds and tracks a fixed two-touch anchor", () => {
   assert.deepEqual(boardState.normalizeTouchCalibration({ panVectorTolerance: -9, pinchActivationDistance: 999, pinchMinimumSeparation: 39.7 }), {
     panVectorTolerance: 1, pinchActivationDistance: 200, pinchMinimumSeparation: 40,
@@ -63,111 +76,6 @@ test("touch calibration recent results remain bounded to the newest ten", () => 
   assert.equal(records[9].index, 12);
 });
 
-test("calibration fullscreen session stays armed across completed traces and restores the prior window state", async () => {
-  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const initSource = source.slice(source.indexOf("function initDeveloperCalibration"), source.indexOf("function cancelDeveloperCalibration"));
-  const elements = new Map(); const handlers = new Map();
-  const element = (selector) => {
-    if (!elements.has(selector)) elements.set(selector, {
-      hidden: false, disabled: false, value: "", textContent: "", dataset: {}, style: {},
-      classList: { add() { this.active = true; }, remove() { this.active = false; } },
-      addEventListener(name, fn) { handlers.set(`${selector}:${name}`, fn); },
-      replaceChildren() {}, append() {}, appendChild() {}, setAttribute() {}, focus() {},
-      getBoundingClientRect: () => ({ left: 0, top: 0 }), setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {},
-    });
-    return elements.get(selector);
-  };
-  const selectors = ["[data-calibration-area]", "[data-calibration-status]", "[data-calibration-records]", "[data-calibration-intent]", "[data-calibration-hint]", "[data-calibration-workspace]", "[data-calibration-start]", "[data-calibration-cancel]", "[data-calibration-finish]", "[data-calibration-reset]", "[data-calibration-count]", "[data-calibration-positions]", "[data-calibration-anchor-value]", "[data-calibration-vector]", "[data-calibration-initial]", "[data-calibration-span]", "[data-calibration-classification]", "[data-calibration-anchor]", "[data-calibration-point=\"0\"]", "[data-calibration-point=\"1\"]"];
-  selectors.forEach(element);
-  element("[data-calibration-intent]").value = "pan";
-  const panel = { querySelector: element, addEventListener(name, fn) { handlers.set(`panel:${name}`, fn); } };
-  let now = 0, fullscreen = false, deferredEnter = null, enterCalls = 0;
-  const context = {
-    developerCalibration: null, developerCalibrationFrame: 0, developerCalibrationArmed: false,
-    developerCalibrationRecords: [], developerCalibrationIntent: "pan", BoardState: boardState,
-    developerCalibrationStartInvalidator: null,
-    cancelDeveloperCalibration() { if (this.developerCalibrationStartInvalidator) this.developerCalibrationStartInvalidator(); this.developerCalibration = null; this.developerCalibrationArmed = false; this.developerCalibrationFullscreen = null; },
-    performance: { now: () => now },
-    document: { createElement: () => element(`created-${Math.random()}`) },
-    window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {} },
-    isFullscreenActive: () => fullscreen,
-    async enterFullscreen() { enterCalls += 1; if (deferredEnter) await deferredEnter; fullscreen = true; },
-    exitFullscreen() { fullscreen = false; },
-  };
-  vm.createContext(context); vm.runInContext(initSource, context);
-  context.initDeveloperCalibration(panel, boardState.normalizeTouchCalibration({}));
-  await handlers.get("[data-calibration-start]:click")();
-  const measure = (a, b) => {
-    const recordCount = context.developerCalibrationRecords.length;
-    handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: a, clientX: 10, clientY: 10, preventDefault() {} });
-    handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: b, clientX: 50, clientY: 10, preventDefault() {} });
-    now += 20;
-    handlers.get("[data-calibration-area]:pointerup")({ pointerId: a, clientX: 10, clientY: 10 });
-    handlers.get("[data-calibration-area]:pointerup")({ pointerId: b, clientX: 50, clientY: 10 });
-    assert.equal(context.developerCalibrationRecords.length, recordCount + 1);
-  };
-  measure(1, 2);
-  assert.equal(context.developerCalibrationArmed, true);
-  assert.equal(context.developerCalibrationRecords.length, 1);
-  assert.equal(context.developerCalibrationRecords[0].intent, "pan");
-  assert.equal(context.developerCalibrationRecords[0].elapsedMs, 20);
-  assert.equal(context.developerCalibrationRecords[0].initialSeparation, 40);
-  assert.equal(context.developerCalibrationRecords[0].maxVectorDifference, 0);
-  assert.equal(context.developerCalibrationRecords[0].maxAbsoluteSpanChange, 0);
-  measure(3, 4);
-  assert.equal(context.developerCalibrationRecords.length, 2);
-  handlers.get("[data-calibration-area]:pointerdown")({ pointerType: "touch", pointerId: 5, clientX: 10, clientY: 10, preventDefault() {} });
-  handlers.get("[data-calibration-cancel]:click")();
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(context.developerCalibrationRecords.length, 2);
-  assert.equal(fullscreen, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-
-  await handlers.get("[data-calibration-start]:click")();
-  handlers.get("panel:keydown")({ key: "Escape" });
-  assert.equal(context.developerCalibrationRecords.length, 2);
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(fullscreen, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-
-  fullscreen = true;
-  await handlers.get("[data-calibration-start]:click")();
-  handlers.get("[data-calibration-finish]:click")();
-  assert.equal(fullscreen, true);
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-
-  fullscreen = false;
-  let resolveEnter;
-  deferredEnter = new Promise((resolve) => { resolveEnter = resolve; });
-  const cancelledStart = handlers.get("[data-calibration-start]:click")();
-  await handlers.get("[data-calibration-start]:click")();
-  assert.equal(enterCalls, 3);
-  assert.equal(element("[data-calibration-cancel]").disabled, false);
-  handlers.get("[data-calibration-cancel]:click")();
-  resolveEnter(); await cancelledStart;
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-  assert.equal(fullscreen, false);
-
-  let resolveClose;
-  deferredEnter = new Promise((resolve) => { resolveClose = resolve; });
-  const closedStart = handlers.get("[data-calibration-start]:click")();
-  context.cancelDeveloperCalibration(); // panel close/category rerender invalidation
-  resolveClose(); await closedStart;
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-  assert.equal(fullscreen, false);
-
-  deferredEnter = null;
-  fullscreen = true;
-  await handlers.get("[data-calibration-start]:click")();
-  handlers.get("[data-calibration-cancel]:click")();
-  assert.equal(fullscreen, true);
-  assert.equal(context.developerCalibrationArmed, false);
-  assert.equal(element("[data-calibration-workspace]").classList.active, false);
-});
-
 test("applying a selected calibration result returns a bounded draft without mutating saved settings", () => {
   const saved = { panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40 };
   const panDraft = boardState.applyTouchCalibrationRecord(saved, { intent: "pan", maxVectorDifference: 0 });
@@ -192,82 +100,12 @@ test("calibration samples the pair once per frame and preserves a real inter-fra
   assert.equal(tracker.pointerUp(1, 100).maxVectorDifference, 15);
 });
 
-test("selected multitouch mode pans and zooms around the initial midpoint without handoff jumps", () => {
-  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const gestures = source.slice(source.indexOf("function startMultiTouchGesture"), source.indexOf("function getZoomCue"));
-  const frames = new Map(); let frameId = 0, saves = 0;
-  const captures = new Set();
-  const context = {
-    panMode: true, boardInteractionMode: "multi", devSettings: { panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40 },
-    BoardState: boardState,
-    isFullscreenActive: () => false,
-    exitFullscreen() {},
-    boardCamera: { x: 0, y: 0, scale: 1 }, multiTouchGesture: null, multiTouchSuppressed: new Set(), multiTouchFrame: 0,
-    window: { requestAnimationFrame(fn) { const id = ++frameId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); } },
-    canvas: { setPointerCapture(id) { captures.add(id); }, hasPointerCapture(id) { return captures.has(id); }, releasePointerCapture(id) { captures.delete(id); } },
-    boardWrapper: { getBoundingClientRect: () => ({ left: 10, top: 20, width: 300, height: 200 }) },
-    canvasPointFromClient(x, y) { return { x: x - 10, y: y - 20 }; },
-    zoomBoardCameraAt(camera, anchor, factor) { const scale = Math.max(0.2, Math.min(6, camera.scale * factor)); const world = boardState.pointToWorld(anchor, camera); return { x: anchor.x - world.x * scale, y: anchor.y - world.y * scale, scale }; },
-    applyBoardCamera() {}, saveBoardPageView() { saves += 1; }, scheduleSessionAutosave() {},
-  };
-  vm.createContext(context); vm.runInContext(gestures, context);
-  const down = (pointerId, x, y) => context.startMultiTouchGesture({ pointerId, pointerType: "touch", clientX: x, clientY: y, preventDefault() {} });
-  const move = (pointerId, x, y) => context.moveMultiTouchGesture({ pointerId, clientX: x, clientY: y, preventDefault() {} });
-  const flush = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback()); };
-  assert.equal(down(1, 110, 120), true);
-  move(1, 110, 120);
-  assert.equal(down(2, 150, 120), true); // second, non-primary touch
-  assert.equal(down(3, 170, 120), false);
-  assert.equal(context.multiTouchGesture.pair.anchor.x, 120);
-  move(1, 130, 120); move(2, 170, 120); flush();
-  assert.equal(context.boardCamera.x, 20);
-  assert.equal(context.boardCamera.scale, 1);
-  move(1, 155, 120); move(2, 165, 120); flush();
-  assert.equal(context.boardCamera.x, 20);
-  assert.equal(context.boardCamera.scale, 1);
-  move(1, 157, 120); move(2, 163, 120); flush();
-  assert.ok(context.boardCamera.scale < 1);
-  const anchoredWorld = boardState.pointToWorld({ x: 120, y: 100 }, context.boardCamera);
-  assert.ok(Math.abs(context.boardCamera.x + anchoredWorld.x * context.boardCamera.scale - 120) < 1e-9);
-  context.endMultiTouchGesture(1);
-  assert.equal(saves, 1);
-  assert.equal(context.multiTouchGesture, null);
-  assert.equal(down(2, 165, 120), false); // remaining contact cannot become a one-finger gesture
-  context.endSuppressedMultiTouchPointer(2);
-  assert.equal(context.multiTouchSuppressed.size, 0);
-});
-
-test("ignored extra touches and cancellation cannot end or save another active pair", () => {
-  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const gestures = source.slice(source.indexOf("function startMultiTouchGesture"), source.indexOf("function getZoomCue"));
-  const captures = new Set(); let saves = 0;
-  const context = {
-    panMode: true, boardInteractionMode: "multi", devSettings: { panVectorTolerance: 12, pinchActivationDistance: 12, pinchMinimumSeparation: 40 }, boardCamera: { x: 0, y: 0, scale: 1 }, multiTouchGesture: null, multiTouchSuppressed: new Set(), multiTouchFrame: 0,
-    BoardState: boardState,
-    window: { requestAnimationFrame: () => 1, cancelAnimationFrame() {} }, canvas: { setPointerCapture: (id) => captures.add(id), hasPointerCapture: (id) => captures.has(id), releasePointerCapture: (id) => captures.delete(id) },
-    boardWrapper: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 300, height: 200 }) }, canvasPointFromClient: (x, y) => ({ x, y }), zoomBoardCameraAt: (camera) => camera, applyBoardCamera() {}, saveBoardPageView() { saves += 1; }, scheduleSessionAutosave() {},
-  };
-  vm.createContext(context); vm.runInContext(gestures, context);
-  const down = (pointerId, x) => context.startMultiTouchGesture({ pointerId, pointerType: "touch", clientX: x, clientY: 40, preventDefault() {} });
-  down(1, 10); down(2, 60);
-  assert.equal(down(3, 90), false);
-  assert.equal(context.multiTouchGesture.pointers.size, 2);
-  context.endMultiTouchGesture(null, true);
-  assert.equal(saves, 0);
-  assert.equal(context.multiTouchGesture, null);
-  assert.equal(down(2, 60), false);
-  context.endSuppressedMultiTouchPointer(1); context.endSuppressedMultiTouchPointer(2);
-  assert.equal(context.multiTouchSuppressed.size, 0);
-  assert.match(source, /window\.addEventListener\("pointerup", \(event\) => endSuppressedMultiTouchPointer/);
-  assert.match(source, /window\.addEventListener\("pointercancel", \(event\) => endSuppressedMultiTouchPointer/);
-});
-
 test("interaction mode selection finishes active input and persists one exclusive mode", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
   const setter = source.slice(source.indexOf("function setBoardInteractionMode"), source.indexOf("function startPanOrZoomHold"));
   let finishes = 0;
   const select = { value: "single" };
-  const context = { boardInteractionMode: "single", BOARD_INTERACTION_MODE_KEY: "board.settings.interactionMode.v1", finishActiveBoardInput() { finishes += 1; }, window: { localStorage: { setItem(key, value) { this[key] = value; } } }, document: { getElementById: () => select } };
+  const context = { boardInteractionMode: "single", panMode: false, BOARD_INTERACTION_MODE_KEY: "board.settings.interactionMode.v1", finishActiveBoardInput() { finishes += 1; }, setPanMode(enabled) { this.panMode = enabled; }, window: { localStorage: { setItem(key, value) { this[key] = value; } } }, document: { getElementById: () => select } };
   vm.createContext(context); vm.runInContext(setter, context);
   context.setBoardInteractionMode("multi");
   assert.equal(context.boardInteractionMode, "multi");
@@ -747,6 +585,7 @@ test("pen and eraser toolbar handlers keep pan and tool state consistent", async
   Object.assign(context, {
     overlayMousePassthrough: false,
     panMode: false,
+    boardInteractionMode: "single",
     tool: "pen",
     eraserMode: "eraser",
     penToolButton: { addEventListener: (_, fn) => { handlers.pen = fn; } },
@@ -947,7 +786,7 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
 
 test("single-touch trial keeps feedback isolated and clears it with all pointer lifecycles", () => {
   const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
-  const trialSource = source.slice(source.indexOf("let developerTrial"), source.indexOf("function initDeveloperCalibration"));
+  const trialSource = source.slice(source.indexOf("let developerTrial"), source.indexOf("function normalizeDevSettings"));
   const timers = new Map(); const intervals = new Map(); let timerId = 0; let now = 0;
   const feedbackPoint = { style: {} }, feedbackReadout = { textContent: "" };
   const feedback = {
