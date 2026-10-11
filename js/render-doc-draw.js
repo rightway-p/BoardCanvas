@@ -513,18 +513,18 @@ function setCanvasSize() {
 
   const previousPixelRatio = pixelRatio;
   const previousRect = lastCanvasCssViewport || { width: previousWidth / previousPixelRatio, height: previousHeight / previousPixelRatio };
-  pixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
+  const nextPixelRatio = Math.min(quality.dprCap, Math.max(1, window.devicePixelRatio || 1));
   const wasFitted = typeof isCurrentBoardPageFitted === "function"
     && isCurrentBoardPageFitted(previousRect, previousPixelRatio);
-  const nextWidth = Math.max(1, Math.floor(rect.width * pixelRatio));
-  const nextHeight = Math.max(1, Math.floor(rect.height * pixelRatio));
+  const nextWidth = Math.max(1, Math.floor(rect.width * nextPixelRatio));
+  const nextHeight = Math.max(1, Math.floor(rect.height * nextPixelRatio));
 
   if (
     nextWidth === previousWidth
     && nextHeight === previousHeight
     && nextWidth === previousBackgroundWidth
     && nextHeight === previousBackgroundHeight
-    && pixelRatio === previousPixelRatio
+    && nextPixelRatio === previousPixelRatio
   ) {
     lastCanvasCssViewport = { width: rect.width, height: rect.height };
     if (typeof refitBoardPageAfterViewportResize === "function") {
@@ -533,6 +533,10 @@ function setCanvasSize() {
     if (typeof enforcePdfZoomMinimum === "function") enforcePdfZoomMinimum();
     return;
   }
+
+  pendingQualityResize = false;
+  if (typeof finishActiveBoardInput === "function") finishActiveBoardInput();
+  pixelRatio = nextPixelRatio;
 
   backgroundCanvas.width = nextWidth;
   backgroundCanvas.height = nextHeight;
@@ -686,6 +690,7 @@ function processPendingPoints(maxPoints, frameBudgetMs) {
     return false;
   }
 
+  ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
   applyCurrentBrush();
 
   let didStroke = false;
@@ -805,6 +810,7 @@ function stopDrawing(event) {
   flushPendingPoints();
 
   if (!hasStrokeMoved && lastPoint) {
+    ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
     applyCurrentBrush();
     const dotWidth = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
     ctx.beginPath();
