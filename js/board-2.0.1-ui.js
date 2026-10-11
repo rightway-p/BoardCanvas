@@ -764,7 +764,7 @@ function automaticTouchDown(event) {
     } else {
       if (panMode) setPanMode(false);
       const phase = overlayMousePassthrough ? "blocked" : tool === "pen" ? "provisional" : "ink";
-      automaticTouchSession = { phase, ownerId: event.pointerId, startedAt: performance.now(), origin: automaticTouchPoint(event), maxMovement: 0, contacts: new Map(), changed: false };
+      automaticTouchSession = { phase, ownerId: event.pointerId, startedAt: performance.now(), startedAtEventTimestamp: Number.isFinite(event.timeStamp) ? event.timeStamp : null, origin: automaticTouchPoint(event), maxMovement: 0, contacts: new Map(), changed: false };
     }
   }
   const session = automaticTouchSession;
@@ -772,7 +772,9 @@ function automaticTouchDown(event) {
   const now = performance.now();
   session.contacts.set(event.pointerId, { point: automaticTouchPoint(event) });
   if (session.phase === "provisional" && event.pointerId !== session.ownerId) {
-    if (session.contacts.size === 2 && BoardState.canJoinTouchForNavigation(now - session.startedAt, session.maxMovement, devSettings)) {
+    const eventElapsed = Number.isFinite(session.startedAtEventTimestamp) && Number.isFinite(event.timeStamp) ? event.timeStamp - session.startedAtEventTimestamp : null;
+    const elapsed = eventElapsed === null ? now - session.startedAt : eventElapsed;
+    if (session.contacts.size === 2 && elapsed >= 0 && BoardState.canJoinTouchForNavigation(elapsed, session.maxMovement, devSettings)) {
       startAutomaticTouchNavigation(session);
     } else session.phase = "ink";
     markAutomaticTouchEvent(event);

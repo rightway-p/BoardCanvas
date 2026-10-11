@@ -125,6 +125,58 @@ test("a timely second touch discards only the provisional stroke and preserves u
   assert.ok(app.canvas.hasPointerCapture(2));
 });
 
+test("touch join window uses event timestamps when both are available", () => {
+  const delayedDispatch = harness();
+  const first = pointer(1, "touch", "pointerdown", 100, 100);
+  first.timeStamp = 10000;
+  delayedDispatch.automaticTouchDown(first);
+  delayedDispatch.currentTime(1180);
+  const second = pointer(2, "touch", "pointerdown", 140, 100);
+  second.timeStamp = 10030;
+  delayedDispatch.automaticTouchDown(second);
+  assert.equal(delayedDispatch.automaticTouchSession.phase, "navigation");
+
+  const latePhysicalTouch = harness();
+  const lateFirst = pointer(1, "touch", "pointerdown", 100, 100);
+  lateFirst.timeStamp = 20000;
+  latePhysicalTouch.automaticTouchDown(lateFirst);
+  latePhysicalTouch.currentTime(1030);
+  const lateSecond = pointer(2, "touch", "pointerdown", 140, 100);
+  lateSecond.timeStamp = 20180;
+  latePhysicalTouch.automaticTouchDown(lateSecond);
+  assert.equal(latePhysicalTouch.automaticTouchSession.phase, "ink");
+
+  const outOfOrder = harness();
+  const orderedFirst = pointer(1, "touch", "pointerdown", 100, 100);
+  orderedFirst.timeStamp = 30000;
+  outOfOrder.automaticTouchDown(orderedFirst);
+  outOfOrder.currentTime(1030);
+  const orderedSecond = pointer(2, "touch", "pointerdown", 140, 100);
+  orderedSecond.timeStamp = 29999;
+  outOfOrder.automaticTouchDown(orderedSecond);
+  assert.equal(outOfOrder.automaticTouchSession.phase, "ink");
+});
+
+test("event timestamp fallback and movement lock keep existing join constraints", () => {
+  const fallback = harness();
+  fallback.automaticTouchDown(pointer(1, "touch", "pointerdown", 100, 100));
+  fallback.currentTime(1050);
+  fallback.automaticTouchDown(pointer(2, "touch", "pointerdown", 140, 100));
+  assert.equal(fallback.automaticTouchSession.phase, "navigation");
+
+  const moved = harness();
+  const first = pointer(1, "touch", "pointerdown", 100, 100);
+  first.timeStamp = 40000;
+  moved.automaticTouchDown(first);
+  moved.automaticTouchMove(pointer(1, "touch", "pointermove", 110, 100));
+  const second = pointer(2, "touch", "pointerdown", 140, 100);
+  second.timeStamp = 40020;
+  moved.automaticTouchDown(second);
+  assert.equal(moved.automaticTouchSession.phase, "ink");
+  assert.equal(moved.currentInputPointerId, null);
+  assert.equal(second.boardTouchHandled, true);
+});
+
 test("blur, cancellation, and stroke erasing finish the established owner before blocking survivors", () => {
   const ink = harness({
     currentInputPointerId: 1, drawing: true,
