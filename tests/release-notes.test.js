@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const { releaseNotesFor, releaseNotesSeenKey, recordReleaseNotesRunningVersion, recordReleaseNotesShown, shouldShowReleaseNotes } = require("../js/release-notes.mjs");
 
 test("release notes show once after an evidenced upgrade, never on first install", () => {
+  assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.9" }), false);
+  assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.9", previousVersion: "2.0.1-beta.8" }), true);
+  assert.equal(releaseNotesFor("2.0.1-beta.9").length, 3);
   assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.8" }), false);
   assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.8", previousVersion: "2.0.1-beta.7" }), true);
   assert.equal(releaseNotesFor("2.0.1-beta.8").length, 3);
