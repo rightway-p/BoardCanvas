@@ -1,5 +1,8 @@
 name: Desktop Build
 
+env:
+  BOARD_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.BOARD_GOOGLE_OAUTH_CLIENT_ID }}
+
 on:
   push:
     branches:

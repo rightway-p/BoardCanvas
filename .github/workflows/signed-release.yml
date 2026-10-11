@@ -193,6 +193,7 @@ jobs:
       TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
       TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
       TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+      BOARD_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.BOARD_GOOGLE_OAUTH_CLIENT_ID }}
       BOARD_RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
       BOARD_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       VERSION: ${{ needs.validate.outputs.version }}
@@ -212,6 +213,7 @@ jobs:
         run: |
           if ((git rev-parse HEAD).Trim() -cne $env:SOURCE_SHA) { throw 'Build checkout does not match the validated triggering commit.' }
           if (-not $env:TAURI_PRIVATE_KEY -or -not $env:TAURI_KEY_PASSWORD -or -not $env:TAURI_UPDATER_PUBLIC_KEY) { throw 'All three Tauri updater secrets must be configured.' }
+          if ([string]::IsNullOrWhiteSpace($env:BOARD_GOOGLE_OAUTH_CLIENT_ID)) { throw 'Configure the BOARD_GOOGLE_OAUTH_CLIENT_ID Actions variable before building a signed release.' }
           $expected = (Get-Content -Raw -LiteralPath 'src-tauri/updater.pub').Trim()
           if ($expected -cne $env:TAURI_UPDATER_PUBLIC_KEY.Trim()) { throw 'Configured public key does not match src-tauri/updater.pub.' }
 
