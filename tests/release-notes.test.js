@@ -3,6 +3,10 @@ const assert = require("node:assert/strict");
 const { releaseNotesFor, releaseNotesSeenKey, recordReleaseNotesRunningVersion, recordReleaseNotesShown, shouldShowReleaseNotes } = require("../js/release-notes.mjs");
 
 test("release notes show once after an evidenced upgrade, never on first install", () => {
+  assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.11" }), false);
+  assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.11", previousVersion: "2.0.1-beta.10" }), true);
+  assert.equal(releaseNotesFor("2.0.1-beta.11").length, 3);
+  assert.match(releaseNotesFor("2.0.1-beta.11")[2], /권한 코드 수신만 알리고/);
   assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.10" }), false);
   assert.equal(shouldShowReleaseNotes({ version: "2.0.1-beta.10", previousVersion: "2.0.1-beta.9" }), true);
   assert.equal(releaseNotesFor("2.0.1-beta.10").length, 4);
