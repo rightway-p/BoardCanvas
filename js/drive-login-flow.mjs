@@ -1,6 +1,7 @@
 export function createDriveLoginFlow({ invoke, onState }) {
   let generation = 0;
   let pending;
+  const toError = (error) => error instanceof Error ? error : new Error(typeof error === "string" ? error : "Google Drive 요청을 완료하지 못했습니다.");
 
   async function listPdfs(isCurrent) {
     const files = [];
@@ -34,7 +35,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
             return false;
           }
         } catch {}
-        if (isCurrent()) onState({ phase: action === "signin" || action === "status" ? "connected-error" : "list-error", error });
+        if (isCurrent()) onState({ phase: action === "signin" || action === "status" ? "connected-error" : "list-error", error: toError(error) });
         return false;
       }
     };
@@ -45,7 +46,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
         try {
           status = await invoke("drive_get_auth_status");
         } catch (error) {
-          if (isCurrent()) onState({ phase: "status-error", error });
+          if (isCurrent()) onState({ phase: "status-error", error: toError(error) });
           return false;
         }
         if (!isCurrent()) return false;
@@ -61,7 +62,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
           if (!isCurrent()) return false;
           return loadFiles(auth.warning);
         } catch (error) {
-          if (isCurrent()) onState({ phase: "login-error", error });
+          if (isCurrent()) onState({ phase: "login-error", error: toError(error) });
           return false;
         }
       }

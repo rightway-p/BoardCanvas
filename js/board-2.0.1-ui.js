@@ -22,7 +22,8 @@ let driveLoginFlowPromise;
 async function invokeDrive(command, args = {}) {
   const invoke = getTauriInvoke();
   if (!invoke) throw new Error("Google Drive는 데스크톱 앱에서 사용할 수 있습니다.");
-  return invoke(command, args);
+  try { return await invoke(command, args); }
+  catch (error) { throw error instanceof Error ? error : new Error(typeof error === "string" ? error : "Google Drive 요청을 완료하지 못했습니다."); }
 }
 function formatDriveBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);

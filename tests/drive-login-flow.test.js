@@ -39,6 +39,18 @@ test("cancelled or failed login returns to login and never lists files; retry ca
   assert.deepEqual(states, ["authenticating", "login-error", "authenticating", "loading", "connected"]);
 });
 
+test("Tauri string rejections remain visible as useful login errors", async () => {
+  const states = [];
+  const flow = await createFlow({
+    invoke: async () => { throw "Google token exchange failed (HTTP 400): Configure BOARD_GOOGLE_OAUTH_CLIENT_SECRET."; },
+    onState: (state) => states.push(state),
+  });
+
+  assert.equal(await flow.signIn(), false);
+  assert.equal(states.at(-1).phase, "login-error");
+  assert.equal(states.at(-1).error.message, "Google token exchange failed (HTTP 400): Configure BOARD_GOOGLE_OAUTH_CLIENT_SECRET.");
+});
+
 test("opening Drive restores a saved login silently before listing", async () => {
   const calls = [];
   const states = [];

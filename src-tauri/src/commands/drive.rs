@@ -24,6 +24,7 @@ const DEFAULT_CACHE_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 const MIN_CACHE_LIMIT: u64 = 64 * 1024 * 1024;
 const MAX_CACHE_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_SOURCE_PDF_BYTES: u64 = 256 * 1024 * 1024;
+const OAUTH_CALLBACK_MESSAGE: &str = "Authorization received. Return to BoardCanvas to finish connecting.";
 
 #[derive(Default)]
 pub struct DriveState {
@@ -92,6 +93,7 @@ struct TokenResponse {
 #[derive(Deserialize)]
 struct OAuthErrorResponse {
   error: Option<String>,
+  error_description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -153,17 +155,13 @@ pub async fn drive_authenticate(state: State<'_, DriveState>) -> Result<AuthResu
   let code = time::timeout(Duration::from_secs(300), receive_oauth_code(&listener, &oauth_state))
     .await
     .map_err(|_| "Google sign-in timed out. Try connecting again.".to_string())??;
-  let tokens: TokenResponse = client.post(OAUTH_TOKEN)
-    .form(&[
-      ("client_id", client_id),
-      ("code", code.as_str()),
-      ("code_verifier", verifier.as_str()),
-      ("grant_type", "authorization_code"),
-      ("redirect_uri", redirect_uri.as_str()),
-    ])
-    .send().await.map_err(|error| format!("Google token exchange failed: {error}"))?
-    .error_for_status().map_err(|error| format!("Google token exchange failed: {error}"))?
-    .json().await.map_err(|error| format!("Google token response was invalid: {error}"))?;
+  let response = client.post(OAUTH_TOKEN)
+    .form(&authorization_code_form(client_id, &code, &verifier, &redirect_uri, oauth_client_secret()))
+    .send().await.map_err(|_| "Google token exchange failed. Check your connection and try again.".to_string())?;
+  if !response.status().is_success() {
+    return Err(oauth_failure_message("Google token exchange failed", response).await);
+  }
+  let tokens: TokenResponse = response.json().await.map_err(|_| "Google token response was invalid.".to_string())?;
   let refresh_token = tokens.refresh_token;
   let target = refresh_token_target(client_id);
   let store = SystemCredentialStore;
@@ -444,15 +442,15 @@ enum RefreshError {
 async fn refresh_access_token(client_id: &str, refresh_token: &str) -> Result<TokenResponse, RefreshError> {
   let response = http_client().map_err(|_| RefreshError::Other("Google token refresh could not be started.".to_string()))?
     .post(OAUTH_TOKEN)
-    .form(&[("client_id", client_id), ("refresh_token", refresh_token), ("grant_type", "refresh_token")])
+    .form(&refresh_token_form(client_id, refresh_token, oauth_client_secret()))
     .send().await.map_err(|_| RefreshError::Other("Google token refresh failed. Check your connection and try again.".to_string()))?;
   let status = response.status();
   if !status.is_success() {
-    let code = response.json::<OAuthErrorResponse>().await.ok().and_then(|body| body.error);
-    return if code.as_deref() == Some("invalid_grant") {
+    let body = response.json::<OAuthErrorResponse>().await.ok();
+    return if body.as_ref().and_then(|body| body.error.as_deref()) == Some("invalid_grant") {
       Err(RefreshError::InvalidGrant)
     } else {
-      Err(RefreshError::Other(format!("Google token refresh failed (HTTP {status}).")))
+      Err(RefreshError::Other(format_oauth_failure("Google token refresh failed", status.as_u16(), body.as_ref())))
     };
   }
   response.json().await.map_err(|_| RefreshError::Other("Google token response was invalid.".to_string()))
@@ -461,6 +459,54 @@ async fn refresh_access_token(client_id: &str, refresh_token: &str) -> Result<To
 fn oauth_client_id() -> Result<&'static str, String> {
   option_env!("BOARD_GOOGLE_OAUTH_CLIENT_ID").map(str::trim).filter(|value| !value.is_empty())
     .ok_or_else(|| "Google Drive is not configured. Set BOARD_GOOGLE_OAUTH_CLIENT_ID to a Google OAuth Desktop client ID, then rebuild.".to_string())
+}
+
+fn oauth_client_secret() -> Option<&'static str> {
+  option_env!("BOARD_GOOGLE_OAUTH_CLIENT_SECRET").map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn authorization_code_form<'a>(client_id: &'a str, code: &'a str, verifier: &'a str, redirect_uri: &'a str, client_secret: Option<&'a str>) -> Vec<(&'static str, &'a str)> {
+  let mut fields = vec![
+    ("client_id", client_id),
+    ("code", code),
+    ("code_verifier", verifier),
+    ("grant_type", "authorization_code"),
+    ("redirect_uri", redirect_uri),
+  ];
+  if let Some(secret) = client_secret { fields.push(("client_secret", secret)); }
+  fields
+}
+
+fn refresh_token_form<'a>(client_id: &'a str, refresh_token: &'a str, client_secret: Option<&'a str>) -> Vec<(&'static str, &'a str)> {
+  let mut fields = vec![("client_id", client_id), ("refresh_token", refresh_token), ("grant_type", "refresh_token")];
+  if let Some(secret) = client_secret { fields.push(("client_secret", secret)); }
+  fields
+}
+
+async fn oauth_failure_message(context: &str, response: Response) -> String {
+  let status = response.status().as_u16();
+  let body = response.json::<OAuthErrorResponse>().await.ok();
+  format_oauth_failure(context, status, body.as_ref())
+}
+
+fn format_oauth_failure(context: &str, status: u16, body: Option<&OAuthErrorResponse>) -> String {
+  let code = body.and_then(|body| body.error.as_deref());
+  let description = body.and_then(|body| body.error_description.as_deref()).unwrap_or_default();
+  if description.to_ascii_lowercase().contains("client_secret is missing") {
+    return format!("{context} (HTTP {status}): Google requires a client secret for this OAuth client. Configure BOARD_GOOGLE_OAUTH_CLIENT_SECRET and rebuild.");
+  }
+  let safe_detail = match code {
+    Some("invalid_client") => Some("Google rejected the OAuth client configuration."),
+    Some("invalid_request") => Some("Google rejected the OAuth request."),
+    Some("unauthorized_client") => Some("This OAuth client is not authorized for the requested flow."),
+    Some("access_denied") => Some("Google denied the requested access."),
+    Some("invalid_grant") => Some("The authorization grant is invalid or expired."),
+    _ => None,
+  };
+  match safe_detail {
+    Some(detail) => format!("{context} (HTTP {status}): {detail}"),
+    None => format!("{context} (HTTP {status})."),
+  }
 }
 
 fn token_expiry(expires_in: u64) -> Instant {
@@ -488,12 +534,12 @@ async fn receive_oauth_code(listener: &TcpListener, expected_state: &str) -> Res
       respond(&mut stream, "400 Bad Request", "Sign-in state did not match. Return to BoardCanvas and try again.").await;
       continue;
     }
-    if let Some(error) = pairs.get("error") {
+    if pairs.contains_key("error") {
       respond(&mut stream, "400 Bad Request", "Google sign-in was cancelled. Return to BoardCanvas.").await;
-      return Err(format!("Google sign-in was not completed ({error})."));
+      return Err("Google sign-in was not completed. Try again.".to_string());
     }
     let code = pairs.get("code").cloned().ok_or_else(|| "Google sign-in callback did not contain an authorization code.".to_string())?;
-    respond(&mut stream, "200 OK", "Google Drive connected. You can close this tab and return to BoardCanvas.").await;
+    respond(&mut stream, "200 OK", OAUTH_CALLBACK_MESSAGE).await;
     return Ok(code);
   }
 }
@@ -730,5 +776,41 @@ mod tests {
     assert!(ensure_source_pdf_size(MAX_SOURCE_PDF_BYTES).is_ok());
     let error = ensure_source_pdf_size(MAX_SOURCE_PDF_BYTES + 1).unwrap_err();
     assert!(error.contains("Choose a smaller PDF"));
+  }
+
+  #[test]
+  fn oauth_forms_include_secret_only_when_configured_for_both_grants() {
+    for fields in [
+      authorization_code_form("id", "code", "verifier", "http://127.0.0.1", None),
+      refresh_token_form("id", "refresh", None),
+    ] {
+      assert!(!fields.iter().any(|(key, _)| *key == "client_secret"));
+    }
+    for fields in [
+      authorization_code_form("id", "code", "verifier", "http://127.0.0.1", Some("configured-secret")),
+      refresh_token_form("id", "refresh", Some("configured-secret")),
+    ] {
+      assert!(fields.iter().any(|(key, value)| *key == "client_secret" && *value == "configured-secret"));
+    }
+  }
+
+  #[test]
+  fn oauth_errors_show_allowlisted_details_without_server_text() {
+    let known = OAuthErrorResponse { error: Some("invalid_request".into()), error_description: Some("client_secret is missing".into()) };
+    let message = format_oauth_failure("Google token exchange failed", 400, Some(&known));
+    assert!(message.contains("HTTP 400"));
+    assert!(message.contains("BOARD_GOOGLE_OAUTH_CLIENT_SECRET"));
+
+    let unknown = OAuthErrorResponse { error: Some("server-supplied-secret".into()), error_description: Some("access_token=do-not-show".into()) };
+    let message = format_oauth_failure("Google token exchange failed", 400, Some(&unknown));
+    assert_eq!(message, "Google token exchange failed (HTTP 400).");
+    assert!(!message.contains("server-supplied-secret"));
+    assert!(!message.contains("do-not-show"));
+  }
+
+  #[test]
+  fn oauth_callback_does_not_claim_the_app_is_connected() {
+    assert!(OAUTH_CALLBACK_MESSAGE.contains("Authorization received"));
+    assert!(!OAUTH_CALLBACK_MESSAGE.to_ascii_lowercase().contains("connected"));
   }
 }
