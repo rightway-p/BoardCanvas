@@ -18,6 +18,13 @@ let driveDialogOpen = false;
 let driveAuthStatusError = false;
 let driveLoginFlow;
 let driveLoginFlowPromise;
+let replacementReturnFocus = null;
+
+function restoreReplacementFocus() {
+  const target = replacementReturnFocus;
+  replacementReturnFocus = null;
+  if (target?.isConnected && !target.hidden && !target.closest(".is-hidden")) target.focus();
+}
 
 async function invokeDrive(command, args = {}) {
   const invoke = getTauriInvoke();
@@ -75,7 +82,7 @@ async function importDrivePdf(file) {
       }
       return true;
     });
-    if (imported) { status.textContent = `${file.name} 가져옴`; driveDialogOpen = false; if (driveLoginFlow) driveLoginFlow.invalidate(); document.getElementById("driveDialog").classList.add("is-hidden"); closeDocumentPopup(); }
+    if (imported) { status.textContent = `${file.name} 가져옴`; driveDialogOpen = false; if (driveLoginFlow) driveLoginFlow.invalidate(); document.getElementById("driveDialog").classList.add("is-hidden"); closeDocumentPopup(); openDocumentPopupButton.focus(); }
     else status.textContent = "가져오기가 취소되었거나 완료되지 않았습니다.";
   } catch (error) { status.textContent = error.message || "Drive PDF를 가져오지 못했습니다."; }
 }
@@ -518,7 +525,9 @@ function requestBoardWorkReplacement(action) {
     })();
     return request.promise;
   }
+  replacementReturnFocus = document.activeElement;
   replaceWorkDialog.classList.remove("is-hidden");
+  document.getElementById("cancelReplaceButton").focus();
   return request.promise;
 }
 let updaterFlow;
@@ -609,6 +618,7 @@ async function finishBoardWorkReplacement(save) {
   if (!pending) return;
   try { if (save && !(await saveBoardWorkFile(true))) { workReplacementManager.settle(pending, false); return; } const result = await pending.action(); if (result === false) throw new Error("새 작업을 열지 못해 현재 작업을 유지했습니다."); workReplacementManager.settle(pending, true); }
   catch (error) { setDocumentStatus(error.message || "새 작업을 열지 못했습니다.", "error"); workReplacementManager.settle(pending, false); }
+  finally { restoreReplacementFocus(); }
 }
 async function openBoardWorkFile(file) {
   if (!file || !BoardState.isByteLengthWithinLimit(file.size, BoardState.MAX_WORK_FILE_BYTES)) throw new Error("작업 파일은 512 MiB 이하만 열 수 있습니다.");
@@ -1229,7 +1239,7 @@ function initBoard201Ui() {
   });
   saveAndReplaceButton.addEventListener("click", () => { void finishBoardWorkReplacement(true); });
   discardAndReplaceButton.addEventListener("click", () => { void finishBoardWorkReplacement(false); });
-  cancelReplaceButton.addEventListener("click", () => { workReplacementManager.cancel(); replaceWorkDialog.classList.add("is-hidden"); documentInput.value = ""; });
+  cancelReplaceButton.addEventListener("click", () => { workReplacementManager.cancel(); replaceWorkDialog.classList.add("is-hidden"); documentInput.value = ""; restoreReplacementFocus(); });
   pdfPrevPageButton.addEventListener("click", () => goToBoardPage(-1));
   pdfNextPageButton.addEventListener("click", () => goToBoardPage(1));
   document.querySelectorAll("[data-settings-category]").forEach((button) => button.addEventListener("click", () => { selectSettingsCategory(button.dataset.settingsCategory); if (button.dataset.settingsCategory === "about") void refreshUpdaterRecovery(); }));

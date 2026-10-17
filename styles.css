@@ -1108,6 +1108,7 @@ body {
 .page-manager.is-hidden, .app-info-popup.is-hidden { display: none !important; }
 .app-info-popup button { border: 0; background: transparent; text-align: left; cursor: pointer; }
 .work-dialog { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #0005; }
+#replaceWorkDialog { z-index: 120; }
 .work-dialog.is-hidden { display: none !important; }
 .work-dialog-card { width: min(420px, calc(100vw - 32px)); padding: 18px; border-radius: 12px; background: white; box-shadow: 0 10px 36px #0003; }
 .work-dialog-card > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
