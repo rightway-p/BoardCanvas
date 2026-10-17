@@ -52,6 +52,7 @@ function setDriveLoginView(message = "Google 계정으로 로그인하면 Drive 
   connect.textContent = retryStatus ? "연결 상태 다시 확인" : "Google로 로그인";
   connect.disabled = busy;
   setDriveElementHidden(document.getElementById("driveSignOutButton"), true);
+  setDriveElementHidden(document.getElementById("driveLocationNav"), true);
   const list = document.getElementById("driveFileList");
   setDriveElementHidden(list, true);
   list.replaceChildren();
@@ -112,28 +113,72 @@ function openDriveDialog() {
   void refreshDriveStatus();
 }
 
-function renderDriveFiles(files, message) {
+function renderDriveFiles(files, message, path = [], sharedWithMe = false) {
   driveAuthenticated = true;
   driveAuthStatusError = false;
   const intro = document.querySelector("#driveDialog .work-dialog-card > p");
-  intro.textContent = "로그인된 Google 계정의 PDF입니다. 파일을 선택하면 칠판에서 엽니다.";
+  intro.textContent = "Google Drive의 폴더를 탐색해 PDF를 선택하세요. PDF만 칠판에서 열 수 있습니다.";
   const connect = document.getElementById("driveConnectButton");
   setDriveElementHidden(connect, false);
-  connect.textContent = "PDF 목록 새로고침";
+  connect.textContent = "목록 새로고침";
   connect.disabled = false;
   const signOut = document.getElementById("driveSignOutButton");
   setDriveElementHidden(signOut, false);
   signOut.disabled = false;
   const list = document.getElementById("driveFileList");
   setDriveElementHidden(list, false);
+  const nav = document.getElementById("driveLocationNav");
+  setDriveElementHidden(nav, false);
+  const myDriveButton = document.getElementById("driveMyDriveButton");
+  const sharedWithMeButton = document.getElementById("driveSharedWithMeButton");
+  myDriveButton.disabled = false; sharedWithMeButton.disabled = false;
+  myDriveButton.setAttribute("aria-current", String(!sharedWithMe));
+  sharedWithMeButton.setAttribute("aria-current", String(sharedWithMe));
+  const parent = document.getElementById("driveParentButton");
+  setDriveElementHidden(parent, path.length === 0);
+  parent.disabled = false;
+  const breadcrumbs = document.getElementById("driveBreadcrumbs");
+  breadcrumbs.replaceChildren();
+  const rootCrumb = document.createElement("button"); rootCrumb.type = "button"; rootCrumb.textContent = sharedWithMe ? "공유 문서함" : "내 드라이브";
+  if (!path.length) rootCrumb.setAttribute("aria-current", "page");
+  rootCrumb.addEventListener("click", async () => sharedWithMe
+    ? (await getDriveLoginFlow()).showSharedWithMe()
+    : (await getDriveLoginFlow()).showMyDrive());
+  breadcrumbs.appendChild(rootCrumb);
+  let currentCrumb = rootCrumb;
+  if (path.length) { const separator = document.createElement("span"); separator.textContent = "›"; separator.setAttribute("aria-hidden", "true"); breadcrumbs.appendChild(separator); }
+  path.forEach((segment, index) => {
+    const button = document.createElement("button"); button.type = "button"; button.textContent = segment.name;
+    if (index === path.length - 1) { button.setAttribute("aria-current", "page"); currentCrumb = button; }
+    button.addEventListener("click", async () => (await getDriveLoginFlow()).goToPath(index));
+    breadcrumbs.appendChild(button);
+    if (index < path.length - 1) { const separator = document.createElement("span"); separator.textContent = "›"; separator.setAttribute("aria-hidden", "true"); breadcrumbs.appendChild(separator); }
+  });
   list.replaceChildren();
-  for (const file of files || []) {
-    const button = document.createElement("button"); button.type = "button"; button.textContent = `${file.name} · ${formatDriveBytes(file.size)}`;
-    button.addEventListener("click", () => { void importDrivePdf(file); }); list.appendChild(button);
+  const orderedFiles = [...(files || [])].sort((left, right) => {
+    const leftFolder = left.mimeType === "application/vnd.google-apps.folder";
+    const rightFolder = right.mimeType === "application/vnd.google-apps.folder";
+    return Number(rightFolder) - Number(leftFolder) || left.name.localeCompare(right.name);
+  });
+  for (const file of orderedFiles) {
+    const isFolder = file.mimeType === "application/vnd.google-apps.folder";
+    const isPdf = file.mimeType === "application/pdf";
+    const button = document.createElement("button"); button.type = "button";
+    button.className = isFolder ? "drive-folder-entry" : isPdf ? "drive-pdf-entry" : "drive-other-entry";
+    button.textContent = `${isFolder ? "📁 " : isPdf ? "PDF · " : "파일 · "}${file.name}${isPdf ? ` · ${formatDriveBytes(file.size)}` : ""}`;
+    if (isFolder) button.addEventListener("click", async () => (await getDriveLoginFlow()).openFolder(file.id, file.name));
+    else if (isPdf) button.addEventListener("click", () => { void importDrivePdf(file); });
+    else { button.disabled = true; button.title = "폴더를 찾아보는 데 표시되며 PDF만 열 수 있습니다."; }
+    list.appendChild(button);
   }
+  const pdfCount = orderedFiles.filter((file) => file.mimeType === "application/pdf").length;
+  currentCrumb.focus();
+  myDriveButton.onclick = async () => (await getDriveLoginFlow()).showMyDrive();
+  sharedWithMeButton.onclick = async () => (await getDriveLoginFlow()).showSharedWithMe();
+  parent.onclick = async () => (await getDriveLoginFlow()).goToParent();
   document.getElementById("driveStatus").textContent = message
     ? message
-    : files.length ? `연결됨 · PDF ${files.length}개` : "연결됨 · Google Drive에 PDF가 없습니다.";
+    : pdfCount ? `연결됨 · PDF ${pdfCount}개${orderedFiles.length > pdfCount ? ` · 항목 ${orderedFiles.length}개` : ""}` : orderedFiles.length ? `연결됨 · PDF 없음 · 항목 ${orderedFiles.length}개` : "연결됨 · 이 위치에 항목이 없습니다.";
   void refreshDriveStatus();
 }
 
@@ -147,15 +192,16 @@ function getDriveLoginFlow() {
         else if (state.phase === "loading") {
           document.getElementById("driveConnectButton").disabled = true;
           document.getElementById("driveSignOutButton").disabled = true;
-          document.getElementById("driveStatus").textContent = "Google Drive PDF 목록을 불러오는 중…";
+          for (const button of document.querySelectorAll("#driveLocationNav button, #driveFileList button")) button.disabled = true;
+          document.getElementById("driveStatus").textContent = "Google Drive 폴더와 파일을 불러오는 중…";
         }
         else if (state.phase === "needs-login") setDriveLoginView(state.message || "Google Drive에 로그인해 주세요.");
         else if (state.phase === "status-error") setDriveLoginView(`${state.error?.message || "로그인 상태를 확인하지 못했습니다."} 다시 시도해 주세요.`, true);
         else if (state.phase === "login-error") setDriveLoginView(`${state.error?.message || "Google에 로그인하지 못했습니다."} 다시 로그인할 수 있습니다.`);
-        else if (state.phase === "connected") renderDriveFiles(state.files, state.warning ? `연결됨 · 저장된 로그인을 갱신하지 못했습니다. ${state.warning}` : null);
+        else if (state.phase === "connected") renderDriveFiles(state.files, state.warning ? `연결됨 · 저장된 로그인을 갱신하지 못했습니다. ${state.warning}` : null, state.path, state.sharedWithMe);
         else if (state.phase === "connected-error" || state.phase === "list-error") {
           if (state.phase === "connected-error") driveAuthenticated = true;
-          if (driveAuthenticated) renderDriveFiles([], state.error?.message || "PDF 목록을 불러오지 못했습니다. 다시 시도해 주세요.");
+          if (driveAuthenticated) renderDriveFiles(state.files || [], `${state.error?.message || "PDF 목록을 불러오지 못했습니다."} 현재 위치에서 다시 시도해 주세요.`, state.path, state.sharedWithMe);
           else setDriveLoginView(state.error?.message || "PDF 목록을 불러오지 못했습니다. 다시 시도해 주세요.", true);
         }
       } });
@@ -1204,7 +1250,7 @@ function initBoard201Ui() {
   });
   document.getElementById("driveSignOutButton").addEventListener("click", async () => {
     if (driveLoginFlow) driveLoginFlow.invalidate();
-    try { await invokeDrive("drive_sign_out"); setDriveLoginView("Google Drive 연결을 해제했습니다."); }
+    try { await invokeDrive("drive_sign_out"); if (driveLoginFlow) driveLoginFlow.reset(); else setDriveLoginView("Google Drive 연결을 해제했습니다."); }
     catch (error) { if (driveDialogOpen) document.getElementById("driveStatus").textContent = error.message || "연결을 해제하지 못했습니다."; }
   });
   document.getElementById("driveCacheLimit").addEventListener("change", async (event) => {

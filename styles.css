@@ -1114,10 +1114,20 @@ body {
 .work-dialog-card .export-options { display: grid; gap: 8px; margin: 12px 0; }
 .export-options label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
 .export-options input { width: 20px; height: 20px; flex: 0 0 auto; }
-.drive-dialog-card { width: min(480px, calc(100vw - 32px)); max-height: min(80vh, 680px); overflow: auto; text-align: left; }
+.drive-dialog-card { width: min(720px, calc(100vw - 32px)); max-height: min(80vh, 680px); overflow: auto; text-align: left; }
 .drive-dialog-card > header,.drive-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .drive-file-list { display: flex; flex-direction: column; gap: 5px; max-height: 280px; overflow: auto; margin: 10px 0; }
 .drive-file-list button { padding: 8px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: white; cursor: pointer; }
+.drive-location-nav { display: grid; min-width: 0; gap: 8px; margin: 10px 0; }
+.drive-location-switch { display: flex; flex-wrap: wrap; gap: 6px; }
+.drive-location-nav button { min-height: 36px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.drive-location-nav button[aria-current="true"] { border-color: var(--pen-blue); color: var(--pen-blue); }
+.drive-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; min-width: 0; }
+.drive-breadcrumbs button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.drive-dialog-card > .drive-file-list { display: flex; flex: 0 1 auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; min-width: 0; }
+.work-dialog-card .drive-file-list button { width: 100%; min-width: 0; flex: 0 0 auto; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.drive-file-list button:disabled { color: var(--muted); cursor: default; }
+.drive-parent-button { justify-self: start; }
 .drive-dialog-card label { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .drive-dialog-card label input { flex-basis: 100%; }
 

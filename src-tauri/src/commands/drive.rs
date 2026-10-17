@@ -236,16 +236,34 @@ pub async fn drive_get_auth_status(state: State<'_, DriveState>) -> Result<Drive
 }
 
 #[tauri::command]
-pub async fn drive_list_pdfs(state: State<'_, DriveState>, page_token: Option<String>) -> Result<PdfList, String> {
+pub async fn drive_list_pdfs(
+  state: State<'_, DriveState>,
+  page_token: Option<String>,
+  folder_id: Option<String>,
+  shared_with_me: Option<bool>,
+) -> Result<PdfList, String> {
+  let shared_with_me = shared_with_me.unwrap_or(false);
+  let folder_id = folder_id.filter(|value| !value.is_empty()).unwrap_or_else(|| "root".to_string());
+  validate_file_id(&folder_id)?;
+  if shared_with_me && folder_id != "root" {
+    return Err("Shared with me can only be listed from its top level.".to_string());
+  }
   let token = access_token(&state).await?;
+  let query = if shared_with_me {
+    "sharedWithMe = true and trashed = false".to_string()
+  } else {
+    format!("'{}' in parents and trashed = false", folder_id)
+  };
   let mut request = http_client()?.get(format!("{DRIVE_API}/files"))
     .bearer_auth(token)
     .query(&[
-      ("q", "mimeType = 'application/pdf' and trashed = false"),
+      ("q", query.as_str()),
       ("spaces", "drive"),
       ("pageSize", "100"),
       ("orderBy", "name"),
       ("fields", "nextPageToken,files(id,name,mimeType,size,modifiedTime)"),
+      ("includeItemsFromAllDrives", "true"),
+      ("supportsAllDrives", "true"),
     ]);
   if let Some(page_token) = page_token.filter(|value| !value.is_empty()) {
     request = request.query(&[("pageToken", page_token)]);
@@ -269,7 +287,7 @@ pub async fn drive_download_pdf(app: AppHandle, state: State<'_, DriveState>, fi
   let target = root.join(format!("{hash}.pdf"));
 
   let metadata: DriveFileResponse = json_response(http_client()?.get(format!("{DRIVE_API}/files/{file_id}"))
-    .bearer_auth(&token).query(&[("fields", "id,name,mimeType,size")]).send().await
+    .bearer_auth(&token).query(&[("fields", "id,name,mimeType,size"), ("supportsAllDrives", "true")]).send().await
     .map_err(|error| format!("Google Drive PDF lookup failed: {error}"))?).await?;
   if metadata.id != file_id || metadata.mime_type != "application/pdf" {
     return Err("The selected Google Drive file is not a PDF.".to_string());
@@ -293,7 +311,7 @@ pub async fn drive_download_pdf(app: AppHandle, state: State<'_, DriveState>, fi
     .map_err(|error| format!("Could not create temporary PDF: {error}"))?;
   let mut cleanup = RemoveOnDrop(Some(temp.clone()));
   let response = http_client()?.get(format!("{DRIVE_API}/files/{file_id}"))
-    .bearer_auth(token).query(&[("alt", "media")]).send().await
+    .bearer_auth(token).query(&[("alt", "media"), ("supportsAllDrives", "true")]).send().await
     .map_err(|error| format!("Google Drive PDF download failed: {error}"))?;
   if !response.status().is_success() { return Err(response_error(response).await); }
   if response.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
@@ -736,8 +754,10 @@ mod tests {
 
   #[test]
   fn file_ids_are_validated_before_url_and_cache_use() {
+    assert!(validate_file_id("root").is_ok());
     assert!(validate_file_id("abc_123-XYZ").is_ok());
     assert!(validate_file_id("../secret").is_err());
+    assert!(validate_file_id("folder' or 'x'='x").is_err());
   }
 
   #[test]
