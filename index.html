@@ -114,7 +114,7 @@
                   </div>
                 </section>
                 <section data-settings-panel="remote" hidden><h3>리모컨</h3><div id="remoteSettingsContent"></div></section>
-                <section data-settings-panel="about" hidden><h3>앱 정보</h3><div class="settings-card about-card"><strong>BoardCanvas</strong><p>현재 버전과 업데이트 상태를 확인하고 이전 버전 복구를 실행합니다.</p><div class="about-version"><span>현재 버전</span><span id="appVersion" class="about-version-value">버전 2.0.1-beta.12</span></div><label class="settings-checkbox"><input id="betaUpdatesToggle" type="checkbox" disabled> 베타 업데이트 받기</label><p>켜면 정식 버전과 베타 버전 중 최신 업데이트를 확인합니다. 끄면 정식 버전만 확인합니다.</p><div class="settings-card-actions"><button id="checkUpdateButton" class="document-action-button" type="button">업데이트 확인</button><button id="reopenReleaseNotesButton" class="document-action-button" type="button" hidden>이번 업데이트 내용</button><button id="promoteStableButton" class="document-action-button" type="button" hidden>최신 정식 버전으로 돌아가기</button><button id="reopenSetupWizardButton" class="document-action-button" type="button">초기 설정 다시 실행</button></div><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><div class="settings-card-actions"><button id="rollbackUpdateButton" class="document-action-button" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" class="document-action-button" type="button" hidden>복구 도구 열기</button></div><span id="updateStatus" aria-live="polite"></span></div></section>
+                <section data-settings-panel="about" hidden><h3>앱 정보</h3><div class="settings-card about-card"><strong>BoardCanvas</strong><p>현재 버전과 업데이트 상태를 확인하고 이전 버전 복구를 실행합니다.</p><div class="about-version"><span>현재 버전</span><span id="appVersion" class="about-version-value">버전 2.0.1-beta.13</span></div><label class="settings-checkbox"><input id="betaUpdatesToggle" type="checkbox" disabled> 베타 업데이트 받기</label><p>켜면 정식 버전과 베타 버전 중 최신 업데이트를 확인합니다. 끄면 정식 버전만 확인합니다.</p><div class="settings-card-actions"><button id="checkUpdateButton" class="document-action-button" type="button">업데이트 확인</button><button id="reopenReleaseNotesButton" class="document-action-button" type="button" hidden>이번 업데이트 내용</button><button id="promoteStableButton" class="document-action-button" type="button" hidden>최신 정식 버전으로 돌아가기</button><button id="reopenSetupWizardButton" class="document-action-button" type="button">초기 설정 다시 실행</button></div><p id="previousVersion" aria-live="polite">직전 버전 확인 중…</p><div class="settings-card-actions"><button id="rollbackUpdateButton" class="document-action-button" type="button" hidden>직전 버전으로 복구</button><button id="openRecoveryToolButton" class="document-action-button" type="button" hidden>복구 도구 열기</button></div><span id="updateStatus" aria-live="polite"></span></div></section>
               </div>
             </div>
           </section>
@@ -135,7 +135,24 @@
     <div class="work-dialog-card"><strong>현재 작업을 바꿀까요?</strong><p>현재 PDF와 필기를 작업 파일로 저장하거나, 저장하지 않고 새 작업을 열 수 있습니다.</p><div class="work-dialog-actions"><button id="saveAndReplaceButton" class="document-action-button is-primary" type="button">저장하고 열기</button><button id="discardAndReplaceButton" class="document-action-button" type="button">저장 없이 열기</button><button id="cancelReplaceButton" class="document-action-button" type="button">취소</button></div></div>
   </div>
   <div id="driveDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="Google Drive PDF">
-    <div class="work-dialog-card drive-dialog-card"><header><strong>Google Drive PDF</strong><button id="closeDriveDialog" class="work-dialog-close" type="button" aria-label="닫기">×</button></header><p>데스크톱 앱에서 Google 계정으로 연결합니다.</p><div class="drive-actions"><button id="driveConnectButton" class="document-action-button is-primary" type="button">연결 / 목록 새로고침</button><button id="driveSignOutButton" class="document-action-button" type="button">연결 해제</button></div><p id="driveStatus" aria-live="polite">연결되지 않음</p><nav id="driveLocationNav" class="drive-location-nav" hidden aria-label="Google Drive 위치"><div class="drive-location-switch"><button id="driveMyDriveButton" type="button">내 드라이브</button><button id="driveSharedWithMeButton" type="button">공유 문서함</button></div><div id="driveBreadcrumbs" class="drive-breadcrumbs"></div><button id="driveParentButton" class="drive-parent-button" type="button">상위 폴더</button></nav><div id="driveFileList" class="drive-file-list"></div><label>PDF 캐시 한도 <span id="driveCacheLabel"></span><input id="driveCacheLimit" type="range" min="64" max="16384" step="64" value="2048"></label></div>
+    <div class="work-dialog-card drive-dialog-card">
+      <header><strong>Google Drive PDF</strong><button id="closeDriveDialog" class="work-dialog-close" type="button" aria-label="닫기">×</button></header>
+      <p class="drive-intro">데스크톱 앱에서 Google 계정으로 연결합니다.</p>
+      <div class="drive-actions"><button id="driveConnectButton" class="document-action-button is-primary" type="button">Google로 로그인</button><button id="driveSignOutButton" class="document-action-button" type="button">연결 해제</button></div>
+      <p id="driveStatus" aria-live="polite">연결되지 않음</p>
+      <div id="driveBrowser" class="drive-browser" hidden>
+        <aside class="drive-sidebar" aria-label="Drive 폴더 탐색">
+          <div class="drive-location-switch"><button id="driveMyDriveButton" type="button">내 드라이브</button><button id="driveSharedWithMeButton" type="button">공유 문서함</button></div>
+          <p class="drive-tree-caption">현재 경로와 주변 폴더</p>
+          <div id="driveFolderTree" class="drive-folder-tree" aria-label="폴더 경로"></div>
+        </aside>
+        <section class="drive-content" aria-labelledby="driveFolderTitle">
+          <div class="drive-content-heading"><div><h2 id="driveFolderTitle"></h2><div id="driveBreadcrumbs" class="drive-breadcrumbs"></div></div><button id="driveParentButton" class="drive-parent-button" type="button">상위 폴더</button></div>
+          <div id="driveFileList" class="drive-file-list"></div>
+        </section>
+      </div>
+      <label>PDF 캐시 한도 <span id="driveCacheLabel"></span><input id="driveCacheLimit" type="range" min="64" max="16384" step="64" value="2048"></label>
+    </div>
   </div>
   <div id="exportDialog" class="work-dialog is-hidden" role="dialog" aria-modal="true" aria-label="판서 PDF 저장">
     <div class="work-dialog-card"><strong>판서 포함 PDF 저장</strong><p>추가 옵션</p><div class="export-options"><label><input id="exportOutsideInk" type="checkbox"> PDF 바깥 필기도 포함</label><label><input id="exportBlankPages" type="checkbox"> 추가 칠판 페이지도 포함</label></div><div class="work-dialog-actions"><button id="confirmExportButton" class="document-action-button is-primary" type="button">저장</button><button id="cancelExportButton" class="document-action-button" type="button">취소</button></div></div>

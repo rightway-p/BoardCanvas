@@ -4,10 +4,11 @@ export function createDriveLoginFlow({ invoke, onState }) {
   let connected = false;
   let files = [];
   let path = [];
+  let ancestors = [];
   let sharedWithMe = false;
   let warning;
   const toError = (error) => error instanceof Error ? error : new Error(typeof error === "string" ? error : "Google Drive 요청을 완료하지 못했습니다.");
-  const snapshot = () => ({ files, path, sharedWithMe, warning });
+  const snapshot = () => ({ files, path, ancestors, sharedWithMe, warning });
 
   async function listFiles(target, isCurrent) {
     const result = [];
@@ -41,12 +42,12 @@ export function createDriveLoginFlow({ invoke, onState }) {
         if (!isCurrent()) return false;
         if (!status.connected) {
           connected = false;
-          files = []; path = []; sharedWithMe = false;
+          files = []; path = []; ancestors = []; sharedWithMe = false;
           onState({ phase: "needs-login", message: status.message, ...snapshot() });
           return false;
         }
         connected = true;
-        files = []; path = []; sharedWithMe = false;
+        files = []; path = []; ancestors = []; sharedWithMe = false;
         warning = status.warning;
       } else if (action === "signin") {
         onState({ phase: "authenticating", ...snapshot() });
@@ -58,7 +59,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
         }
         if (!isCurrent()) return false;
         connected = true;
-        files = []; path = []; sharedWithMe = false;
+        files = []; path = []; ancestors = []; sharedWithMe = false;
         warning = auth.warning;
       }
 
@@ -69,6 +70,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
         if (!isCurrent()) return false;
         files = nextFiles;
         path = next.path;
+        ancestors = next.ancestors || ancestors;
         sharedWithMe = next.sharedWithMe;
         onState({ phase: "connected", ...snapshot() });
         return true;
@@ -77,7 +79,7 @@ export function createDriveLoginFlow({ invoke, onState }) {
         try {
           const status = await invoke("drive_get_auth_status");
           if (isCurrent() && status.connected === false) {
-            connected = false; files = []; path = []; sharedWithMe = false;
+            connected = false; files = []; path = []; ancestors = []; sharedWithMe = false;
             onState({ phase: "needs-login", message: status.message, ...snapshot() });
             return false;
           }
@@ -92,19 +94,30 @@ export function createDriveLoginFlow({ invoke, onState }) {
     return currentPending;
   }
 
-  const currentTarget = () => ({ path, sharedWithMe });
+  const currentTarget = () => ({ path, ancestors, sharedWithMe });
+  const openFolderAt = (parentDepth, id, name) => {
+    const depth = Math.max(0, Math.min(parentDepth, path.length));
+    const parentListing = depth === path.length ? { path, files } : ancestors[depth];
+    if (!parentListing) return Promise.resolve(false);
+    return run("navigate", {
+      path: [...path.slice(0, depth), { id, name }],
+      ancestors: [...ancestors.slice(0, depth), { files: [...parentListing.files] }],
+      sharedWithMe,
+    });
+  };
   return {
     checkStatus: () => run("status"),
     signIn: () => run("signin"),
     refresh: () => run("refresh", currentTarget()),
-    openFolder: (id, name) => run("navigate", { path: [...path, { id, name }], sharedWithMe }),
-    goToPath: (index) => run("navigate", { path: path.slice(0, index + 1), sharedWithMe }),
-    goToParent: () => run("navigate", { path: path.slice(0, -1), sharedWithMe }),
-    showMyDrive: () => run("navigate", { path: [], sharedWithMe: false }),
-    showSharedWithMe: () => run("navigate", { path: [], sharedWithMe: true }),
+    openFolder: (id, name) => openFolderAt(path.length, id, name),
+    openFolderAt,
+    goToPath: (index) => run("navigate", { path: path.slice(0, index + 1), ancestors: ancestors.slice(0, index + 1), sharedWithMe }),
+    goToParent: () => run("navigate", { path: path.slice(0, -1), ancestors: ancestors.slice(0, -1), sharedWithMe }),
+    showMyDrive: () => run("navigate", { path: [], ancestors: [], sharedWithMe: false }),
+    showSharedWithMe: () => run("navigate", { path: [], ancestors: [], sharedWithMe: true }),
     isBusy: () => Boolean(pending),
     waitForIdle: () => pending ? pending.then(() => undefined) : Promise.resolve(),
     invalidate: () => { generation += 1; },
-    reset: () => { generation += 1; connected = false; files = []; path = []; sharedWithMe = false; warning = undefined; onState({ phase: "needs-login", ...snapshot() }); },
+    reset: () => { generation += 1; connected = false; files = []; path = []; ancestors = []; sharedWithMe = false; warning = undefined; onState({ phase: "needs-login", ...snapshot() }); },
   };
 }

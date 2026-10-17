@@ -1114,20 +1114,50 @@ body {
 .work-dialog-card .export-options { display: grid; gap: 8px; margin: 12px 0; }
 .export-options label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
 .export-options input { width: 20px; height: 20px; flex: 0 0 auto; }
-.drive-dialog-card { width: min(720px, calc(100vw - 32px)); max-height: min(80vh, 680px); overflow: auto; text-align: left; }
+.drive-dialog-card { width: min(960px, calc(100vw - 32px)); height: min(82vh, 760px); min-height: min(520px, calc(100vh - 24px)); display: flex; flex-direction: column; overflow: hidden; text-align: left; }
 .drive-dialog-card > header,.drive-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.drive-file-list { display: flex; flex-direction: column; gap: 5px; max-height: 280px; overflow: auto; margin: 10px 0; }
-.drive-file-list button { padding: 8px; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: white; cursor: pointer; }
-.drive-location-nav { display: grid; min-width: 0; gap: 8px; margin: 10px 0; }
+.drive-intro { flex: 0 0 auto; }
+.drive-actions { flex: 0 0 auto; justify-content: flex-end; }
+.drive-dialog-card .drive-actions button { flex: 0 0 auto; min-height: 36px; padding: 0 12px; }
+.drive-dialog-card .drive-actions button.is-primary { min-height: var(--settings-control-size); padding: 0 var(--space-3); }
+.work-dialog-card > .drive-browser { display: grid; grid-template-columns: minmax(190px, 26%) minmax(0, 1fr); gap: 14px; flex: 1 1 auto; min-width: 0; min-height: 0; margin: 8px 0; }
+.drive-browser[hidden] { display: none !important; }
+.drive-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
 .drive-location-switch { display: flex; flex-wrap: wrap; gap: 6px; }
-.drive-location-nav button { min-height: 36px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
-.drive-location-nav button[aria-current="true"] { border-color: var(--pen-blue); color: var(--pen-blue); }
-.drive-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; min-width: 0; }
-.drive-breadcrumbs button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
-.drive-dialog-card > .drive-file-list { display: flex; flex: 0 1 auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; min-width: 0; }
-.work-dialog-card .drive-file-list button { width: 100%; min-width: 0; flex: 0 0 auto; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.drive-location-switch button { min-height: 36px; flex: 1 1 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.drive-location-switch button[aria-current="page"] { border-color: var(--pen-blue); color: var(--pen-blue); background: var(--surface); font-weight: 650; }
+.drive-folder-tree { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; margin-top: 8px; }
+.drive-tree-caption { flex: 0 0 auto; margin: 8px 4px 0; color: var(--muted); font-size: var(--type-label); }
+.drive-tree-level { display: grid; gap: 2px; }
+.drive-tree-children { margin-left: 6px; padding-left: 6px; border-left: 1px solid var(--line); }
+.drive-tree-folder { width: 100%; min-height: 34px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font: inherit; overflow-wrap: anywhere; cursor: pointer; }
+.drive-tree-folder:hover,.drive-tree-folder.is-current-branch { background: var(--surface); }
+.drive-tree-folder[aria-current="page"] { color: var(--pen-blue); font-weight: 650; box-shadow: inset 3px 0 var(--pen-blue); }
+.drive-tree-empty { margin: 8px; color: var(--muted); font-size: var(--type-label); }
+.drive-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.drive-content-heading { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.drive-content-heading h2 { margin: 0 0 4px; overflow-wrap: anywhere; font-size: 20px; line-height: 1.25; }
+.drive-breadcrumbs { display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 4px 6px; min-width: 0; max-height: 64px; overflow-y: auto; overscroll-behavior: contain; margin-bottom: 8px; color: var(--muted); font-size: var(--type-label); }
+.drive-breadcrumbs button { max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; overflow-wrap: anywhere; text-align: left; cursor: pointer; }
+.drive-breadcrumbs button[aria-current="page"] { color: var(--text); font-weight: 650; cursor: default; }
+.drive-parent-button { flex: 0 0 auto; min-height: 34px; padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.drive-file-list { display: flex; flex: 1 1 auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; min-width: 0; min-height: 100px; overflow: auto; margin: 2px 0 0; border-top: 1px solid var(--line); }
+.drive-file-list button { width: 100%; min-width: 0; flex: 0 0 auto; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--surface); color: var(--text); text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+.drive-file-list button:hover:not(:disabled) { background: var(--surface-soft); }
 .drive-file-list button:disabled { color: var(--muted); cursor: default; }
-.drive-parent-button { justify-self: start; }
+.drive-dialog-card > label { flex: 0 0 auto; margin-top: 8px; }
+.drive-cache-details { flex: 0 0 auto; margin-top: 8px; }
+.drive-cache-details summary { cursor: pointer; }
+@media (max-width: 620px) {
+  .work-dialog-card > .drive-browser { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(76px, 28%) minmax(160px, 1fr); gap: 8px; }
+  .drive-sidebar { padding: 6px; }
+  .drive-folder-tree { margin-top: 4px; }
+  .drive-tree-children { margin-left: 4px; padding-left: 4px; }
+  .drive-content-heading { gap: 6px; }
+  .drive-content-heading h2 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 18px; }
+  .drive-breadcrumbs { max-height: 48px; }
+  .drive-parent-button { padding: 4px 7px; }
+}
 .drive-dialog-card label { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .drive-dialog-card label input { flex-basis: 100%; }
 
@@ -1627,7 +1657,7 @@ body.overlay-mode,
   font-weight: 600;
   cursor: pointer;
 }
-.work-dialog-card .drive-actions button { flex: 1 1 180px; }
+.work-dialog-card .drive-actions button { width: auto; min-width: 0; flex: 0 0 auto; white-space: nowrap; }
 .work-dialog-card .drive-actions button.is-primary,
 .work-dialog-card .work-dialog-actions button.is-primary { border-color: var(--pen-blue); background: var(--pen-blue); color: #fff; }
 .work-dialog-card .drive-file-list button { min-height: var(--settings-control-size); border-radius: var(--radius-card); }

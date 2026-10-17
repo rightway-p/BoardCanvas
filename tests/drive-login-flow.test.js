@@ -167,6 +167,44 @@ test("failed folder navigation retains the last successful path and files", asyn
   assert.deepEqual(state.files, [{ id: "root-pdf", name: "root.pdf", mimeType: "application/pdf" }]);
 });
 
+test("folder-tree siblings target the correct loaded ancestor, including a shared root", async () => {
+  const requests = [];
+  const states = [];
+  const folder = (id, name) => ({ id, name, mimeType: "application/vnd.google-apps.folder" });
+  const flow = await createFlow({
+    invoke: async (command, args = {}) => {
+      requests.push([command, args]);
+      if (command === "drive_authenticate") return { connected: true };
+      if (args.sharedWithMe) return { files: [folder("shared-a", "Shared A"), folder("shared-root-sibling", "Shared sibling")] };
+      if (args.folderId === "shared-a") return { files: [folder("shared-b", "Shared B"), folder("shared-c", "Shared C")] };
+      if (args.folderId === "shared-b" || args.folderId === "shared-c") return { files: [] };
+      if (args.folderId === "root") return { files: [folder("my-a", "My A"), folder("my-root-sibling", "My sibling")] };
+      if (args.folderId === "my-a") return { files: [folder("my-b", "My B"), folder("my-c", "My C")] };
+      return { files: [] };
+    },
+    onState: (state) => states.push(state),
+  });
+
+  await flow.signIn();
+  await flow.openFolder("my-a", "My A");
+  await flow.openFolder("my-b", "My B");
+  await flow.openFolderAt(1, "my-c", "My C");
+  assert.deepEqual(states.at(-1).path.map(({ id }) => id), ["my-a", "my-c"]);
+  assert.deepEqual(states.at(-1).ancestors.map(({ files }) => files.map(({ id }) => id)), [["my-a", "my-root-sibling"], ["my-b", "my-c"]]);
+  await flow.openFolderAt(0, "my-root-sibling", "My sibling");
+  assert.deepEqual(requests.at(-1), ["drive_list_pdfs", { folderId: "my-root-sibling" }]);
+  assert.deepEqual(states.at(-1).path.map(({ id }) => id), ["my-root-sibling"]);
+
+  await flow.showSharedWithMe();
+  await flow.openFolder("shared-a", "Shared A");
+  await flow.openFolder("shared-b", "Shared B");
+  await flow.openFolderAt(1, "shared-c", "Shared C");
+  assert.deepEqual(requests.at(-1), ["drive_list_pdfs", { folderId: "shared-c" }]);
+  assert.deepEqual(states.at(-1).path.map(({ id }) => id), ["shared-a", "shared-c"]);
+  assert.equal(states.at(-1).sharedWithMe, true);
+  assert.deepEqual(states.at(-1).ancestors.map(({ files }) => files.map(({ id }) => id)), [["shared-a", "shared-root-sibling"], ["shared-b", "shared-c"]]);
+});
+
 test("a listing error after sign-in keeps the confirmed session connected", async () => {
   const states = [];
   const flow = await createFlow({
@@ -224,4 +262,5 @@ test("sign-out reset ignores a late folder response and clears the current path"
   assert.equal(await navigation, false);
   assert.equal(states.at(-1).phase, "needs-login");
   assert.deepEqual(states.at(-1).path, []);
+  assert.deepEqual(states.at(-1).ancestors, []);
 });
