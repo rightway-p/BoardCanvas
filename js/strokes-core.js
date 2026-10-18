@@ -71,7 +71,7 @@ function normalizeStrokeCollection(collection) {
     normalized.push({
       kind: sourceStroke.kind === "pixel-eraser" ? "pixel-eraser" : "pen",
       color: normalizeHexColor(sourceStroke.color) || "#111111",
-      widthPx: Math.max(1, Number(sourceStroke.widthPx) || 1),
+      widthPx: positiveStrokeWidth(sourceStroke.widthPx),
       opacity: normalizeStrokeOpacity(sourceStroke.opacity),
       smoothing: sourceStroke.smoothing !== false,
       points,
@@ -85,12 +85,19 @@ function normalizeStrokeCollection(collection) {
   return normalized;
 }
 
+function positiveStrokeWidth(value) {
+  const width = Number(value);
+  return Number.isFinite(width) && width > 0 ? width : 1;
+}
+
 function createStrokeRecord(kind, startPoint) {
   const point = clonePoint(startPoint);
   const sourceWidth = kind === "pixel-eraser"
     ? Number(eraserWidthInput.value)
     : Number(lineWidthInput.value);
-  const widthPx = Math.max(1, sourceWidth * pixelRatio);
+  const widthPx = kind === "pixel-eraser"
+    ? Math.max(1, sourceWidth * pixelRatio)
+    : Math.max(Number.EPSILON, positiveStrokeWidth(sourceWidth) * pixelRatio / positiveStrokeWidth(boardCamera.scale));
 
   return {
     kind,
@@ -126,7 +133,7 @@ function drawStrokePath(stroke, targetContext = ctx) {
   targetContext.globalCompositeOperation = isPixelEraser ? "destination-out" : "source-over";
   targetContext.strokeStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : strokeRgba(stroke.color, stroke.opacity);
   targetContext.fillStyle = isPixelEraser ? "rgba(0, 0, 0, 1)" : strokeRgba(stroke.color, stroke.opacity);
-  targetContext.lineWidth = Math.max(1, Number(stroke.widthPx));
+  targetContext.lineWidth = positiveStrokeWidth(stroke.widthPx);
 
   if (stroke.points.length === 1) {
     const point = stroke.points[0];
@@ -193,7 +200,7 @@ function scaleStrokeCollection(collection, scaleX, scaleY) {
       stroke.maxY = Math.max(stroke.maxY, point.y);
     }
 
-    stroke.widthPx = Math.max(1, stroke.widthPx * widthScale);
+    stroke.widthPx = positiveStrokeWidth(stroke.widthPx * widthScale);
   }
 }
 

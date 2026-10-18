@@ -36,6 +36,64 @@ test("pen and eraser stroke records carry independent opacity", () => {
   assert.equal(context.createStrokeRecord("pixel-eraser", { x: 1, y: 2 }).opacity, 1);
 });
 
+test("new pen widths freeze CSS size at the camera scale while erasers keep their stored units", () => {
+  const context = loadStrokes();
+  for (const pixelRatio of [1, 2]) for (const scale of [0.5, 1, 2, 6]) {
+    context.pixelRatio = pixelRatio;
+    context.boardCamera.scale = scale;
+    for (const opacity of [1, 0.35]) {
+      context.penOpacity = opacity;
+      const pen = context.createStrokeRecord("pen", { x: 2, y: 3 });
+      assert.equal(pen.widthPx, 5 * pixelRatio / scale);
+      assert.equal(pen.opacity, opacity);
+    }
+    assert.equal(context.createStrokeRecord("pixel-eraser", { x: 2, y: 3 }).widthPx, 14 * pixelRatio);
+  }
+});
+
+test("fractional positive stroke widths survive normalize, clone, JSON, and DPR scaling", () => {
+  const context = loadStrokes();
+  const widthPx = 0.25;
+  const stroke = { kind: "pen", color: "#112233", widthPx, points: [{ x: 1, y: 2 }] };
+  const normalized = context.normalizeStrokeCollection(JSON.parse(JSON.stringify([stroke])));
+  assert.equal(normalized[0].widthPx, widthPx);
+  assert.equal(context.cloneStrokeCollection(normalized)[0].widthPx, widthPx);
+  context.scaleStrokeCollection(normalized, 2, 2);
+  assert.equal(normalized[0].widthPx, 0.5);
+  assert.equal(context.normalizeStrokeCollection([{ ...stroke, widthPx: -1 }])[0].widthPx, 1);
+  assert.equal(context.normalizeStrokeCollection([{ ...stroke, widthPx: "bad" }])[0].widthPx, 1);
+});
+
+test("fractional stroke widths survive undo and redo snapshots", () => {
+  const context = loadStrokes();
+  const historySource = fs.readFileSync(path.join(__dirname, "../js/strokes-history.js"), "utf8");
+  const entry = { undo: [], redo: [] };
+  context.strokes = context.normalizeStrokeCollection([{ color: "#112233", widthPx: 0.25, points: [{ x: 1, y: 2 }] }]);
+  context.getOrCreateStrokeHistoryEntry = () => entry;
+  context.pushStrokeSnapshot = (list, snapshot) => list.push(context.cloneStrokeCollection(snapshot));
+  context.replaceVisibleStrokes = (collection) => { context.strokes = context.cloneStrokeCollection(collection); };
+  context.updateUndoRedoUI = () => {};
+  context.redrawAllStrokes = () => {};
+  context.saveCurrentStrokeState = () => {};
+  context.scheduleSessionAutosave = () => {};
+  context.pdfExportInProgress = false;
+  context.drawing = false;
+  context.strokeEraserActive = false;
+  context.sessionRestoreInProgress = false;
+  context.currentBoardPage = () => null;
+  context.hasLoadedPdfDocument = () => false;
+  context.boardStrokeSnapshot = [];
+  vm.runInContext(historySource, context);
+  context.saveUndoSnapshotForCurrentContext();
+  context.strokes = [];
+  assert.equal(context.undoStrokeAction(), true);
+  assert.equal(context.strokes[0].widthPx, 0.25);
+  assert.equal(context.redoStrokeAction(), true);
+  assert.equal(context.strokes.length, 0);
+  assert.equal(context.undoStrokeAction(), true);
+  assert.equal(context.strokes[0].widthPx, 0.25);
+});
+
 test("drawStrokePath preserves legacy curves and renders new raw strokes as lines", () => {
   const context = loadStrokes();
   const calls = [];

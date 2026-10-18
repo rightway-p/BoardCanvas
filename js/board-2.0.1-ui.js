@@ -685,7 +685,7 @@ function updateBoardViewport() {
   setCanvasSize();
 }
 function setPanMode(enabled) {
-  const next = boardInteractionMode === "multi" ? false : Boolean(enabled);
+  const next = navModeLocked || Boolean(enabled);
   if (next !== panMode) finishActiveBoardInput();
   panMode = next;
   if (panMode) tool = "pen";
@@ -694,23 +694,36 @@ function setPanMode(enabled) {
   pageModeToggleButton.setAttribute("aria-label", boardInteractionMode === "multi" ? "자동 터치 · 펜 선택" : panMode ? "패닝 모드 (눌러 펜으로 돌아가기)" : "펜 모드 (눌러 패닝 전환)");
   pageModeToggleButton.title = boardInteractionMode === "multi" ? "펜은 즉시 필기 · 두 손가락으로 화면 조작" : panMode ? "패닝 중 · 눌러 펜으로 돌아가기" : "펜 / 패닝 전환";
   pageModeToggleButton.classList.toggle("is-pan-mode", panMode);
+  penToolButton.disabled = navModeLocked;
+  eraserToolButton.disabled = navModeLocked;
+  pixelEraserModeButton.disabled = navModeLocked;
+  strokeEraserModeButton.disabled = navModeLocked;
   pageModeToggleButton.innerHTML = panMode
     ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12V5a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v8-4a1.5 1.5 0 0 1 3 0v7c0 4-2 6-6 6h-2c-2 0-3.5-1-5-3l-3-4a1.5 1.5 0 0 1 2-2z"></path></svg>'
     : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1.1L19 8.1 15.9 5 5.1 15.8 4 20z"></path><path d="M14.8 6.1l3.1 3.1"></path></svg>';
   updateToolUI();
+}
+function setNavigationModeLock(locked) {
+  navModeLocked = Boolean(locked);
+  if (!navModeLocked) tool = "pen";
+  setPanMode(navModeLocked);
+  navModeLockButton.setAttribute("aria-pressed", String(navModeLocked));
+  navModeLockButton.classList.toggle("is-active", navModeLocked);
+  navModeLockButton.setAttribute("aria-label", navModeLocked ? "탐색 모드 잠금 해제" : "탐색 모드 잠금");
+  navModeLockButton.title = navModeLocked ? "탐색 모드 잠김 · 눌러 펜으로 돌아가기" : "탐색 모드 잠금";
 }
 function setBoardInteractionMode(mode) {
   const next = mode === "multi" ? "multi" : "single";
   if (next === boardInteractionMode) return;
   finishActiveBoardInput();
   boardInteractionMode = next;
-  if (next === "multi") setPanMode(false);
+  if (next === "multi") setPanMode(navModeLocked);
   window.localStorage.setItem(BOARD_INTERACTION_MODE_KEY, next);
   const select = document.getElementById("boardInteractionMode");
   if (select) select.value = next;
 }
 function startPanOrZoomHold(event) {
-  if (!panMode || !event.isPrimary || currentInputPointerId !== null) return false;
+  if ((!panMode && !navModeLocked) || overlayMousePassthrough || !event.isPrimary || currentInputPointerId !== null) return false;
   currentInputPointerId = event.pointerId;
   activePanPointerId = event.pointerId;
   const start = { x: event.clientX, y: event.clientY, camera: { ...boardCamera }, started: false };
@@ -799,6 +812,13 @@ function resetAutomaticTouchSession() {
   if (session.changed) { saveBoardPageView(); scheduleSessionAutosave(); }
   for (const id of session.contacts.keys()) automaticTouchBlockedPointers.add(id);
 }
+function handleLostPointerCapture(event) {
+  if (activePanPointerId === event.pointerId) {
+    endPanOrZoom(event);
+    return;
+  }
+  if (automaticTouchSession?.contacts.has(event.pointerId)) resetAutomaticTouchSession();
+}
 function startAutomaticTouchNavigation(session) {
   const ids = [...session.contacts.keys()].slice(0, 2);
   const first = session.contacts.get(ids[0]).point, second = session.contacts.get(ids[1]).point;
@@ -838,6 +858,7 @@ function queueAutomaticTouchNavigation() {
 }
 function automaticTouchDown(event) {
   if (boardInteractionMode !== "multi") return;
+  if (navModeLocked) return;
   if (event.pointerType !== "touch") {
     if (automaticTouchSession || automaticTouchBlockedPointers.size) {
       markAutomaticTouchEvent(event);
@@ -1230,6 +1251,7 @@ function initBoard201Ui() {
   pageStructureUndoButton.addEventListener("click", () => runPageStructureUndo(false));
   pageStructureRedoButton.addEventListener("click", () => runPageStructureUndo(true));
   fitPageButton.addEventListener("click", fitCurrentBoardPage);
+  navModeLockButton.addEventListener("click", () => setNavigationModeLock(!navModeLocked));
   saveBoardWorkButton.addEventListener("click", () => { void saveBoardWorkFile(); });
   openBoardWorkButton.addEventListener("click", () => { boardWorkInput.value = ""; boardWorkInput.click(); });
   boardWorkInput.addEventListener("change", async () => {
@@ -1249,14 +1271,15 @@ function initBoard201Ui() {
   canvas.addEventListener("pointermove", automaticTouchMove, true);
   canvas.addEventListener("pointerup", automaticTouchEnd, true);
   canvas.addEventListener("pointercancel", automaticTouchEnd, true);
-  canvas.addEventListener("lostpointercapture", (event) => { if (automaticTouchSession?.contacts.has(event.pointerId)) resetAutomaticTouchSession(); }, true);
+  canvas.addEventListener("lostpointercapture", handleLostPointerCapture, true);
   window.addEventListener("resize", resetAutomaticTouchSession);
   window.addEventListener("blur", resetAutomaticTouchSession);
+  window.addEventListener("blur", () => { if (activePanPointerId !== null) endPanOrZoom({ pointerId: activePanPointerId }); });
   document.addEventListener("visibilitychange", () => { if (document.hidden) resetAutomaticTouchSession(); });
-  canvas.addEventListener("pointerdown", (event) => { if (boardInteractionMode === "single" && panMode) { event.preventDefault(); startPanOrZoomHold(event); } });
-  canvas.addEventListener("pointermove", (event) => { if (boardInteractionMode === "single" && panMode && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
-  canvas.addEventListener("pointerup", (event) => { if (boardInteractionMode === "single" && panMode) endPanOrZoom(event); });
-  canvas.addEventListener("pointercancel", (event) => { if (boardInteractionMode === "single" && panMode) endPanOrZoom(event); });
+  canvas.addEventListener("pointerdown", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) { event.preventDefault(); startPanOrZoomHold(event); } });
+  canvas.addEventListener("pointermove", (event) => { if ((navModeLocked || (boardInteractionMode === "single" && panMode)) && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
+  canvas.addEventListener("pointerup", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) endPanOrZoom(event); });
+  canvas.addEventListener("pointercancel", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) endPanOrZoom(event); });
   window.addEventListener("pointerup", releaseAutomaticTouchBlockedPointer);
   window.addEventListener("pointercancel", releaseAutomaticTouchBlockedPointer);
   window.addEventListener("resize", updateBoardViewport);
@@ -1268,7 +1291,7 @@ function initBoard201Ui() {
       { id: "nextPage", label: "다음 페이지", run: () => goToBoardPage(1) },
       { id: "undoInk", label: "필기 취소", run: undoStrokeAction },
       { id: "redoInk", label: "필기 다시 실행", run: redoStrokeAction },
-      { id: "togglePenPan", label: "펜 / 패닝 전환", run: () => setPanMode(boardInteractionMode === "multi" ? false : !panMode) },
+      { id: "togglePenPan", label: "펜 / 패닝 전환", run: () => { if (!navModeLocked) setPanMode(boardInteractionMode === "multi" ? false : !panMode); } },
       { id: "addBlankPage", label: "칠판 페이지 추가", run: addBoardBlankPage }
     ], showHint: (message) => setDocumentStatus(message, "warning") });
     window.BoardRemote.setSettingsContext({ open: false, remote: false });

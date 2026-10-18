@@ -151,6 +151,7 @@ body {
 .app.toolbar-placement-floating .toolbar > #clearButton,
 .app.toolbar-placement-floating .toolbar > #fullscreenToggle,
 .app.toolbar-placement-floating .toolbar > #fitPageButton,
+.app.toolbar-placement-floating .toolbar > #navModeLockButton,
 .app.toolbar-placement-floating .toolbar > #overlayModeToggle,
 .app.toolbar-placement-floating .toolbar > .preset-group,
 .app.toolbar-placement-floating .toolbar > .presentation-page-nav,
@@ -247,10 +248,29 @@ body {
 
 .app.toolbar-placement-left .color-preset,
 .app.toolbar-placement-right .color-preset {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
 }
+.app.toolbar-placement-left .toolbar .color-preset,
+.app.toolbar-placement-right .toolbar .color-preset { width: 28px; height: 28px; min-width: 28px; min-height: 28px; }
+.app.toolbar-placement-left .preset-list,
+.app.toolbar-placement-right .preset-list { gap: 4px; }
+
+.toolbar > #toolbarDragHandle { order: 0; }
+.toolbar > #fitPageButton { order: 1; }
+.toolbar > #navModeLockButton { order: 2; }
+.toolbar > .tool-cluster { order: 3; }
+.toolbar > #currentPenEditor { order: 4; }
+.toolbar > .preset-group { order: 5; }
+.toolbar > #presetHelp { order: 6; }
+.toolbar > #undoButton { order: 7; }
+.toolbar > #redoButton { order: 8; }
+.toolbar > #clearButton { order: 9; }
+.toolbar > .presentation-page-nav { order: 10; }
+.toolbar > #modeLabel { order: 11; }
+.toolbar > #documentEditor { order: 12; }
+.toolbar > #fullscreenToggle { order: 13; }
 
 .app.toolbar-placement-left .toolbar > .control > span,
 .app.toolbar-placement-right .toolbar > .control > span,

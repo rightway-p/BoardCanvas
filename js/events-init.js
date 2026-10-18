@@ -1,4 +1,5 @@
 penToolButton.addEventListener("click", async () => {
+  if (navModeLocked) return;
   if (overlayMousePassthrough) {
     await setOverlayMousePassthrough(false, {
       announce: false,
@@ -16,6 +17,7 @@ penToolButton.addEventListener("click", async () => {
 });
 
 eraserToolButton.addEventListener("click", async (event) => {
+  if (navModeLocked) return;
   event.stopPropagation();
   if (overlayMousePassthrough) {
     await setOverlayMousePassthrough(false, {
@@ -36,6 +38,7 @@ eraserToolButton.addEventListener("click", async (event) => {
 });
 
 pixelEraserModeButton.addEventListener("click", async () => {
+  if (navModeLocked) return;
   if (overlayMousePassthrough) {
     await setOverlayMousePassthrough(false, {
       announce: false,
@@ -50,6 +53,7 @@ pixelEraserModeButton.addEventListener("click", async () => {
 });
 
 strokeEraserModeButton.addEventListener("click", async () => {
+  if (navModeLocked) return;
   if (overlayMousePassthrough) {
     await setOverlayMousePassthrough(false, {
       announce: false,

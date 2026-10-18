@@ -105,7 +105,7 @@ test("interaction mode selection finishes active input and persists one exclusiv
   const setter = source.slice(source.indexOf("function setBoardInteractionMode"), source.indexOf("function startPanOrZoomHold"));
   let finishes = 0;
   const select = { value: "single" };
-  const context = { boardInteractionMode: "single", panMode: false, BOARD_INTERACTION_MODE_KEY: "board.settings.interactionMode.v1", finishActiveBoardInput() { finishes += 1; }, setPanMode(enabled) { this.panMode = enabled; }, window: { localStorage: { setItem(key, value) { this[key] = value; } } }, document: { getElementById: () => select } };
+  const context = { boardInteractionMode: "single", navModeLocked: false, panMode: false, BOARD_INTERACTION_MODE_KEY: "board.settings.interactionMode.v1", finishActiveBoardInput() { finishes += 1; }, setPanMode(enabled) { this.panMode = enabled; }, window: { localStorage: { setItem(key, value) { this[key] = value; } } }, document: { getElementById: () => select } };
   vm.createContext(context); vm.runInContext(setter, context);
   context.setBoardInteractionMode("multi");
   assert.equal(context.boardInteractionMode, "multi");
@@ -583,6 +583,7 @@ test("pen and eraser toolbar handlers keep pan and tool state consistent", async
   const handlers = Object.fromEntries(ids.map((id) => [id, null]));
   const context = {};
   Object.assign(context, {
+    navModeLocked: false,
     overlayMousePassthrough: false,
     panMode: false,
     boardInteractionMode: "single",
@@ -650,6 +651,7 @@ test("two-stage zoom timing, preview isolation, and settings commit/cancel are c
   const nodes = {};
   const context = {
     devSettings: { zoomCueDelayMs: 500, zoomCueShrinkMs: 1500, presetHoldMs: 3000, movementThreshold: 12, zoomSensitivity: 0.008, showTouchOverlay: true },
+    navModeLocked: false, overlayMousePassthrough: false,
     devMode: false, panMode: true, currentInputPointerId: null, activePanPointerId: null, pendingZoomHold: null, zoomGesture: null,
     boardCamera: { x: 1, y: 2, scale: 1 }, devTouch: null, devTouchTimer: null, devTicker: null, zoomCueTimer: null,
     window: { setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, clearInterval() {}, localStorage: { setItem(k, v) { this[k] = v; }, getItem(k) { return this[k] || null; } } },

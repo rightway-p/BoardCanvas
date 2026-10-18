@@ -589,8 +589,8 @@ function applyCurrentBrush() {
   ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
   ctx.strokeStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
   ctx.fillStyle = tool === "eraser" ? "rgba(0, 0, 0, 1)" : strokeRgba(penColorInput.value, penOpacity);
-  const width = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
-  ctx.lineWidth = Math.max(1, width * pixelRatio);
+  const width = tool === "eraser" ? Number(eraserWidthInput.value) * pixelRatio : activeStroke?.widthPx;
+  ctx.lineWidth = tool === "eraser" ? Math.max(1, width) : (Number.isFinite(width) && width > 0 ? width : 1);
 }
 
 function redrawVisibleStrokesWithActive() {
@@ -776,9 +776,9 @@ function stopDrawing(event) {
   if (!hasStrokeMoved && lastPoint) {
     ctx.setTransform(boardCamera.scale, 0, 0, boardCamera.scale, pixelRatio * boardCamera.x, pixelRatio * boardCamera.y);
     applyCurrentBrush();
-    const dotWidth = tool === "eraser" ? Number(eraserWidthInput.value) : Number(lineWidthInput.value);
     ctx.beginPath();
-    ctx.arc(lastPoint.x, lastPoint.y, Math.max(1, (dotWidth * pixelRatio) / 2), 0, Math.PI * 2);
+    const dotWidth = tool === "eraser" ? Math.max(1, Number(eraserWidthInput.value) * pixelRatio) : activeStroke.widthPx;
+    ctx.arc(lastPoint.x, lastPoint.y, dotWidth / 2, 0, Math.PI * 2);
     ctx.fill();
   }
 

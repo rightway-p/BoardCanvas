@@ -256,7 +256,7 @@ function renderPenPresets() {
       saveCurrentPenPreset(index);
     });
 
-    if (index >= 4) {
+    if (index >= 6) {
       button.hidden = true;
       extraButtons.push(button);
     } else {

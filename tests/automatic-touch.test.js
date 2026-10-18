@@ -25,7 +25,7 @@ function harness(overrides = {}) {
     releasePointerCapture(id) { captures.delete(id); },
   };
   const context = {
-    boardInteractionMode: "multi", automaticTouchSession: null, automaticTouchBlockedPointers: new Set(), automaticTouchFrame: 0,
+    boardInteractionMode: "multi", navModeLocked: false, automaticTouchSession: null, automaticTouchBlockedPointers: new Set(), automaticTouchFrame: 0,
     currentInputPointerId: null, drawing: false, hasStrokeMoved: false, strokeEraserActive: false, strokeEraserPointerId: null,
     tool: "pen", overlayMousePassthrough: false, panMode: false, devSettings: BoardState.normalizeAutomaticTouchSettings({}),
     BoardState, canvas, boardWrapper: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, boardCamera: { x: 0, y: 0, scale: 1 },

@@ -9,9 +9,11 @@ const range = (start, end) => source.slice(source.indexOf(start), source.indexOf
 const strokeRange = (start, end) => strokesSource.slice(strokesSource.indexOf(start), strokesSource.indexOf(end, strokesSource.indexOf(start)));
 const productionFunctions = [
   range("function setCanvasSize", "function getCanvasPoint"),
+  range("function applyCurrentBrush", "function redrawVisibleStrokesWithActive"),
   range("function redrawVisibleStrokesWithActive", "function appendRawPoint"),
   range("function appendRawPoint", "function processDrawFrame"),
   range("function stopDrawing", "function discardDrawingForTouchTakeover"),
+  strokeRange("function positiveStrokeWidth", "function createStrokeRecord"),
   strokeRange("function normalizeStrokeOpacity", "function cloneStroke"),
   strokeRange("function drawStrokePath", "function redrawAllStrokes"),
 ].join("\n");
@@ -37,9 +39,10 @@ function harness(pixelRatio, penOpacity = 1, tool = "pen") {
     ctx, boardCamera: camera, pixelRatio, penOpacity, tool, drawing: true, hasStrokeMoved: false,
     quality: { maxPointsPerFrame: 48, frameBudgetMs: 6 }, frameCostAverage: 0,
     pendingQualityResize: false, setCanvasSize() {},
-    pendingPoints: [], pendingHead: 0, frameRequested: false, activeStroke: { smoothing: false, points: [] },
+    pendingPoints: [], pendingHead: 0, frameRequested: false, activeStroke: { widthPx: (tool === "pen" ? 4 * pixelRatio / camera.scale : 10 * pixelRatio), smoothing: false, points: [] },
     lastPoint: null, strokes: [], MAX_QUEUE_POINTS: 320,
     lineWidthInput: { value: "4" }, eraserWidthInput: { value: "10" },
+    penColorInput: { value: "#111111" }, strokeRgba: () => "rgba(0, 0, 0, 1)",
     canvas: { width: 2000, height: 1600, hasPointerCapture: () => false, releasePointerCapture() {} },
     performance: { now: () => 0 }, window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {} },
     processDrawFrame() {},
@@ -164,7 +167,8 @@ test("terminal pen and pixel-eraser dots use the same camera transform as commit
       app.activeStroke.points = [{ ...app.lastPoint }];
       app.stopDrawing({ type: "pointercancel", pointerId: 1 });
       assertPoint(app.arcs[0], { x: 400 * pixelRatio, y: 400 * pixelRatio });
-      assert.ok(Math.abs(app.arcs[0].radius - (Number(tool === "pen" ? app.lineWidthInput.value : app.eraserWidthInput.value) * pixelRatio * 1.5) / 2) < 1e-8);
+      const expectedRadius = Number(tool === "pen" ? app.lineWidthInput.value : app.eraserWidthInput.value) * pixelRatio * (tool === "pen" ? 1 : 1.5) / 2;
+      assert.ok(Math.abs(app.arcs[0].radius - expectedRadius) < 1e-8);
     }
   }
 });

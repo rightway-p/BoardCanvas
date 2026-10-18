@@ -12,7 +12,8 @@
     if (!includeOutsideInk) return bounds;
     for (const stroke of strokes || []) {
       if (!stroke || !Array.isArray(stroke.points)) continue;
-      const radius = Math.max(1, Number(stroke.widthPx) || 1) / 2;
+      const width = Number(stroke.widthPx);
+      const radius = (Number.isFinite(width) && width > 0 ? width : 1) / 2;
       for (const point of stroke.points) {
         const x = Number(point && point.x), y = Number(point && point.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
