@@ -252,6 +252,45 @@ test("coalesced out-and-back motion permanently locks the first touch to ink", (
   assert.equal(second.boardTouchHandled, true);
 });
 
+test("navigation lock lets the first multi-touch contact begin ink immediately", () => {
+  const app = harness({ navModeLocked: true });
+  const first = pointer(1, "touch", "pointerdown");
+  app.automaticTouchDown(first);
+  app.handlePointerDown(first);
+  assert.equal(first.boardTouchHandled, undefined);
+  assert.equal(first.prevented, undefined);
+  assert.equal(app.automaticTouchSession, null);
+  assert.equal(app.currentInputPointerId, 1);
+  assert.equal(app.drawing, true);
+
+  const second = pointer(2, "touch", "pointerdown", 140, 100);
+  app.automaticTouchDown(second);
+  app.handlePointerDown(second);
+  assert.equal(second.boardTouchHandled, undefined);
+  assert.equal(app.currentInputPointerId, 1);
+  assert.equal(app.drawing, true);
+});
+
+test("queued automatic navigation frame cannot move camera after locking", () => {
+  let cameraApplications = 0;
+  const app = harness({
+    navModeLocked: true,
+    automaticTouchFrame: 12,
+    automaticTouchSession: {
+      phase: "navigation", changed: false,
+      pair: { ids: [1, 2], initialCenter: { x: 120, y: 100 }, initialSeparation: 40, anchor: { x: 120, y: 100 }, startCamera: { x: 0, y: 0, scale: 1 }, mode: "pan" },
+      contacts: new Map([[1, { point: { x: 130, y: 100 } }], [2, { point: { x: 170, y: 100 } }]]),
+    },
+    applyBoardCamera() { cameraApplications += 1; },
+  });
+  app.applyAutomaticTouchNavigation();
+  assert.equal(app.boardCamera.x, 0);
+  assert.equal(app.boardCamera.y, 0);
+  assert.equal(app.boardCamera.scale, 1);
+  assert.equal(cameraApplications, 0);
+  assert.equal(app.automaticTouchFrame, 0);
+});
+
 test("navigation redraws on the return frame and ignored third contacts cannot become ink", () => {
   let cameraApplications = 0;
   const app = harness({ applyBoardCamera() { cameraApplications += 1; } });

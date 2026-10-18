@@ -3,7 +3,7 @@ const http = require("node:http");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const outputDir = path.join(root, "tmp", "screen-pen-toolbar");
+const outputDir = path.resolve(process.env.BOARD_TOOLBAR_TEST_OUTPUT || path.join(root, "tmp", "screen-pen-toolbar"));
 const playwrightPath = process.env.PLAYWRIGHT_MODULE || "playwright";
 const playwright = require(playwrightPath);
 const palettes = ["#111111", "#ffffff", "#e53935", "#1e88e5", "#43a047", "#fb8c00"]
@@ -153,7 +153,7 @@ async function main() {
     await manyPage.locator(".pen-preset-more").click();
     await manyPage.locator('.pen-preset-overflow-popover [aria-label="pen preset 20"]').click();
     const lockedAfterExtra = await manyPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, tool, width: Number(lineWidthInput.value) }));
-    if (!lockedAfterExtra.locked || !lockedAfterExtra.pan || lockedAfterExtra.tool !== "pen" || lockedAfterExtra.width !== 11) manyErrors.push(`overflow click cleared lock: ${JSON.stringify(lockedAfterExtra)}`);
+    if (!lockedAfterExtra.locked || lockedAfterExtra.pan || lockedAfterExtra.tool !== "pen" || lockedAfterExtra.width !== 11) manyErrors.push(`overflow click changed gesture lock: ${JSON.stringify(lockedAfterExtra)}`);
     await manyContext.close();
     const compactContext = await browser.newContext({ viewport: { width: 1280, height: 600 }, deviceScaleFactor: 1 });
     await compactContext.addInitScript(({ presets }) => { localStorage.setItem("board.pen.presets.v1", JSON.stringify(presets)); localStorage.setItem("board.setup-wizard.completed.v1", "true"); }, { presets: many });
@@ -184,38 +184,40 @@ async function main() {
     await log("lexical-state", async () => interactionPage.evaluate(() => ({ navModeLocked, panMode, tool, scale: boardCamera.scale, hasBoardState: !!BoardState })));
     await log("lock-ui", async () => {
       await interactionPage.locator("#navModeLockButton").click();
-      const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, aria: navModeLockButton.getAttribute("aria-pressed"), penDisabled: penToolButton.disabled, eraserDisabled: eraserToolButton.disabled, tool }));
-      if (!state.locked || !state.pan || state.aria !== "true" || !state.penDisabled || !state.eraserDisabled || state.tool !== "pen") throw new Error(JSON.stringify(state));
+      const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, aria: navModeLockButton.getAttribute("aria-pressed"), label: navModeLockButton.getAttribute("aria-label"), penDisabled: penToolButton.disabled, eraserDisabled: eraserToolButton.disabled, tool }));
+      if (!state.locked || state.pan || state.aria !== "true" || state.label !== "줌·패닝 잠금 해제" || state.penDisabled || state.eraserDisabled || state.tool !== "pen") throw new Error(JSON.stringify(state));
       return state;
     });
-    await log("locked-pan-no-ink", async () => {
+    await log("locked-drag-draws-without-moving-camera", async () => {
       const before = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length }));
       const rect = await interactionPage.locator("#board").boundingBox();
       const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
       await interactionPage.mouse.move(x, y);
       await interactionPage.mouse.down();
       await interactionPage.mouse.move(x + 110, y + 60, { steps: 3 });
-      const during = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, trusted: window.__toolbarTrustedPointer }));
       await interactionPage.mouse.up();
-      const after = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, active: activePanPointerId, pointer: currentInputPointerId }));
-      if (Math.hypot(during.camera.x - before.camera.x, during.camera.y - before.camera.y) < 10 || during.strokes !== before.strokes || after.strokes !== before.strokes || !after.locked || after.active !== null || after.pointer !== null) throw new Error(JSON.stringify({ before, during, after }));
-      return { before, during, after };
+      const after = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, pan: panMode, active: activePanPointerId, pointer: currentInputPointerId }));
+      if (Math.hypot(after.camera.x - before.camera.x, after.camera.y - before.camera.y) > 0.01 || after.strokes <= before.strokes || !after.locked || after.pan || after.active !== null || after.pointer !== null) throw new Error(JSON.stringify({ before, after }));
+      return { before, after };
     });
-    await log("cancel-and-blur-release", async () => {
+    await log("locking-cancels-active-navigation", async () => {
+      await interactionPage.evaluate(() => { setNavigationModeLock(false); setBoardInteractionMode("single"); setPanMode(true); });
       const rect = await interactionPage.locator("#board").boundingBox();
       const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
       await interactionPage.mouse.move(x, y); await interactionPage.mouse.down();
-      await interactionPage.evaluate(() => { const id = activePanPointerId; canvas.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: id, pointerType: "mouse", isPrimary: true })); });
-      const cancel = await interactionPage.evaluate(() => ({ active: activePanPointerId, input: currentInputPointerId, locked: navModeLocked, capture: canvas.hasPointerCapture(1) }));
+      const before = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, locked: navModeLocked, active: activePanPointerId }));
+      const state = await interactionPage.evaluate(() => {
+        setNavigationModeLock(true);
+        const afterLock = { locked: navModeLocked, pan: panMode, active: activePanPointerId, input: currentInputPointerId };
+        const continued = continuePanOrZoom({ pointerId: 1, clientX: 120, clientY: 130 });
+        return { afterLock, continued, camera: { ...boardCamera } };
+      });
       await interactionPage.mouse.up();
-      await interactionPage.mouse.down();
-      await interactionPage.evaluate(() => window.dispatchEvent(new Event("blur")));
-      const blur = await interactionPage.evaluate(() => ({ active: activePanPointerId, input: currentInputPointerId, locked: navModeLocked }));
-      await interactionPage.mouse.up();
-      if (cancel.active !== null || cancel.input !== null || !cancel.locked || blur.active !== null || blur.input !== null || !blur.locked) throw new Error(JSON.stringify({ cancel, blur }));
-      return { cancel, blur };
+      if (before.locked || before.active !== 1 || !state.afterLock.locked || state.afterLock.pan || state.afterLock.active !== null || state.afterLock.input !== null || state.continued || Math.hypot(state.camera.x - before.camera.x, state.camera.y - before.camera.y) > 0.01) throw new Error(JSON.stringify({ before, state }));
+      return state;
     });
     await log("lostpointercapture-recovery", async () => {
+      await interactionPage.evaluate(() => { setNavigationModeLock(false); setBoardInteractionMode("single"); setPanMode(true); });
       await interactionPage.evaluate(() => {
         window.__lostCaptureSeen = []; window.__gotCaptureSeen = [];
         canvas.addEventListener("gotpointercapture", (event) => window.__gotCaptureSeen.push({ id: event.pointerId, trusted: event.isTrusted }));
@@ -238,38 +240,38 @@ async function main() {
       await interactionPage.mouse.down();
       await interactionPage.mouse.move(x + 50, y + 20, { steps: 2 });
       await interactionPage.mouse.up();
-      const next = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, active: activePanPointerId, input: currentInputPointerId, locked: navModeLocked, tool, strokes: strokes.length }));
-      if (!gotCaptureEvents.some((event) => event.trusted && event.id === 1) || !hasCaptureBeforeRelease || nativeLostEvents === 0 || lost.active !== null || lost.input !== null || !lost.locked || next.active !== null || next.input !== null || !next.locked || next.tool !== "pen" || next.strokes !== beforeNext.strokes || Math.hypot(next.camera.x - beforeNext.camera.x, next.camera.y - beforeNext.camera.y) < 10) throw new Error(JSON.stringify({ lost, beforeNext, next }));
+      const next = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, active: activePanPointerId, input: currentInputPointerId, locked: navModeLocked, pan: panMode, tool, strokes: strokes.length }));
+      if (!gotCaptureEvents.some((event) => event.trusted && event.id === 1) || !hasCaptureBeforeRelease || nativeLostEvents === 0 || lost.active !== null || lost.input !== null || lost.locked || next.active !== null || next.input !== null || next.locked || !next.pan || next.tool !== "pen" || next.strokes !== beforeNext.strokes || Math.hypot(next.camera.x - beforeNext.camera.x, next.camera.y - beforeNext.camera.y) < 10) throw new Error(JSON.stringify({ lost, beforeNext, next }));
       return { lost, beforeNext, next };
     });
-    await log("fit-page-remains-locked", async () => { await interactionPage.locator("#fitPageButton").click(); const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, aria: navModeLockButton.getAttribute("aria-pressed") })); if (!state.locked || !state.pan || state.aria !== "true") throw new Error(JSON.stringify(state)); return state; });
-    await log("locked-multi-pan-remains-locked", async () => {
+    await log("fit-page-remains-locked", async () => { await interactionPage.evaluate(() => setNavigationModeLock(true)); await interactionPage.locator("#fitPageButton").click(); const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, aria: navModeLockButton.getAttribute("aria-pressed") })); if (!state.locked || state.pan || state.aria !== "true") throw new Error(JSON.stringify(state)); return state; });
+    await log("locked-multi-pointer-draws-without-navigation", async () => {
       await interactionPage.evaluate(() => setBoardInteractionMode("multi"));
       const before = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked }));
       const rect = await interactionPage.locator("#board").boundingBox(); const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
       await interactionPage.mouse.move(x, y); await interactionPage.mouse.down(); await interactionPage.mouse.move(x + 40, y + 15, { steps: 2 }); await interactionPage.mouse.up();
       const after = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, pan: panMode }));
-      if (!before.locked || !after.locked || !after.pan || after.strokes !== before.strokes || Math.abs(after.camera.x - before.camera.x) < 10) throw new Error(JSON.stringify({ before, after }));
+      if (!before.locked || !after.locked || after.pan || after.strokes <= before.strokes || Math.hypot(after.camera.x - before.camera.x, after.camera.y - before.camera.y) > 0.01) throw new Error(JSON.stringify({ before, after }));
       return { before, after };
     });
-    await log("locked-hold-zoom-existing-timing", async () => {
+    await log("locked-hold-does-not-zoom", async () => {
       const timing = await interactionPage.evaluate(() => devSettings.zoomCueDelayMs + devSettings.zoomCueShrinkMs);
       const rect = await interactionPage.locator("#board").boundingBox(); const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
       const before = await interactionPage.evaluate(() => ({ ...boardCamera }));
       await interactionPage.mouse.move(x, y); await interactionPage.mouse.down(); await interactionPage.waitForTimeout(timing + 100); await interactionPage.mouse.move(x, y - 50, { steps: 2 }); await interactionPage.mouse.up();
       const after = await interactionPage.evaluate(() => ({ ...boardCamera }));
       const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, strokes: strokes.length }));
-      if (Math.abs(after.scale - before.scale) < 0.05 || !state.locked || !state.pan || state.strokes !== 0) throw new Error(JSON.stringify({ timing, before, after, state }));
+      if (Math.abs(after.scale - before.scale) > 0.01 || !state.locked || state.pan || state.strokes === 0) throw new Error(JSON.stringify({ timing, before, after, state }));
       return { timing, before, after, state };
     });
-    await log("locked-preset-and-remote-nav", async () => {
+    await log("locked-tools-and-page-actions-remain-available", async () => {
       await interactionPage.locator("#penPresets .pen-preset").first().click();
       await interactionPage.evaluate(() => { BoardRemote.setMappings([{ actionId: "nextPage", code: "KeyN" }]); BoardRemote.handleKeyEvent(new KeyboardEvent("keydown", { code: "KeyN", key: "n", bubbles: true })); addBoardBlankPage(); });
       const state = await interactionPage.evaluate(() => ({ locked: navModeLocked, pan: panMode, tool, pages: boardPageSequence.length }));
-      if (!state.locked || !state.pan || state.tool !== "pen" || state.pages < 2) throw new Error(JSON.stringify(state));
+      if (!state.locked || state.pan || state.tool !== "pen" || state.pages < 2) throw new Error(JSON.stringify(state));
       return state;
     });
-    await log("locked-pen-pointer", async () => {
+    await log("locked-pen-pointer-draws-without-navigation", async () => {
       const cdp = await interactionContext.newCDPSession(interactionPage);
       const rect = await interactionPage.locator("#board").boundingBox(); const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
       const before = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length }));
@@ -278,8 +280,22 @@ async function main() {
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x + 50, y: y + 20, button: "left", buttons: 1, pointerType: "pen" });
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + 50, y: y + 20, button: "left", buttons: 0, pointerType: "pen" });
       const after = await interactionPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, pan: panMode }));
-      if (!after.locked || !after.pan || after.strokes !== before.strokes || Math.abs(after.camera.x - before.camera.x) < 10) throw new Error(JSON.stringify({ before, after }));
+      if (!after.locked || after.pan || after.strokes <= before.strokes || Math.hypot(after.camera.x - before.camera.x, after.camera.y - before.camera.y) > 0.01) throw new Error(JSON.stringify({ before, after }));
       return { before, after };
+    });
+    await log("locked-eraser-still-erases", async () => {
+      const cdp = await interactionContext.newCDPSession(interactionPage);
+      const rect = await interactionPage.locator("#board").boundingBox(); const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      const before = await interactionPage.locator("#board").evaluate((canvas) => canvas.toDataURL());
+      await interactionPage.locator("#eraserTool").click();
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, pointerType: "pen" });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, pointerType: "pen" });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x + 50, y: y + 20, button: "left", buttons: 1, pointerType: "pen" });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + 50, y: y + 20, button: "left", buttons: 0, pointerType: "pen" });
+      const after = await interactionPage.locator("#board").evaluate((canvas) => canvas.toDataURL());
+      const state = await interactionPage.evaluate(() => ({ tool, locked: navModeLocked, pan: panMode, eraserDisabled: eraserToolButton.disabled }));
+      if (before === after || state.tool !== "eraser" || !state.locked || state.pan || state.eraserDisabled) throw new Error(JSON.stringify(state));
+      return state;
     });
     await log("unlock-restores-pen", async () => {
       await interactionPage.locator("#navModeLockButton").click();
@@ -368,14 +384,14 @@ async function main() {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: tx + 80, y: ty + 45, id: 1 }] });
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const touchAfter = await touchPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, active: activePanPointerId, input: currentInputPointerId }));
-    if (Math.hypot(touchAfter.camera.x - touchBefore.camera.x, touchAfter.camera.y - touchBefore.camera.y) < 10 || touchAfter.strokes !== touchBefore.strokes || !touchAfter.locked || touchAfter.active !== null || touchAfter.input !== null) touchErrors.push(`locked single-touch pan: ${JSON.stringify({ touchBefore, touchAfter })}`);
+    if (Math.hypot(touchAfter.camera.x - touchBefore.camera.x, touchAfter.camera.y - touchBefore.camera.y) > 0.01 || Math.abs(touchAfter.camera.scale - touchBefore.camera.scale) > 0.01 || touchAfter.strokes <= touchBefore.strokes || !touchAfter.locked || touchAfter.active !== null || touchAfter.input !== null) touchErrors.push(`locked single-touch ink/freeze: ${JSON.stringify({ touchBefore, touchAfter })}`);
     await touchPage.evaluate(() => setBoardInteractionMode("multi"));
     const lockedMultiBefore = await touchPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length }));
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: tx, y: ty, id: 2 }] });
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: tx + 60, y: ty + 20, id: 2 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: tx, y: ty, id: 2 }, { x: tx + 100, y: ty, id: 3 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: tx - 20, y: ty, id: 2 }, { x: tx + 140, y: ty, id: 3 }] });
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const lockedMultiAfter = await touchPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length, locked: navModeLocked, active: activePanPointerId, input: currentInputPointerId }));
-    if (Math.hypot(lockedMultiAfter.camera.x - lockedMultiBefore.camera.x, lockedMultiAfter.camera.y - lockedMultiBefore.camera.y) < 10 || lockedMultiAfter.strokes !== lockedMultiBefore.strokes || !lockedMultiAfter.locked || lockedMultiAfter.active !== null || lockedMultiAfter.input !== null) touchErrors.push(`locked multi-touch pan: ${JSON.stringify({ lockedMultiBefore, lockedMultiAfter })}`);
+    if (Math.hypot(lockedMultiAfter.camera.x - lockedMultiBefore.camera.x, lockedMultiAfter.camera.y - lockedMultiBefore.camera.y) > 0.01 || Math.abs(lockedMultiAfter.camera.scale - lockedMultiBefore.camera.scale) > 0.01 || lockedMultiAfter.strokes <= lockedMultiBefore.strokes || !lockedMultiAfter.locked || lockedMultiAfter.active !== null || lockedMultiAfter.input !== null) touchErrors.push(`locked multi-touch ink/freeze: ${JSON.stringify({ lockedMultiBefore, lockedMultiAfter })}`);
     await touchPage.evaluate(() => setNavigationModeLock(false));
     const autoBefore = await touchPage.evaluate(() => ({ camera: { ...boardCamera }, strokes: strokes.length }));
     const ax = tx - 80, ay = ty;
@@ -388,7 +404,7 @@ async function main() {
     if (Math.abs(autoAfter.camera.scale - autoBefore.camera.scale) < 0.05 || autoAfter.strokes !== autoBefore.strokes || autoAfter.locked || autoAfter.mode !== "multi") touchErrors.push(`unlocked automatic two-touch zoom: ${JSON.stringify({ autoBefore, autoAfter })}`);
     await touchContext.close();
     fs.writeFileSync(path.join(outputDir, "touch-results.json"), JSON.stringify({ touchErrors }, null, 2));
-    console.log(`${touchErrors.length ? "FAIL" : "PASS"} native-touch ${touchErrors.length ? touchErrors.join("; ") : "locked single pan and unlocked multi-touch zoom"}`);
+    console.log(`${touchErrors.length ? "FAIL" : "PASS"} native-touch ${touchErrors.length ? touchErrors.join("; ") : "locked touch ink/freeze and unlocked multi-touch zoom"}`);
     failures.push(...touchErrors.map((error) => `touch: ${error}`));
   } finally {
     if (browser) await browser.close();

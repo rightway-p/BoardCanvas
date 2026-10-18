@@ -259,16 +259,16 @@ body {
 
 .toolbar > #toolbarDragHandle { order: 0; }
 .toolbar > #fitPageButton { order: 1; }
-.toolbar > #navModeLockButton { order: 2; }
-.toolbar > .tool-cluster { order: 3; }
+.toolbar > .tool-cluster { order: 2; }
+.toolbar > #clearButton { order: 3; }
 .toolbar > #currentPenEditor { order: 4; }
 .toolbar > .preset-group { order: 5; }
 .toolbar > #presetHelp { order: 6; }
 .toolbar > #undoButton { order: 7; }
 .toolbar > #redoButton { order: 8; }
-.toolbar > #clearButton { order: 9; }
-.toolbar > .presentation-page-nav { order: 10; }
-.toolbar > #modeLabel { order: 11; }
+.toolbar > .presentation-page-nav { order: 9; }
+.toolbar > #modeLabel { order: 10; }
+.toolbar > #navModeLockButton { order: 11; }
 .toolbar > #documentEditor { order: 12; }
 .toolbar > #fullscreenToggle { order: 13; }
 

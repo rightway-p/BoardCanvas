@@ -742,7 +742,7 @@ function updateBoardViewport() {
   setCanvasSize();
 }
 function setPanMode(enabled) {
-  const next = navModeLocked || Boolean(enabled);
+  const next = navModeLocked ? false : Boolean(enabled);
   if (next !== panMode) finishActiveBoardInput();
   panMode = next;
   if (panMode) tool = "pen";
@@ -751,23 +751,25 @@ function setPanMode(enabled) {
   pageModeToggleButton.setAttribute("aria-label", boardInteractionMode === "multi" ? "자동 터치 · 펜 선택" : panMode ? "패닝 모드 (눌러 펜으로 돌아가기)" : "펜 모드 (눌러 패닝 전환)");
   pageModeToggleButton.title = boardInteractionMode === "multi" ? "펜은 즉시 필기 · 두 손가락으로 화면 조작" : panMode ? "패닝 중 · 눌러 펜으로 돌아가기" : "펜 / 패닝 전환";
   pageModeToggleButton.classList.toggle("is-pan-mode", panMode);
-  penToolButton.disabled = navModeLocked;
-  eraserToolButton.disabled = navModeLocked;
-  pixelEraserModeButton.disabled = navModeLocked;
-  strokeEraserModeButton.disabled = navModeLocked;
   pageModeToggleButton.innerHTML = panMode
     ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12V5a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v8-4a1.5 1.5 0 0 1 3 0v7c0 4-2 6-6 6h-2c-2 0-3.5-1-5-3l-3-4a1.5 1.5 0 0 1 2-2z"></path></svg>'
     : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1.1L19 8.1 15.9 5 5.1 15.8 4 20z"></path><path d="M14.8 6.1l3.1 3.1"></path></svg>';
   updateToolUI();
 }
 function setNavigationModeLock(locked) {
-  navModeLocked = Boolean(locked);
+  const next = Boolean(locked);
+  if (next !== navModeLocked) {
+    if (panMode) setPanMode(false);
+    else finishActiveBoardInput();
+  }
+  navModeLocked = next;
   if (!navModeLocked) tool = "pen";
-  setPanMode(navModeLocked);
+  setPanMode(false);
   navModeLockButton.setAttribute("aria-pressed", String(navModeLocked));
   navModeLockButton.classList.toggle("is-active", navModeLocked);
-  navModeLockButton.setAttribute("aria-label", navModeLocked ? "탐색 모드 잠금 해제" : "탐색 모드 잠금");
-  navModeLockButton.title = navModeLocked ? "탐색 모드 잠김 · 눌러 펜으로 돌아가기" : "탐색 모드 잠금";
+  navModeLockButton.setAttribute("aria-label", navModeLocked ? "줌·패닝 잠금 해제" : "줌·패닝 잠금");
+  navModeLockButton.title = navModeLocked ? "줌·패닝 잠금 해제" : "줌·패닝 잠금";
+  updateToolUI();
 }
 function setBoardInteractionMode(mode) {
   const next = mode === "multi" ? "multi" : "single";
@@ -780,7 +782,7 @@ function setBoardInteractionMode(mode) {
   if (select) select.value = next;
 }
 function startPanOrZoomHold(event) {
-  if ((!panMode && !navModeLocked) || overlayMousePassthrough || !event.isPrimary || currentInputPointerId !== null) return false;
+  if (navModeLocked || !panMode || overlayMousePassthrough || !event.isPrimary || currentInputPointerId !== null) return false;
   currentInputPointerId = event.pointerId;
   activePanPointerId = event.pointerId;
   const start = { x: event.clientX, y: event.clientY, camera: { ...boardCamera }, started: false };
@@ -808,7 +810,7 @@ function canvasPointFromClient(clientX, clientY) {
   return { x: clientX - rect.left, y: clientY - rect.top };
 }
 function continuePanOrZoom(event) {
-  if (activePanPointerId !== event.pointerId || !pendingZoomHold) return false;
+  if (navModeLocked || activePanPointerId !== event.pointerId || !pendingZoomHold) return false;
   const dx = event.clientX - pendingZoomHold.x, dy = event.clientY - pendingZoomHold.y;
   if (!pendingZoomHold.started && Math.hypot(dx, dy) > devSettings.movementThreshold) {
     window.clearTimeout(devTouchTimer); window.clearTimeout(zoomCueTimer); devTouchTimer = null; zoomCueTimer = null; pendingZoomHold.started = false;
@@ -877,6 +879,7 @@ function handleLostPointerCapture(event) {
   if (automaticTouchSession?.contacts.has(event.pointerId)) resetAutomaticTouchSession();
 }
 function startAutomaticTouchNavigation(session) {
+  if (navModeLocked) return;
   const ids = [...session.contacts.keys()].slice(0, 2);
   const first = session.contacts.get(ids[0]).point, second = session.contacts.get(ids[1]).point;
   const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
@@ -890,7 +893,7 @@ function startAutomaticTouchNavigation(session) {
 function applyAutomaticTouchNavigation() {
   automaticTouchFrame = 0;
   const session = automaticTouchSession, pair = session && session.pair;
-  if (!session || session.phase !== "navigation" || !pair) return;
+  if (navModeLocked || !session || session.phase !== "navigation" || !pair) return;
   const first = session.contacts.get(pair.ids[0])?.point, second = session.contacts.get(pair.ids[1])?.point;
   if (!first || !second) return;
   const previousCamera = boardCamera;
@@ -1333,10 +1336,10 @@ function initBoard201Ui() {
   window.addEventListener("blur", resetAutomaticTouchSession);
   window.addEventListener("blur", () => { if (activePanPointerId !== null) endPanOrZoom({ pointerId: activePanPointerId }); });
   document.addEventListener("visibilitychange", () => { if (document.hidden) resetAutomaticTouchSession(); });
-  canvas.addEventListener("pointerdown", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) { event.preventDefault(); startPanOrZoomHold(event); } });
-  canvas.addEventListener("pointermove", (event) => { if ((navModeLocked || (boardInteractionMode === "single" && panMode)) && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
-  canvas.addEventListener("pointerup", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) endPanOrZoom(event); });
-  canvas.addEventListener("pointercancel", (event) => { if (navModeLocked || (boardInteractionMode === "single" && panMode)) endPanOrZoom(event); });
+  canvas.addEventListener("pointerdown", (event) => { if (boardInteractionMode === "single" && panMode) { event.preventDefault(); startPanOrZoomHold(event); } });
+  canvas.addEventListener("pointermove", (event) => { if (boardInteractionMode === "single" && panMode && activePanPointerId === event.pointerId) { event.preventDefault(); continuePanOrZoom(event); } });
+  canvas.addEventListener("pointerup", (event) => { if (boardInteractionMode === "single" && panMode) endPanOrZoom(event); });
+  canvas.addEventListener("pointercancel", (event) => { if (boardInteractionMode === "single" && panMode) endPanOrZoom(event); });
   window.addEventListener("pointerup", releaseAutomaticTouchBlockedPointer);
   window.addEventListener("pointercancel", releaseAutomaticTouchBlockedPointer);
   window.addEventListener("resize", updateBoardViewport);
