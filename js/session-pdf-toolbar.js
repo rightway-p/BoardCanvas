@@ -848,7 +848,6 @@ async function restoreSessionState() {
       Math.max(1, Math.round(Number(pdfDocument && pdfDocument.numPages) || 1)),
       snapshot.pdfPageNumber
     );
-    pdfPageRasterCanvas = null;
     let finalRenderSucceeded;
     if (snapshot.pageSequence && snapshot.pageSequence.length) {
       const active = boardPageSequence[boardPageIndex];
@@ -862,7 +861,8 @@ async function restoreSessionState() {
     } else {
       const pageIndex = boardPageSequence.findIndex((page) => page.kind === "pdf" && page.pdfPage === targetPage);
       boardPageIndex = Math.max(0, pageIndex);
-      await renderPdfPage(targetPage);
+      const rendered = await renderPdfPage(targetPage);
+      if (rendered) presentPdfPage(rendered);
       finalRenderSucceeded = Boolean(pdfPageRasterCanvas)
         && hasLoadedPdfDocument()
         && pdfPageNumber === targetPage;

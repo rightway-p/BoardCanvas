@@ -1,4 +1,59 @@
 let lastCanvasCssViewport = null;
+const pdfRasterCache = new Map();
+const pdfRasterLookup = new Map();
+let pdfRasterCacheBytes = 0;
+const PDF_RASTER_CACHE_LIMIT = 96 * 1024 * 1024;
+const PDF_RASTER_CACHE_ENTRIES = 8;
+const pdfDocumentCacheIds = new WeakMap();
+let nextPdfDocumentCacheId = 1;
+let pdfBackgroundRenderToken = 0;
+let pdfBackgroundRenderTimer = null;
+let pdfBackgroundRenderPromise = null;
+let pdfBackgroundRenderTask = null;
+
+function stopPdfBackgroundRenderTask() {
+  if (!pdfBackgroundRenderTask || typeof pdfBackgroundRenderTask.cancel !== "function") return;
+  try { pdfBackgroundRenderTask.cancel(); } catch (error) { /* The task may already be settled. */ }
+}
+
+function clearPdfRasterCache() {
+  pdfRasterCache.clear();
+  pdfRasterLookup.clear();
+  pdfRasterCacheBytes = 0;
+  pdfBackgroundRenderToken += 1;
+  if (pdfBackgroundRenderTimer !== null) window.clearTimeout(pdfBackgroundRenderTimer);
+  pdfBackgroundRenderTimer = null;
+  stopPdfBackgroundRenderTask();
+}
+
+function pdfRasterCacheKey(documentRef, pageNumber, width, height, viewportWidth, viewportHeight) {
+  if (!pdfDocumentCacheIds.has(documentRef)) pdfDocumentCacheIds.set(documentRef, nextPdfDocumentCacheId++);
+  return `${pdfDocumentCacheIds.get(documentRef)}:${pageNumber}:${width}x${height}:${viewportWidth}x${viewportHeight}:${qualityLevel}`;
+}
+
+function getCachedPdfRaster(key) {
+  const entry = pdfRasterCache.get(key);
+  if (!entry) return null;
+  pdfRasterCache.delete(key);
+  pdfRasterCache.set(key, entry);
+  return entry;
+}
+
+function cachePdfRaster(key, canvas, lookupKey, result) {
+  const bytes = canvas.width * canvas.height * 4;
+  if (bytes > PDF_RASTER_CACHE_LIMIT) return;
+  if (pdfRasterCache.has(key)) pdfRasterCacheBytes -= pdfRasterCache.get(key).bytes;
+  pdfRasterCache.delete(key);
+  pdfRasterCache.set(key, { canvas, bytes, result });
+  pdfRasterLookup.set(lookupKey, key);
+  pdfRasterCacheBytes += bytes;
+  while (pdfRasterCache.size > PDF_RASTER_CACHE_ENTRIES || pdfRasterCacheBytes > PDF_RASTER_CACHE_LIMIT) {
+    const oldest = pdfRasterCache.keys().next().value;
+    pdfRasterCacheBytes -= pdfRasterCache.get(oldest).bytes;
+    pdfRasterCache.delete(oldest);
+    for (const [lookupKey, rasterKey] of pdfRasterLookup) if (rasterKey === oldest) pdfRasterLookup.delete(lookupKey);
+  }
+}
 
 function updateToolUI() {
   const mouseModeActive = overlayMousePassthrough;
@@ -68,6 +123,8 @@ async function unloadPdfDocument(updateStatus = true) {
   saveCurrentStrokeState();
   clearPdfRenderDebounce();
   stopPdfRenderTask();
+  if (typeof cancelPendingBoardPageRender === "function") cancelPendingBoardPageRender();
+  clearPdfRasterCache();
   pdfRenderToken += 1;
   pdfLoadingToken += 1;
 
@@ -98,51 +155,49 @@ async function unloadPdfDocument(updateStatus = true) {
   await releasePdfDocument(previousDocument);
 }
 
-async function renderPdfPage(pageNumber) {
+async function renderPdfPage(pageNumber, options = {}) {
   if (!hasLoadedPdfDocument()) {
-    pdfPageRasterCanvas = null;
-    renderBoardBackground();
-    updatePdfNavigationUI();
-    return;
+    return null;
   }
 
-  clearPdfRenderDebounce();
-  stopPdfRenderTask();
+  if (options.foreground !== false) {
+    pdfBackgroundRenderToken += 1;
+    if (pdfBackgroundRenderTimer !== null) window.clearTimeout(pdfBackgroundRenderTimer);
+    pdfBackgroundRenderTimer = null;
+    stopPdfBackgroundRenderTask();
+    clearPdfRenderDebounce();
+    stopPdfRenderTask();
+  }
 
   const clampedPage = Math.min(
     Number(pdfDocument.numPages),
     Math.max(1, Math.round(Number(pageNumber) || 1))
   );
-  const pageChanged = clampedPage !== pdfPageNumber;
-  if (clampedPage !== pdfPageNumber) {
-    savePdfPageStrokeSnapshot(pdfPageNumber);
-    pdfPageNumber = clampedPage;
-    restoreCurrentStrokeState();
-  } else {
-    pdfPageNumber = clampedPage;
-  }
-  updatePdfNavigationUI();
-  if (pageChanged) {
-    scheduleSessionAutosave();
-  }
-
-  const token = ++pdfRenderToken;
+  const documentRef = pdfDocument;
+  const backgroundToken = pdfBackgroundRenderToken;
+  const token = options.foreground === false ? pdfRenderToken : ++pdfRenderToken;
   const statusName = loadedDocumentName || "PDF";
-  setDocumentStatus(`${statusName}: rendering page...`);
+  let renderTask = null;
 
   try {
-    const page = await pdfDocument.getPage(clampedPage);
-    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
-      return;
-    }
-
-    const baseViewport = page.getViewport({ scale: 1 });
-    const boardPage = typeof currentBoardPage === "function" ? currentBoardPage() : null;
+    const boardPage = options.boardPage || (typeof currentBoardPage === "function" ? currentBoardPage() : null);
     const storedSize = boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage ? boardPage.pdfWorldSize : null;
     const maxWidth = Math.max(1, storedSize && storedSize.width || backgroundCanvas.width);
     const maxHeight = Math.max(1, storedSize && storedSize.height || backgroundCanvas.height);
+    if (!pdfDocumentCacheIds.has(documentRef)) pdfDocumentCacheIds.set(documentRef, nextPdfDocumentCacheId++);
+    const lookupKey = `${pdfDocumentCacheIds.get(documentRef)}:${clampedPage}:${maxWidth}x${maxHeight}:${qualityLevel}`;
+    const cachedKey = pdfRasterLookup.get(lookupKey);
+    if (cachedKey) {
+      const cached = getCachedPdfRaster(cachedKey);
+      if (cached) return cached.result;
+      pdfRasterLookup.delete(lookupKey);
+    }
+    const page = await documentRef.getPage(clampedPage);
+    if (documentRef !== pdfDocument || (options.foreground === false ? backgroundToken !== pdfBackgroundRenderToken : token !== pdfRenderToken)) return null;
+    const baseViewport = page.getViewport({ scale: 1 });
     const fitScale = Math.min(maxWidth / baseViewport.width, maxHeight / baseViewport.height);
     const viewport = page.getViewport({ scale: fitScale });
+    const key = pdfRasterCacheKey(documentRef, clampedPage, maxWidth, maxHeight, viewport.width, viewport.height);
 
     const rasterCanvas = document.createElement("canvas");
     rasterCanvas.width = maxWidth;
@@ -157,44 +212,77 @@ async function renderPdfPage(pageNumber) {
     rasterContext.imageSmoothingQuality = "high";
     rasterContext.translate((maxWidth - viewport.width) / 2, (maxHeight - viewport.height) / 2);
 
-    pdfRenderTask = page.render({
+    renderTask = page.render({
       canvasContext: rasterContext,
       viewport
     });
-    await pdfRenderTask.promise;
+    if (options.foreground !== false) pdfRenderTask = renderTask;
+    else pdfBackgroundRenderTask = renderTask;
+    await renderTask.promise;
 
-    if (token !== pdfRenderToken || !hasLoadedPdfDocument()) {
-      return;
-    }
-
-    pdfPageRasterCanvas = rasterCanvas;
-    if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage && !boardPage.pdfWorldSize) {
-      boardPage.pdfWorldSize = { width: maxWidth, height: maxHeight };
-    }
-    if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === clampedPage) {
-      boardPage.pdfContentBounds = {
-        x: (maxWidth - viewport.width) / 2,
-        y: (maxHeight - viewport.height) / 2,
-        width: viewport.width,
-        height: viewport.height
-      };
-    }
-    const initiallyFitted = typeof fitBoardPageAfterPdfRender === "function" && fitBoardPageAfterPdfRender(boardPage);
-    const zoomAdjusted = !initiallyFitted && typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
-    if (!zoomAdjusted) renderBoardBackground();
-    updatePdfNavigationUI();
-    setDocumentStatus(`${statusName} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
+    if (documentRef !== pdfDocument || (options.foreground === false ? backgroundToken !== pdfBackgroundRenderToken : token !== pdfRenderToken)) return null;
+    const result = { raster: rasterCanvas, pageNumber: clampedPage, maxWidth, maxHeight, contentBounds: { x: (maxWidth - viewport.width) / 2, y: (maxHeight - viewport.height) / 2, width: viewport.width, height: viewport.height }, page, key };
+    cachePdfRaster(key, rasterCanvas, lookupKey, result);
+    return result;
   } catch (error) {
     if (error && error.name === "RenderingCancelledException") {
-      return;
+      return null;
     }
-
     setDocumentStatus("Failed to render PDF page.", "error");
+    throw error;
   } finally {
     if (token === pdfRenderToken) {
       pdfRenderTask = null;
     }
+    if (options.foreground === false && pdfBackgroundRenderTask === renderTask) pdfBackgroundRenderTask = null;
   }
+}
+
+function presentPdfPage(result, boardPage = null) {
+  if (!result) return false;
+  if (pdfPageNumber !== result.pageNumber) {
+    savePdfPageStrokeSnapshot(pdfPageNumber);
+    pdfPageNumber = result.pageNumber;
+    restoreCurrentStrokeState();
+    scheduleSessionAutosave();
+  }
+  pdfPageRasterCanvas = result.raster;
+  boardPage = boardPage || (typeof currentBoardPage === "function" ? currentBoardPage() : null);
+  if (boardPage && boardPage.kind === "pdf" && boardPage.pdfPage === result.pageNumber) {
+    if (!boardPage.pdfWorldSize) boardPage.pdfWorldSize = { width: result.maxWidth, height: result.maxHeight };
+    boardPage.pdfContentBounds = result.contentBounds;
+  }
+  const initiallyFitted = typeof fitBoardPageAfterPdfRender === "function" && fitBoardPageAfterPdfRender(boardPage);
+  const zoomAdjusted = !initiallyFitted && typeof enforcePdfZoomMinimum === "function" && enforcePdfZoomMinimum();
+  if (!zoomAdjusted) renderBoardBackground();
+  updatePdfNavigationUI();
+  if (typeof markBoardPagePresented === "function") markBoardPagePresented();
+  setDocumentStatus(`${loadedDocumentName || "PDF"} (${pdfPageNumber}/${pdfDocument.numPages})`, "success");
+  return true;
+}
+
+function schedulePdfBackgroundRenders() {
+  if (pdfBackgroundRenderTimer !== null) window.clearTimeout(pdfBackgroundRenderTimer);
+  const token = ++pdfBackgroundRenderToken;
+  const documentRef = pdfDocument;
+  const center = pdfPageNumber;
+  const candidates = [center - 1, center + 1].filter((number) => number >= 1 && number <= Number(documentRef && documentRef.numPages));
+  let offset = 0;
+  const next = () => {
+    if (token !== pdfBackgroundRenderToken || documentRef !== pdfDocument || offset >= candidates.length) return;
+    const number = candidates[offset++];
+    const boardPage = Array.isArray(boardPageSequence)
+      ? boardPageSequence.find((page) => page.kind === "pdf" && page.pdfPage === number)
+      : null;
+    pdfBackgroundRenderPromise = renderPdfPage(number, { foreground: false, boardPage }).catch(() => null).finally(() => {
+      pdfBackgroundRenderPromise = null;
+      if (token === pdfBackgroundRenderToken && documentRef === pdfDocument) pdfBackgroundRenderTimer = window.setTimeout(next, 0);
+    });
+  };
+  if (pdfBackgroundRenderPromise) pdfBackgroundRenderPromise.finally(() => {
+    if (token === pdfBackgroundRenderToken && documentRef === pdfDocument) pdfBackgroundRenderTimer = window.setTimeout(next, 0);
+  });
+  else pdfBackgroundRenderTimer = window.setTimeout(next, 0);
 }
 
 async function exportAnnotatedPdf(options = {}) {
@@ -241,7 +329,11 @@ function schedulePdfPageRerender() {
   pdfRenderDebounceTimer = window.setTimeout(() => {
     pdfRenderDebounceTimer = null;
     if (typeof currentBoardPage === "function" && currentBoardPage()?.kind !== "pdf") return;
-    renderPdfPage(pdfPageNumber);
+    if (typeof pendingBoardPageTarget === "number" && typeof renderBoardPage === "function") {
+      renderBoardPage(pendingBoardPageTarget);
+      return;
+    }
+    renderPdfPage(pdfPageNumber).then((result) => presentPdfPage(result)).catch(() => {});
   }, 120);
 }
 
@@ -339,8 +431,10 @@ async function loadPdfFromFile(file) {
     };
     clearPdfRenderDebounce();
     stopPdfRenderTask();
+    if (typeof cancelPendingBoardPageRender === "function") cancelPendingBoardPageRender();
 
     pdfPageStrokeSnapshots.clear();
+    clearPdfRasterCache();
     pdfDocument = nextDocument;
     pdfPageNumber = 1;
     boardPageSequence = BoardState.createPageSequence(Number(nextDocument.numPages));
@@ -355,8 +449,8 @@ async function loadPdfFromFile(file) {
     sessionPdfBytesDirty = true;
     restoreCurrentStrokeState();
 
-    await renderPdfPage(1);
-    if (!pdfPageRasterCanvas) throw new Error("PDF page rendering failed.");
+    const firstPage = await renderPdfPage(1);
+    if (!firstPage || !presentPdfPage(firstPage, boardPageSequence[0])) throw new Error("PDF page rendering failed.");
     queueRuntimeLog("pdf.load.success", {
       fileName,
       pages: Number.isFinite(nextDocument.numPages) ? nextDocument.numPages : null,
@@ -370,6 +464,7 @@ async function loadPdfFromFile(file) {
     }
     clearAllStrokeHistory();
     scheduleSessionAutosave();
+    schedulePdfBackgroundRenders();
     replacementBackup = null;
     await releasePdfDocument(previousDocument);
     return true;

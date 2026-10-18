@@ -288,19 +288,29 @@ test("work file opening ignores saved views and initially fits PDF pages without
     normalizeStrokeCollection: (value) => value || [],
     pdfDocument: null,
     backgroundCanvas: { width: 800, height: 600 },
-    boardPageSequence: [],
+    boardPageSequence: [{ kind: "pdf", pdfPage: 1, strokes: [{ id: "old-visible" }], view: { x: 0, y: 0, scale: 1 } }],
     boardPageIndex: 0,
+    boardCamera: { x: 0, y: 0, scale: 1 }, pdfRenderToken: 0, pdfPageNumber: 1, pdfPageRasterCanvas: { id: "old-visible-raster" },
     pageStructureUndo: [],
     pageStructureRedo: [],
     clearAllStrokeHistory() {},
     clearActiveDrivePin: async () => true,
-    renderBoardPage(index, resetView) { context.rendered = { index, resetView, page: context.boardPageSequence[index] }; },
+    renderPdfPage: async (pageNumber, options) => ({ raster: { id: `page-${pageNumber}` }, pageNumber, maxWidth: 1200, maxHeight: 1600, contentBounds: { x: 40, y: 80, width: 1120, height: 1440 } }),
+    finishActiveBoardInput() {}, saveCurrentStrokeState() { if (context.boardPageSequence[context.boardPageIndex]) context.boardPageSequence[context.boardPageIndex].strokes = [{ id: "old-visible" }]; },
+    restoreCurrentStrokeState() { context.strokes = context.boardPageSequence[context.boardPageIndex]?.strokes || []; }, strokes: [{ id: "old-visible" }],
+    presentPdfPage(result) { context.pdfPageRasterCanvas = result.raster; }, schedulePdfBackgroundRenders() {},
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {},
     closeDocumentPopup() {},
     scheduleSessionAutosave() {},
     requestBoardWorkReplacement: (apply) => apply(),
   };
   vm.createContext(context);
+  const pageRenderImplementation = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  const realFitHookSource = source.slice(source.indexOf("let boardPagePendingInitialFit"), source.indexOf("function finishActiveBoardInput"));
+  vm.runInContext(realFitHookSource, context);
+  vm.runInContext(pageRenderImplementation, context);
   vm.runInContext(opener, context);
+  vm.runInContext("presentedBoardPageSequence = boardPageSequence; presentedBoardPageIndex = boardPageIndex;", context);
   const state = {
     format: "boardcanvas-work", version: 1, pageIndex: 1, pdfBase64: "AA==",
     pages: [
@@ -310,12 +320,13 @@ test("work file opening ignores saved views and initially fits PDF pages without
   };
   await context.openBoardWorkFile({ size: 1, text: async () => JSON.stringify(state) });
   assert.equal(context.boardPageIndex, 1);
-  assert.equal(context.rendered.index, 1);
+  assert.equal(context.boardPageIndex, 1);
   assert.equal(context.boardPageSequence[0].view, null);
   assert.equal(context.boardPageSequence[1].view, null);
   assert.deepEqual({ ...context.boardPageSequence[1].pdfWorldSize }, { width: 1200, height: 1600 });
   assert.deepEqual({ ...context.boardPageSequence[1].pdfContentBounds }, { x: 40, y: 80, width: 1120, height: 1440 });
   assert.equal(context.boardPageSequence[1].strokes[0].id, "outside-ink");
+  assert.equal(context.strokes[0].id, "outside-ink");
 
   const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
   let fits = 0;
@@ -323,10 +334,12 @@ test("work file opening ignores saved views and initially fits PDF pages without
   const pdfPage = context.boardPageSequence[1];
   const renderContext = {
     boardPageSequence: [pdfPage], boardPageIndex: 0, boardCamera: {}, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 },
-    pdfRenderToken: 0, pdfPageNumber: 0, pdfPageRasterCanvas: null, boardPagePendingInitialFit: null,
+    pdfRenderToken: 0, pdfPageNumber: 0, pdfPageRasterCanvas: null, boardPagePendingInitialFit: null, boardPageRenderRequest: 0, pendingBoardPageTarget: null, requestedBoardPageIndex: null,
     BoardState: { pageForRender: (pages, index) => ({ page: pages[index], index }) },
-    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, restoreCurrentStrokeState() {}, renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
-    renderPdfPage: async () => { renderCount += 1; if (renderCount > 1) { renderContext.pdfPageRasterCanvas = {}; renderContext.fitBoardPageAfterPdfRender(pdfPage); } },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, finishActiveBoardInput() {}, saveCurrentStrokeState() {}, restoreCurrentStrokeState() {}, renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    renderPdfPage: async () => { renderCount += 1; return renderCount === 1 ? null : { raster: {}, pageNumber: 1, maxWidth: 1200, maxHeight: 1600, contentBounds: pdfPage.pdfContentBounds }; },
+    presentPdfPage(result) { renderContext.pdfPageRasterCanvas = result.raster; renderContext.fitBoardPageAfterPdfRender(pdfPage); },
+    schedulePdfBackgroundRenders() {},
     fitCurrentBoardPage() { fits += 1; renderContext.boardCamera = { x: -20, y: -40, scale: 0.5 }; pdfPage.view = { ...renderContext.boardCamera }; },
     currentBoardPage: () => pdfPage,
   };
@@ -338,7 +351,7 @@ test("work file opening ignores saved views and initially fits PDF pages without
   assert.equal(fits, 0); // first render was canceled by viewport setup
   pdfPage.view = { x: 11, y: 20, scale: 1 }; // resize enforcement can save a temporary camera before rerender
   await renderContext.renderBoardPage(0);
-  assert.equal(fits, 1);
+  assert.equal(fits, 1, `pending fit: ${Boolean(renderContext.boardPagePendingInitialFit)}, request ${renderContext.boardPageRenderRequest}`);
   assert.deepEqual({ ...renderContext.boardCamera }, { x: -20, y: -40, scale: 0.5 });
   assert.equal(pdfPage.strokes[0].id, "outside-ink");
   pdfPage.view = { x: 18, y: -27, scale: 1.4 };
@@ -347,6 +360,299 @@ test("work file opening ignores saved views and initially fits PDF pages without
   assert.equal(fits, 1);
   const pdfRenderer = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
   assert.match(pdfRenderer, /fitBoardPageAfterPdfRender\(boardPage\)/);
+});
+
+test("PDF page navigation keeps old raster and ink until the prepared page commits atomically", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  const renderResolvers = [];
+  const oldRaster = { id: "old" };
+  const pages = [
+    { kind: "pdf", pdfPage: 1, strokes: [{ id: "old-ink" }], view: { x: 0, y: 0, scale: 1 } },
+    { kind: "pdf", pdfPage: 2, strokes: [{ id: "new-ink" }], view: { x: 10, y: 20, scale: 2 } },
+    { kind: "pdf", pdfPage: 3, strokes: [{ id: "latest-ink" }], view: { x: 30, y: 40, scale: 3 } },
+  ];
+  const context = {
+    boardPageSequence: pages, boardPageIndex: 0, boardCamera: { x: 0, y: 0, scale: 1 }, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 },
+    pdfRenderToken: 0, pdfPageNumber: 1, pdfPageRasterCanvas: oldRaster, boardPagePendingInitialFit: null, boardPageRenderRequest: 0,
+    pendingBoardPageTarget: null, presentedBoardPageSequence: null, presentedBoardPageIndex: -1, strokes: [{ id: "old-ink" }],
+    BoardState: { pageForRender: (sequence, index) => ({ page: sequence[index], index }) },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, finishActiveBoardInput() {}, saveCurrentStrokeState() {},
+    restoreCurrentStrokeState() { context.strokes = pages[context.boardPageIndex].strokes; }, renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    renderPdfPage: (number) => new Promise((resolve, reject) => { renderResolvers.push({ number, resolve, reject }); }),
+    presentPdfPage(result) { context.pdfPageRasterCanvas = result.raster; }, schedulePdfBackgroundRenders() {},
+    currentBoardPage: () => pages[context.boardPageIndex],
+  };
+  vm.createContext(context);
+  vm.runInContext(renderSource, context);
+  const stale = context.renderBoardPage(1);
+  const pending = context.renderBoardPage(2);
+  assert.equal(context.boardPageIndex, 0);
+  assert.equal(context.pdfPageNumber, 1);
+  assert.equal(context.pdfPageRasterCanvas, oldRaster);
+  assert.equal(context.strokes[0].id, "old-ink");
+  renderResolvers[1].resolve({ raster: { id: "latest" }, pageNumber: 3, maxWidth: 800, maxHeight: 600, contentBounds: { x: 0, y: 0, width: 800, height: 600 } });
+  await pending;
+  renderResolvers[0].resolve({ raster: { id: "stale" }, pageNumber: 2, maxWidth: 800, maxHeight: 600, contentBounds: { x: 0, y: 0, width: 800, height: 600 } });
+  await stale;
+  assert.equal(context.boardPageIndex, 2);
+  assert.equal(context.pdfPageNumber, 3);
+  assert.equal(context.pdfPageRasterCanvas.id, "latest");
+  assert.equal(context.strokes[0].id, "latest-ink");
+
+  const failed = context.renderBoardPage(1);
+  renderResolvers[2].reject(new Error("controlled failure"));
+  await failed;
+  assert.equal(context.boardPageIndex, 2);
+  assert.equal(context.pdfPageNumber, 3);
+  assert.equal(context.pdfPageRasterCanvas.id, "latest");
+  assert.equal(context.strokes[0].id, "latest-ink");
+});
+
+test("PDF render commit preserves imported ink when restore already changed the page sequence", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  const page = { kind: "pdf", pdfPage: 1, strokes: [{ id: "imported-ink" }], view: { x: 1, y: 2, scale: 1 } };
+  const previousSequence = [{ kind: "pdf", pdfPage: 4, strokes: [{ id: "old-visible" }] }];
+  const context = {
+    boardPageSequence: [page], boardPageIndex: 0, boardCamera: {}, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 },
+    pdfRenderToken: 0, pdfPageNumber: 1, pdfPageRasterCanvas: { id: "old-raster" }, boardPagePendingInitialFit: null,
+    previousSequence, presentedBoardPageSequence: previousSequence, presentedBoardPageIndex: 0,
+    BoardState: { pageForRender: (sequence, index) => ({ page: sequence[index], index }) },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, finishActiveBoardInput() {},
+    saveCurrentStrokeState() { page.strokes = [{ id: "old-visible" }]; },
+    restoreCurrentStrokeState() { context.strokes = page.strokes; }, strokes: [{ id: "old-visible" }],
+    renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    renderPdfPage: async () => ({ raster: { id: "new-raster" }, pageNumber: 1, maxWidth: 800, maxHeight: 600, contentBounds: { x: 0, y: 0, width: 800, height: 600 } }),
+    presentPdfPage(result) { context.pdfPageRasterCanvas = result.raster; }, schedulePdfBackgroundRenders() {}, currentBoardPage: () => context.boardPageSequence[context.boardPageIndex],
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf("let boardPagePendingInitialFit"), source.indexOf("function finishActiveBoardInput")), context);
+  vm.runInContext("presentedBoardPageSequence = boardPageSequence === previousSequence ? null : previousSequence; presentedBoardPageIndex = 0;", context);
+  vm.runInContext(renderSource, context);
+  await context.renderBoardPage(0);
+  assert.equal(page.strokes[0].id, "imported-ink");
+  assert.equal(context.strokes[0].id, "imported-ink");
+  assert.equal(vm.runInContext("presentedBoardPageSequence === boardPageSequence", context), true);
+});
+
+test("deleting an inked blank page never saves its visible ink onto the shifted PDF through undo and redo", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  const structureSource = source.slice(source.indexOf("function deleteBoardBlankPage"), source.indexOf("function goToBoardPage"));
+  const left = { kind: "pdf", pdfPage: 1, strokes: [{ id: "left-ink" }], view: { x: 0, y: 0, scale: 1 } };
+  const blank = { kind: "blank", background: "#ffffff", strokes: [{ id: "blank-ink" }], worldSize: { width: 800, height: 600 }, view: { x: 0, y: 0, scale: 1 } };
+  const right = { kind: "pdf", pdfPage: 2, strokes: [{ id: "right-ink" }], view: { x: 0, y: 0, scale: 1 } };
+  const context = {
+    boardPageSequence: [left, blank, right], boardPageIndex: 1, boardCamera: { x: 0, y: 0, scale: 1 }, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 },
+    pdfRenderToken: 0, pdfPageNumber: 0, pdfPageRasterCanvas: null, boardPagePendingInitialFit: null, pdfExportInProgress: false, sessionRestoreInProgress: false,
+    strokes: [{ id: "blank-ink" }], pageStructureUndo: [], pageStructureRedo: [], pendingBoardPageTarget: null, requestedBoardPageIndex: null,
+    BoardState: { pageForRender: (pages, index) => ({ page: pages[index], index }), canDeletePage: (pages, index) => index > 0 && index < pages.length - 1, applyStructureOperation: boardState.applyStructureOperation },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, finishActiveBoardInput() {},
+    saveCurrentStrokeState() { const page = context.currentBoardPage(); if (page) page.strokes = context.strokes.map((stroke) => ({ ...stroke })); },
+    restoreCurrentStrokeState() { context.strokes = context.currentBoardPage()?.strokes.map((stroke) => ({ ...stroke })) || []; },
+    renderPdfPage: async (number) => ({ raster: { id: `pdf-${number}` }, pageNumber: number, maxWidth: 800, maxHeight: 600, contentBounds: { x: 0, y: 0, width: 800, height: 600 } }),
+    presentPdfPage(result) { context.pdfPageRasterCanvas = result.raster; }, schedulePdfBackgroundRenders() {},
+    renderBoardBackground() {}, applyBoardCamera() {}, applyBoardColor() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    structuredClone: (value) => JSON.parse(JSON.stringify(value)),
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf("let boardPagePendingInitialFit"), source.indexOf("function finishActiveBoardInput")), context);
+  vm.runInContext(renderSource + structureSource, context);
+  vm.runInContext("presentedBoardPageSequence = boardPageSequence; presentedBoardPageIndex = boardPageIndex; presentedBoardPageObject = boardPageSequence[boardPageIndex];", context);
+  const settleRender = () => new Promise(setImmediate);
+
+  context.deleteBoardBlankPage();
+  await settleRender();
+  assert.equal(context.boardPageIndex, 0);
+  assert.equal(right.strokes[0].id, "right-ink");
+  context.runPageStructureUndo(false);
+  await settleRender();
+  assert.equal(context.boardPageSequence[1].kind, "blank");
+  assert.equal(context.boardPageSequence[1].strokes[0].id, "blank-ink");
+  context.runPageStructureUndo(true);
+  await settleRender();
+  assert.equal(context.boardPageIndex, 0);
+  assert.equal(right.strokes[0].id, "right-ink");
+});
+
+test("PDF raster cache skips PDF.js work on hits and enforces byte and entry limits", async () => {
+  const source = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
+  const cacheSource = source.slice(source.indexOf("const pdfRasterCache"), source.indexOf("function updateToolUI"));
+  const renderSource = source.slice(source.indexOf("async function renderPdfPage"), source.indexOf("function presentPdfPage"));
+  let pageGets = 0, renders = 0;
+  const page = {
+    getViewport: ({ scale }) => ({ width: 100 * scale, height: 200 * scale }),
+    render: () => { renders += 1; return { promise: Promise.resolve() }; },
+  };
+  const context = {
+    qualityLevel: "high", window: { clearTimeout() {} }, pdfDocument: { numPages: 4, getPage: async () => { pageGets += 1; return page; } },
+    pdfPageNumber: 1, pdfRenderToken: 0, pdfRenderTask: null, pdfBackgroundRenderToken: 0, pdfBackgroundRenderTimer: null,
+    backgroundCanvas: { width: 300, height: 600 }, quality: { dprCap: 2 }, loadedDocumentName: "test", pdfPageRasterCanvas: null,
+    hasLoadedPdfDocument: () => true, clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, setDocumentStatus() {},
+    document: { createElement: () => ({ getContext: () => ({ imageSmoothingEnabled: false, imageSmoothingQuality: "", translate() {} }) }) },
+  };
+  vm.createContext(context);
+  vm.runInContext(cacheSource + renderSource, context);
+  const first = await context.renderPdfPage(1);
+  const second = await context.renderPdfPage(1);
+  assert.equal(pageGets, 1);
+  assert.equal(renders, 1);
+  assert.equal(second.raster, first.raster);
+
+  context.backgroundCanvas.width = 301;
+  const resized = await context.renderPdfPage(1);
+  assert.notEqual(resized.raster, first.raster);
+  context.qualityLevel = "low";
+  await context.renderPdfPage(1);
+  assert.equal(pageGets, 3);
+  const replacementDocument = { numPages: 4, getPage: async () => { pageGets += 1; return page; } };
+  context.pdfDocument = replacementDocument;
+  const replaced = await context.renderPdfPage(1);
+  assert.notEqual(replaced.raster, resized.raster);
+  assert.equal(pageGets, 4);
+
+  for (let index = 0; index < 9; index += 1) context.cachePdfRaster(`entry-${index}`, { width: 100, height: 100 });
+  assert.equal(vm.runInContext("pdfRasterCache.size", context), 8);
+  assert.equal(context.getCachedPdfRaster("entry-0"), null);
+  context.cachePdfRaster("oversized", { width: 6000, height: 6000 });
+  assert.equal(context.getCachedPdfRaster("oversized"), null);
+  context.clearPdfRasterCache();
+  for (let index = 0; index < 3; index += 1) {
+    context.cachePdfRaster(`bytes-${index}`, { width: index === 2 ? 2049 : 2048, height: 4096 }, `bytes-${index}`, { id: index });
+  }
+  assert.equal(context.getCachedPdfRaster("bytes-0"), null);
+  assert.ok(vm.runInContext("pdfRasterCacheBytes", context) <= 96 * 1024 * 1024);
+  context.clearPdfRasterCache();
+  assert.equal(vm.runInContext("pdfRasterCacheBytes", context), 0);
+  assert.equal(vm.runInContext("pdfRasterCache.size", context), 0);
+});
+
+test("PDF background prefetch is single-flight, sequential, and canceled by foreground rendering", async () => {
+  const source = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
+  const cacheSource = source.slice(source.indexOf("const pdfRasterCache"), source.indexOf("function updateToolUI"));
+  const renderSource = source.slice(source.indexOf("async function renderPdfPage"), source.indexOf("function presentPdfPage"));
+  const prefetchSource = source.slice(source.indexOf("function schedulePdfBackgroundRenders"), source.indexOf("async function exportAnnotatedPdf"));
+  const timers = new Map();
+  let nextTimer = 1;
+  const gates = new Map();
+  const renderedPages = [];
+  const rasterSizes = [];
+  const canceledPages = [];
+  let currentRaster = null;
+  const documentRef = {
+    numPages: 4,
+    getPage: async (number) => ({
+      getViewport: ({ scale }) => ({ width: 80 * scale, height: 120 * scale }),
+      render: () => {
+        renderedPages.push(number);
+        rasterSizes.push([currentRaster.width, currentRaster.height]);
+        let resolve, reject;
+        const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+        gates.set(number, { resolve, reject });
+        return { promise, cancel() { canceledPages.push(number); reject(Object.assign(new Error("cancelled"), { name: "RenderingCancelledException" })); } };
+      },
+    }),
+  };
+  const context = {
+    qualityLevel: "high", pdfDocument: documentRef, pdfPageNumber: 2, pdfRenderToken: 0, pdfRenderTask: null,
+    boardPageSequence: [
+      { kind: "pdf", pdfPage: 1, pdfWorldSize: { width: 333, height: 444 } },
+      { kind: "pdf", pdfPage: 2, pdfWorldSize: { width: 160, height: 240 } },
+      { kind: "pdf", pdfPage: 3, pdfWorldSize: { width: 444, height: 333 } },
+      { kind: "pdf", pdfPage: 4, pdfWorldSize: { width: 240, height: 160 } },
+    ],
+    pdfBackgroundRenderToken: 0, pdfBackgroundRenderTimer: null, pdfBackgroundRenderPromise: null, pdfBackgroundRenderTask: null,
+    backgroundCanvas: { width: 160, height: 240 }, quality: { dprCap: 2 }, loadedDocumentName: "test", pdfPageRasterCanvas: { id: "visible" },
+    window: {
+      setTimeout(callback) { const id = nextTimer++; timers.set(id, callback); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    },
+    document: { createElement: () => { currentRaster = { width: 0, height: 0, getContext: () => ({ translate() {} }) }; return currentRaster; } },
+    currentBoardPage: () => null, hasLoadedPdfDocument: () => true, clearPdfRenderDebounce() {},
+    stopPdfRenderTask() {}, setDocumentStatus() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(cacheSource + renderSource + prefetchSource, context);
+  const runNextTimer = () => { const entry = timers.entries().next().value; assert.ok(entry); timers.delete(entry[0]); entry[1](); };
+  const flush = async () => { await Promise.resolve(); await new Promise(setImmediate); };
+
+  context.schedulePdfBackgroundRenders();
+  runNextTimer();
+  await flush();
+  assert.deepEqual(renderedPages, [1]);
+  assert.deepEqual(rasterSizes[0], [333, 444]);
+  assert.equal(timers.size, 0);
+  gates.get(1).resolve();
+  await flush();
+  assert.equal(timers.size, 1);
+  runNextTimer();
+  await flush();
+  assert.deepEqual(renderedPages, [1, 3]);
+  assert.deepEqual(rasterSizes[1], [444, 333]);
+  gates.get(3).resolve();
+  await flush();
+  assert.equal(vm.runInContext("pdfRasterCache.size", context), 2);
+
+  context.clearPdfRasterCache();
+  context.pdfPageNumber = 2;
+  context.schedulePdfBackgroundRenders();
+  runNextTimer();
+  await flush();
+  assert.equal(renderedPages[2], 1);
+  const foreground = context.renderPdfPage(4);
+  await flush();
+  assert.ok(canceledPages.includes(1));
+  gates.get(1).resolve();
+  await flush();
+  assert.equal(context.pdfPageRasterCanvas.id, "visible");
+  assert.equal(vm.runInContext("Array.from(pdfRasterCache.values()).some(entry => entry.result.pageNumber === 1)", context), false);
+  gates.get(4).resolve();
+  const foregroundResult = await foreground;
+  assert.equal(foregroundResult.pageNumber, 4);
+  assert.equal(context.pdfPageRasterCanvas.id, "visible");
+});
+
+test("repeated next navigation advances from the pending target", () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const navigation = source.slice(source.indexOf("function goToBoardPage"), source.indexOf("function applyBoardCamera"));
+  const requested = [];
+  const context = {
+    boardPageSequence: [{}, {}, {}, {}], boardPageIndex: 0, requestedBoardPageIndex: 1,
+    finishActiveBoardInput() {}, saveCurrentStrokeState() {}, renderBoardPage(index) { requested.push(index); },
+  };
+  vm.createContext(context);
+  vm.runInContext(navigation, context);
+  context.goToBoardPage(1);
+  assert.deepEqual(requested, [2]);
+});
+
+test("canceled page render clears its owned pending target so blank-page actions can resume", async () => {
+  const source = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
+  const renderer = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
+  const renderSource = source.slice(source.indexOf("function renderBoardPage"), source.indexOf("function updateBoardSequenceUI"));
+  const blankAction = source.slice(source.indexOf("function addBoardBlankPage"), source.indexOf("function deleteBoardBlankPage"));
+  const context = {
+    boardPageSequence: [{ kind: "pdf", pdfPage: 1, strokes: [], view: { x: 0, y: 0, scale: 1 } }], boardPageIndex: 0,
+    boardCamera: {}, boardWrapper: {}, backgroundCanvas: { width: 800, height: 600 }, pdfRenderToken: 0, pdfPageNumber: 1,
+    pdfPageRasterCanvas: { id: "visible" }, boardPagePendingInitialFit: null, pdfExportInProgress: false, sessionRestoreInProgress: false,
+    BoardState: { pageForRender: (sequence, index) => ({ page: sequence[index], index }), createBlankPage: () => ({ kind: "blank", strokes: [] }) },
+    clearPdfRenderDebounce() {}, stopPdfRenderTask() {}, finishActiveBoardInput() {}, saveCurrentStrokeState() {}, restoreCurrentStrokeState() {},
+    renderBoardBackground() {}, applyBoardCamera() {}, updateBoardSequenceUI() {}, updateUndoRedoUI() {}, scheduleSessionAutosave() {},
+    renderPdfPage: async () => null, renderPdfPageRaster: null, currentBoardPage() { return this.boardPageSequence[this.boardPageIndex]; },
+    applyBoardColor() {}, renderBoardPage(index) { this.boardPageIndex = index; }, pageStructureUndo: [], pageStructureRedo: [], structuredClone: (value) => JSON.parse(JSON.stringify(value)),
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf("let boardPagePendingInitialFit"), source.indexOf("function finishActiveBoardInput")), context);
+  vm.runInContext(renderSource, context);
+  await context.renderBoardPage(0);
+  assert.equal(vm.runInContext("pendingBoardPageTarget", context), null);
+  vm.runInContext("pendingBoardPageTarget = 0; requestedBoardPageIndex = 0;", context);
+  context.cancelPendingBoardPageRender();
+  assert.match(renderer.slice(renderer.indexOf("async function unloadPdfDocument"), renderer.indexOf("async function renderPdfPage")), /cancelPendingBoardPageRender\(\)/);
+  vm.runInContext(blankAction, context);
+  context.addBoardBlankPage();
+  assert.equal(context.boardPageSequence.length, 2);
 });
 
 test("PDF minimum zoom follows fit after viewport changes and keeps the center world point", () => {

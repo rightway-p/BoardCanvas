@@ -256,7 +256,23 @@ function getDriveLoginFlow() {
 }
 
 let boardPagePendingInitialFit = null;
+let boardPageRenderRequest = 0;
+let pendingBoardPageTarget = null;
+let requestedBoardPageIndex = null;
+let presentedBoardPageSequence = null;
+let presentedBoardPageIndex = -1;
+let presentedBoardPageObject = null;
 function currentBoardPage() { return boardPageSequence[boardPageIndex] || null; }
+function markBoardPagePresented() {
+  presentedBoardPageSequence = boardPageSequence;
+  presentedBoardPageIndex = boardPageIndex;
+  presentedBoardPageObject = currentBoardPage();
+}
+function cancelPendingBoardPageRender() {
+  boardPageRenderRequest += 1;
+  pendingBoardPageTarget = null;
+  requestedBoardPageIndex = null;
+}
 function fitBoardPageAfterPdfRender(page) {
   if (boardPagePendingInitialFit !== page || currentBoardPage() !== page) return false;
   boardPagePendingInitialFit = null;
@@ -274,30 +290,70 @@ function saveBoardPageView() {
 }
 function renderBoardPage(index = boardPageIndex) {
   if (!boardPageSequence.length) boardPageSequence = BoardState.createPageSequence(0);
+  const request = ++boardPageRenderRequest;
   clearPdfRenderDebounce();
   pdfRenderToken += 1;
   stopPdfRenderTask();
   const target = BoardState.pageForRender(boardPageSequence, index);
-  boardPageIndex = target.index;
   const page = target.page;
+  const sourceSequence = boardPageSequence;
+  const sourceIndex = boardPageIndex;
+  const sourcePage = currentBoardPage();
+  const sourceIsPresented = presentedBoardPageSequence === sourceSequence
+    && presentedBoardPageIndex === sourceIndex
+    && sourcePage === sourceSequence[sourceIndex]
+    && sourcePage === presentedBoardPageObject;
+  if (page.kind === "pdf") {
+    pendingBoardPageTarget = target.index;
+    requestedBoardPageIndex = target.index;
+    if (!page.view) boardPagePendingInitialFit = page;
+    else if (boardPagePendingInitialFit !== page) boardPagePendingInitialFit = null;
+    const changingPage = target.index !== boardPageIndex;
+    if (changingPage && sourceIsPresented) saveCurrentStrokeState();
+    return renderPdfPage(page.pdfPage, { boardPage: page }).then((result) => {
+      if (request !== boardPageRenderRequest) return;
+      if (!result || boardPageSequence[target.index] !== page) {
+        pendingBoardPageTarget = null;
+        requestedBoardPageIndex = null;
+        return;
+      }
+      finishActiveBoardInput();
+      if (sourceIsPresented && boardPageSequence === sourceSequence && boardPageIndex === sourceIndex) saveCurrentStrokeState();
+      pendingBoardPageTarget = null;
+      requestedBoardPageIndex = null;
+      boardPageIndex = target.index;
+      pdfPageNumber = page.pdfPage;
+      boardCamera = page.view ? { ...page.view } : { x: 0, y: 0, scale: 1 };
+      restoreCurrentStrokeState();
+      presentPdfPage(result, page);
+      markBoardPagePresented();
+      applyBoardCamera();
+      updateBoardSequenceUI();
+      updateUndoRedoUI();
+      scheduleSessionAutosave();
+      schedulePdfBackgroundRenders();
+    }).catch(() => {
+      if (request === boardPageRenderRequest) { pendingBoardPageTarget = null; requestedBoardPageIndex = null; }
+    });
+  }
   if (page.kind === "blank" && !page.worldSize) page.worldSize = { width: backgroundCanvas.width, height: backgroundCanvas.height };
-  pdfPageNumber = page.kind === "pdf" ? page.pdfPage : 0;
+  pendingBoardPageTarget = null;
+  requestedBoardPageIndex = null;
+  if (target.index !== boardPageIndex && sourceIsPresented) saveCurrentStrokeState();
+  boardPageIndex = target.index;
+  pdfPageNumber = 0;
   boardCamera = page.view ? { ...page.view } : { x: 0, y: 0, scale: 1 };
   pdfPageRasterCanvas = null;
   if (page.kind === "blank") applyBoardColor(page.background || "#ffffff", false);
+  boardPagePendingInitialFit = null;
   restoreCurrentStrokeState();
-  let pageRender = null;
-  if (page.kind === "pdf") {
-    if (!page.view) boardPagePendingInitialFit = page;
-    else if (boardPagePendingInitialFit !== page) boardPagePendingInitialFit = null;
-    pageRender = renderPdfPage(page.pdfPage);
-  }
-  else { boardPagePendingInitialFit = null; renderBoardBackground(); }
+  renderBoardBackground();
+  markBoardPagePresented();
   applyBoardCamera();
   updateBoardSequenceUI();
   updateUndoRedoUI();
   scheduleSessionAutosave();
-  return pageRender;
+  return undefined;
 }
 function updateBoardSequenceUI() {
   updatePageIndicator(pdfPageIndicator, boardPageIndex + 1, boardPageSequence.length);
@@ -347,7 +403,7 @@ function renderPageList() {
   pageStructureRedoButton.disabled = pageStructureRedo.length === 0;
 }
 function addBoardBlankPage() {
-  if (pdfExportInProgress || sessionRestoreInProgress) return;
+  if (pdfExportInProgress || sessionRestoreInProgress || pendingBoardPageTarget !== null) return;
   finishActiveBoardInput();
   saveCurrentStrokeState();
   const index = boardPageIndex + 1;
@@ -359,7 +415,7 @@ function addBoardBlankPage() {
   renderBoardPage(index);
 }
 function deleteBoardBlankPage() {
-  if (!BoardState.canDeletePage(boardPageSequence, boardPageIndex)) return;
+  if (pendingBoardPageTarget !== null || !BoardState.canDeletePage(boardPageSequence, boardPageIndex)) return;
   finishActiveBoardInput();
   saveCurrentStrokeState();
   const op = { action: "delete", index: boardPageIndex, page: null };
@@ -368,6 +424,7 @@ function deleteBoardBlankPage() {
   renderBoardPage(Math.max(0, boardPageIndex - 1));
 }
 function runPageStructureUndo(redo) {
+  if (pendingBoardPageTarget !== null) return;
   const from = redo ? pageStructureRedo : pageStructureUndo;
   const to = redo ? pageStructureUndo : pageStructureRedo;
   const op = from[from.length - 1];
@@ -386,7 +443,7 @@ function runPageStructureUndo(redo) {
   renderBoardPage(next);
 }
 function goToBoardPage(delta) {
-  const next = boardPageIndex + delta;
+  const next = (requestedBoardPageIndex === null ? boardPageIndex : requestedBoardPageIndex) + delta;
   if (next < 0 || next >= boardPageSequence.length) return;
   finishActiveBoardInput();
   saveCurrentStrokeState(); renderBoardPage(next);
