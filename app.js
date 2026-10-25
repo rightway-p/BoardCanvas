@@ -1,6 +1,7 @@
 const APP_CHUNK_SCRIPTS = [
   "./js/domain/board-state.js",
   "./js/domain/history-taps.js",
+  "./js/interaction-feedback.js",
   "./js/globals.js?v=wizard-palette-r1",
   "./js/runtime-overlay.js",
   "./js/session-pdf-toolbar.js",

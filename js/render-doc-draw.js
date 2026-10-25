@@ -56,6 +56,7 @@ function cachePdfRaster(key, canvas, lookupKey, result) {
 }
 
 function updateToolUI() {
+  if (typeof refreshBoardFeedback === "function") refreshBoardFeedback();
   const mouseModeActive = overlayMousePassthrough;
   penToolButton.classList.toggle("is-active", !mouseModeActive && tool === "pen" && !panMode);
   const eraserSelected = tool === "eraser" || tool === "strokeEraser";
@@ -962,6 +963,7 @@ function handlePointerEnd(event) {
 
 function clearBoard() {
   if (strokes.length <= 0) {
+    if (typeof showBoardAction === "function") showBoardAction("지울 내용이 없습니다");
     return;
   }
 
@@ -969,6 +971,7 @@ function clearBoard() {
   strokes.length = 0;
   redrawAllStrokes();
   finalizeStrokeMutation();
+  if (typeof showBoardAction === "function") showBoardAction("현재 페이지를 지웠습니다");
 }
 
 function setBoardColor(color) {
