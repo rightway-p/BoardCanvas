@@ -9,7 +9,7 @@
   },
   "package": {
     "productName": "BoardCanvas",
-    "version": "2.0.1-beta.17"
+    "version": "2.0.1-beta.18"
   },
   "tauri": {
     "windows": [

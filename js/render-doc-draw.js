@@ -914,6 +914,7 @@ function discardDrawingForTouchTakeover() {
   frameRequested = false;
   currentInputPointerId = null;
   redrawAllStrokes();
+  updateUndoRedoUI();
   return true;
 }
 

@@ -8,6 +8,7 @@ let touchSettingsTab = "single";
 let boardInteractionMode = "single";
 let automaticTouchSession = null;
 let automaticTouchFrame = 0;
+let historyTouchTracker = null;
 const automaticTouchBlockedPointers = new Set();
 let devTouchTimer = null;
 let zoomCueTimer = null;
@@ -289,6 +290,7 @@ function saveBoardPageView() {
   BoardState.savePageState(boardPageSequence, boardPageIndex, strokes, boardCamera);
 }
 function renderBoardPage(index = boardPageIndex) {
+  if (typeof cancelHistoryTouchTaps === "function") cancelHistoryTouchTaps();
   if (!boardPageSequence.length) boardPageSequence = BoardState.createPageSequence(0);
   const request = ++boardPageRenderRequest;
   clearPdfRenderDebounce();
@@ -847,6 +849,30 @@ function markAutomaticTouchEvent(event) {
   event.boardTouchHandled = true;
   event.preventDefault();
 }
+function historyTouchContext() {
+  return typeof currentBoardPage === "function" ? currentBoardPage() : "board";
+}
+function getHistoryTouchTracker() {
+  if (!historyTouchTracker) historyTouchTracker = BoardHistoryTaps.createTracker({
+    now: () => performance.now(),
+    setTimeout: (fn, delay) => window.setTimeout(fn, delay),
+    clearTimeout: (id) => window.clearTimeout(id),
+    onAction(action, page) {
+      if (page !== historyTouchContext() || boardInteractionMode !== "multi" || navModeLocked || overlayMousePassthrough) return;
+      if (action === "undo") undoStrokeAction();
+      else redoStrokeAction();
+    }
+  });
+  return historyTouchTracker;
+}
+function cancelHistoryTouchTaps() {
+  if (historyTouchTracker) historyTouchTracker.cancel();
+}
+function trackHistoryTouchMovement(event) {
+  const tracker = getHistoryTouchTracker();
+  for (const sample of event.getCoalescedEvents?.() || []) tracker.move(event.pointerId, automaticTouchPoint(sample));
+  tracker.move(event.pointerId, automaticTouchPoint(event));
+}
 function releaseAutomaticTouchBlockedPointer(event) { automaticTouchBlockedPointers.delete(event.pointerId); }
 function automaticTouchPoint(event) { return { x: event.clientX, y: event.clientY }; }
 function finishAutomaticTouchOwner(session, discard) {
@@ -859,6 +885,7 @@ function finishAutomaticTouchOwner(session, discard) {
   currentInputPointerId = null;
 }
 function resetAutomaticTouchSession() {
+  cancelHistoryTouchTaps();
   if (automaticTouchFrame) window.cancelAnimationFrame(automaticTouchFrame);
   automaticTouchFrame = 0;
   const session = automaticTouchSession;
@@ -894,6 +921,7 @@ function applyAutomaticTouchNavigation() {
   automaticTouchFrame = 0;
   const session = automaticTouchSession, pair = session && session.pair;
   if (navModeLocked || !session || session.phase !== "navigation" || !pair) return;
+  if (getHistoryTouchTracker().isCandidate()) return;
   const first = session.contacts.get(pair.ids[0])?.point, second = session.contacts.get(pair.ids[1])?.point;
   if (!first || !second) return;
   const previousCamera = boardCamera;
@@ -920,6 +948,7 @@ function automaticTouchDown(event) {
   if (boardInteractionMode !== "multi") return;
   if (navModeLocked) return;
   if (event.pointerType !== "touch") {
+    cancelHistoryTouchTaps();
     if (automaticTouchSession || automaticTouchBlockedPointers.size) {
       markAutomaticTouchEvent(event);
       if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
@@ -946,12 +975,15 @@ function automaticTouchDown(event) {
   if (session.contacts.has(event.pointerId)) { markAutomaticTouchEvent(event); return; }
   const now = performance.now();
   session.contacts.set(event.pointerId, { point: automaticTouchPoint(event) });
+  if (session.phase === "provisional" || session.phase === "navigation") {
+    getHistoryTouchTracker().down(event.pointerId, automaticTouchPoint(event), historyTouchContext(), devSettings.touchJoinWindowMs, event.timeStamp);
+  } else cancelHistoryTouchTaps();
   if (session.phase === "provisional" && event.pointerId !== session.ownerId) {
     const eventElapsed = Number.isFinite(session.startedAtEventTimestamp) && Number.isFinite(event.timeStamp) ? event.timeStamp - session.startedAtEventTimestamp : null;
     const elapsed = eventElapsed === null ? now - session.startedAt : eventElapsed;
     if (session.contacts.size === 2 && elapsed >= 0 && BoardState.canJoinTouchForNavigation(elapsed, session.maxMovement, devSettings)) {
       startAutomaticTouchNavigation(session);
-    } else session.phase = "ink";
+    } else { session.phase = "ink"; getHistoryTouchTracker().reject(); }
     markAutomaticTouchEvent(event);
     if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
     return;
@@ -968,11 +1000,12 @@ function automaticTouchMove(event) {
   if (!session || !session.contacts.has(event.pointerId)) return;
   const point = automaticTouchPoint(event);
   session.contacts.get(event.pointerId).point = point;
+  trackHistoryTouchMovement(event);
   if (session.phase === "provisional" && event.pointerId === session.ownerId) {
     const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
     for (const sample of samples) session.maxMovement = Math.max(session.maxMovement, Math.hypot(sample.clientX - session.origin.x, sample.clientY - session.origin.y));
     session.maxMovement = Math.max(session.maxMovement, Math.hypot(point.x - session.origin.x, point.y - session.origin.y));
-    if (session.maxMovement > devSettings.touchInkLockDistance) session.phase = "ink";
+    if (session.maxMovement > devSettings.touchInkLockDistance) { session.phase = "ink"; getHistoryTouchTracker().reject(); }
     return;
   }
   if (session.phase === "ink" && event.pointerId === session.ownerId) return;
@@ -984,13 +1017,16 @@ function automaticTouchEnd(event) {
   if (automaticTouchBlockedPointers.delete(event.pointerId)) { markAutomaticTouchEvent(event); return; }
   const session = automaticTouchSession;
   if (!session || !session.contacts.has(event.pointerId)) return;
+  trackHistoryTouchMovement(event);
+  if (event.type !== "pointerup") getHistoryTouchTracker().reject();
+  const wasTapCandidate = getHistoryTouchTracker().isCandidate();
   const ownerCancel = event.type !== "pointerup" && event.pointerId === session.ownerId && (session.phase === "provisional" || session.phase === "ink");
   if (ownerCancel) finishAutomaticTouchOwner(session, false);
   if (session.phase === "navigation") {
     session.contacts.get(event.pointerId).point = automaticTouchPoint(event);
     if (automaticTouchFrame) window.cancelAnimationFrame(automaticTouchFrame);
     automaticTouchFrame = 0;
-    applyAutomaticTouchNavigation();
+    if (!wasTapCandidate) applyAutomaticTouchNavigation();
     markAutomaticTouchEvent(event);
   } else if (event.type !== "pointerup" && event.pointerId === session.ownerId) markAutomaticTouchEvent(event);
   session.contacts.delete(event.pointerId);
@@ -998,6 +1034,7 @@ function automaticTouchEnd(event) {
     if (session.changed) { saveBoardPageView(); scheduleSessionAutosave(); }
     automaticTouchSession = null;
   }
+  getHistoryTouchTracker().up(event.pointerId, automaticTouchPoint(event), event.type !== "pointerup", event.timeStamp);
 }
 function getZoomCue(container, id) {
   let cue = document.getElementById(id);
@@ -1300,6 +1337,10 @@ async function checkReleaseNotesAfterStartup(previousVersion) {
   } catch {}
 }
 function initBoard201Ui() {
+  toolbar.addEventListener("pointerdown", cancelHistoryTouchTaps, true);
+  toolbar.addEventListener("keydown", cancelHistoryTouchTaps, true);
+  toolbar.addEventListener("click", cancelHistoryTouchTaps, true);
+  toolbar.addEventListener("input", cancelHistoryTouchTaps, true);
   devSettings = loadDevSettings();
   const allowBelowFit = document.getElementById("allowPdfZoomBelowFit");
   allowBelowFit.checked = isPdfZoomBelowFitAllowed();

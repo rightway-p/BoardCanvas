@@ -1,4 +1,5 @@
 function saveUndoSnapshotForCurrentContext() {
+  if (typeof cancelHistoryTouchTaps === "function") cancelHistoryTouchTaps();
   const entry = getOrCreateStrokeHistoryEntry();
   pushStrokeSnapshot(entry.undo, cloneStrokeCollection(strokes));
   entry.redo.length = 0;
@@ -23,6 +24,7 @@ function finalizeStrokeMutation() {
 }
 
 function undoStrokeAction() {
+  if (typeof cancelHistoryTouchTaps === "function") cancelHistoryTouchTaps();
   if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
     return false;
   }
@@ -43,6 +45,7 @@ function undoStrokeAction() {
 }
 
 function redoStrokeAction() {
+  if (typeof cancelHistoryTouchTaps === "function") cancelHistoryTouchTaps();
   if (pdfExportInProgress || drawing || strokeEraserActive || sessionRestoreInProgress) {
     return false;
   }
