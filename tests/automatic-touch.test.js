@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const BoardState = require("../js/domain/board-state.js");
+const BoardHistoryTaps = require("../js/domain/history-taps.js");
 
 const ui = fs.readFileSync(require.resolve("../js/board-2.0.1-ui.js"), "utf8");
 const draw = fs.readFileSync(require.resolve("../js/render-doc-draw.js"), "utf8");
@@ -18,6 +19,8 @@ const inputFunctions = [
 
 function harness(overrides = {}) {
   let now = 1000;
+  let timerId = 0;
+  const timers = new Map();
   const captures = new Set();
   const canvas = {
     setPointerCapture(id) { captures.add(id); },
@@ -28,8 +31,20 @@ function harness(overrides = {}) {
     boardInteractionMode: "multi", navModeLocked: false, automaticTouchSession: null, automaticTouchBlockedPointers: new Set(), automaticTouchFrame: 0,
     currentInputPointerId: null, drawing: false, hasStrokeMoved: false, strokeEraserActive: false, strokeEraserPointerId: null,
     tool: "pen", overlayMousePassthrough: false, panMode: false, devSettings: BoardState.normalizeAutomaticTouchSettings({}),
-    BoardState, canvas, boardWrapper: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, boardCamera: { x: 0, y: 0, scale: 1 },
-    window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {} }, performance: { now: () => now },
+    BoardState, BoardHistoryTaps, historyTouchTracker: null, canvas, boardWrapper: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, boardCamera: { x: 0, y: 0, scale: 1 },
+    window: { requestAnimationFrame() { return 1; }, cancelAnimationFrame() {},
+      setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { at: now + delay, fn }); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    }, performance: { now: () => now },
+    advance(ms) {
+      const target = now + ms;
+      while (true) {
+        const due = [...timers].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        now = due[1].at; timers.delete(due[0]); due[1].fn();
+      }
+      now = target;
+    },
     currentTime(value) { now = value; },
     setPanMode() {},
     getCanvasPoint(event) { return { x: event.clientX, y: event.clientY }; },
@@ -54,6 +69,186 @@ function harness(overrides = {}) {
 function pointer(pointerId, pointerType, type, x = 100, y = 100) {
   return { pointerId, pointerType, type, isPrimary: pointerId === 1, clientX: x, clientY: y, preventDefault() { this.prevented = true; }, getCoalescedEvents() { return []; } };
 }
+
+// Exercise the real history and button state alongside touch event routing.
+function historyHarness() {
+  const app = harness({
+    strokes: [], strokeHistoryByContext: new Map(), HISTORY_STACK_LIMIT: 100,
+    undoButton: { disabled: true }, redoButton: { disabled: true },
+    pdfExportInProgress: false, sessionRestoreInProgress: false, pdfDocument: null,
+    boardPageSequence: BoardState.createPageSequence(2), boardPageIndex: 0,
+    strokeEraserHistoryArmed: false, eraserWidthInput: { value: 10 },
+    ctx: { setTransform() {}, beginPath() {}, arc() {}, fill() {} },
+    flushPendingPoints() {},
+  });
+  const toolbar = fs.readFileSync(require.resolve("../js/session-pdf-toolbar.js"), "utf8");
+  vm.runInContext([
+    fs.readFileSync(require.resolve("../js/strokes-core.js"), "utf8"),
+    range(toolbar, "function hasLoadedPdfDocument", "function updatePageIndicator"),
+    fs.readFileSync(require.resolve("../js/strokes-history.js"), "utf8"),
+    fs.readFileSync(require.resolve("../js/stroke-eraser.js"), "utf8"),
+    range(ui, "function currentBoardPage", "function markBoardPagePresented"),
+    range(ui, "function saveBoardPageView", "function renderBoardPage"),
+    range(draw, "function stopDrawing", "function discardDrawingForTouchTakeover"),
+  ].join("\n"), app);
+  // Canvas rendering is irrelevant to history; keep the real mutation lifecycle.
+  app.redrawAllStrokes = () => {};
+  app.createStrokeRecord = (kind, point) => ({
+    kind, widthPx: 4, points: [{ ...point }],
+    minX: point.x, maxX: point.x, minY: point.y, maxY: point.y,
+  });
+  return app;
+}
+
+function drawHistoryStroke(app, tool, x) {
+  app.tool = tool;
+  app.handlePointerDown(pointer(1, "pen", "pointerdown", x, 100));
+  app.handlePointerEnd(pointer(1, "pen", "pointercancel", x, 100));
+}
+
+function navigateWithTwoTouches(app, mode) {
+  app.tool = "pen";
+  const secondX = mode === "pan" ? 140 : 240;
+  for (const event of [pointer(1, "touch", "pointerdown"), pointer(2, "touch", "pointerdown", secondX, 100)]) {
+    app.automaticTouchDown(event); app.handlePointerDown(event);
+  }
+  assert.equal(app.automaticTouchSession.pair.mode, mode);
+  const move = pointer(2, "touch", "pointermove", secondX + 50, 130);
+  app.automaticTouchMove(move); app.handlePointerMove(move);
+  app.applyAutomaticTouchNavigation();
+  for (const event of [pointer(2, "touch", "pointerup", secondX + 50, 130), pointer(1, "touch", "pointerup")]) {
+    app.automaticTouchEnd(event); app.handlePointerEnd(event);
+  }
+  assert.equal(app.automaticTouchSession, null);
+}
+
+test("pan and zoom leave pen and eraser undo/redo buttons usable without changing the camera", () => {
+  for (const mode of ["pan", "zoom"]) for (const tool of ["pen", "eraser", "strokeEraser"]) {
+    const app = historyHarness();
+    drawHistoryStroke(app, "pen", 100);
+    const before = JSON.stringify(app.strokes);
+    drawHistoryStroke(app, tool, 100);
+    const after = JSON.stringify(app.strokes);
+    assert.notEqual(after, before);
+    assert.equal(app.undoButton.disabled, false);
+
+    navigateWithTwoTouches(app, mode);
+    const camera = JSON.stringify(app.boardCamera);
+    assert.notEqual(camera, JSON.stringify({ x: 0, y: 0, scale: 1 }));
+    assert.equal(app.undoButton.disabled, false, `${mode} must unlock undo for ${tool}`);
+    assert.equal(app.undoStrokeAction(), true);
+    assert.equal(JSON.stringify(app.strokes), before);
+    assert.equal(JSON.stringify(app.boardCamera), camera);
+
+    navigateWithTwoTouches(app, mode);
+    const redoCamera = JSON.stringify(app.boardCamera);
+    assert.equal(app.redoButton.disabled, false, `${mode} must preserve redo for ${tool}`);
+    assert.equal(app.redoStrokeAction(), true);
+    assert.equal(JSON.stringify(app.strokes), after);
+    assert.equal(JSON.stringify(app.boardCamera), redoCamera);
+  }
+});
+
+test("page-local history survives navigation and edits on another page", () => {
+  const app = historyHarness();
+  drawHistoryStroke(app, "pen", 100);
+  drawHistoryStroke(app, "eraser", 100);
+  assert.equal(app.undoStrokeAction(), true);
+  const pageOneInk = JSON.stringify(app.strokes);
+
+  app.boardPageIndex = 1;
+  app.restoreCurrentStrokeState(); app.updateUndoRedoUI();
+  assert.equal(app.undoButton.disabled, true);
+  assert.equal(app.redoButton.disabled, true);
+  drawHistoryStroke(app, "pen", 300);
+  const pageTwoInk = JSON.stringify(app.strokes);
+  navigateWithTwoTouches(app, "zoom");
+  assert.equal(app.undoButton.disabled, false);
+  assert.equal(app.undoStrokeAction(), true);
+  assert.equal(app.strokes.length, 0);
+
+  app.boardPageIndex = 0;
+  app.restoreCurrentStrokeState(); app.updateUndoRedoUI();
+  assert.equal(JSON.stringify(app.strokes), pageOneInk);
+  assert.equal(app.redoButton.disabled, false);
+  assert.equal(app.redoStrokeAction(), true);
+  assert.equal(app.strokes.at(-1).kind, "pixel-eraser");
+
+  app.boardPageIndex = 1;
+  app.restoreCurrentStrokeState(); app.updateUndoRedoUI();
+  assert.equal(app.strokes.length, 0);
+  assert.equal(app.redoStrokeAction(), true);
+  assert.equal(JSON.stringify(app.strokes), pageTwoInk);
+});
+
+function historyTap(app, jitter = 0, endType = "pointerup") {
+  for (const event of [pointer(1, "touch", "pointerdown"), pointer(2, "touch", "pointerdown", 140, 100)]) {
+    app.automaticTouchDown(event); app.handlePointerDown(event); app.advance(15);
+  }
+  const move = pointer(2, "touch", "pointermove", 140 + jitter, 100);
+  app.automaticTouchMove(move); app.handlePointerMove(move); app.applyAutomaticTouchNavigation();
+  for (const event of [pointer(1, "touch", endType), pointer(2, "touch", endType, 140 + jitter, 100)]) {
+    app.automaticTouchEnd(event); app.handlePointerEnd(event);
+  }
+}
+
+test("two-finger double and triple taps operate actual page history without moving the camera", () => {
+  const app = historyHarness();
+  drawHistoryStroke(app, "pen", 100); drawHistoryStroke(app, "pen", 200);
+  const original = JSON.stringify(app.strokes), camera = JSON.stringify(app.boardCamera);
+  historyTap(app, 2); app.advance(70); historyTap(app, 3);
+  assert.equal(JSON.stringify(app.strokes), original);
+  app.advance(299); assert.equal(app.strokes.length, 2);
+  app.advance(1); assert.equal(app.strokes.length, 1);
+  assert.equal(JSON.stringify(app.boardCamera), camera);
+  historyTap(app); historyTap(app); historyTap(app);
+  assert.equal(JSON.stringify(app.strokes), original);
+  app.advance(1000); assert.equal(JSON.stringify(app.strokes), original);
+  assert.equal(JSON.stringify(app.boardCamera), camera);
+});
+
+test("pan, cancellation, page replacement, and native pen input cancel pending tap actions", () => {
+  for (const interrupt of ["pan", "cancel", "page", "pen", "blur"]) {
+    const app = historyHarness(); drawHistoryStroke(app, "pen", 100);
+    historyTap(app); historyTap(app);
+    if (interrupt === "pan") navigateWithTwoTouches(app, "pan");
+    if (interrupt === "cancel") historyTap(app, 0, "pointercancel");
+    if (interrupt === "page") { app.boardPageSequence = BoardState.createPageSequence(2); app.restoreCurrentStrokeState(); }
+    if (interrupt === "pen") {
+      const down = pointer(1, "pen", "pointerdown", 200, 100);
+      app.automaticTouchDown(down); app.handlePointerDown(down);
+      app.handlePointerEnd(pointer(1, "pen", "pointercancel", 200, 100));
+    }
+    if (interrupt === "blur") app.resetAutomaticTouchSession();
+    const expected = JSON.stringify(app.strokes);
+    app.advance(1000); assert.equal(JSON.stringify(app.strokes), expected, interrupt);
+  }
+});
+
+test("delayed dispatch uses physical contact timestamps for history tap pairing", () => {
+  const app = historyHarness(); drawHistoryStroke(app, "pen", 100);
+  for (let index = 0; index < 2; index++) {
+    const first = pointer(1, "touch", "pointerdown"); first.timeStamp = 10000 + index * 300;
+    app.automaticTouchDown(first); app.handlePointerDown(first);
+    app.advance(180);
+    const second = pointer(2, "touch", "pointerdown", 140, 100); second.timeStamp = first.timeStamp + 30;
+    app.automaticTouchDown(second); app.handlePointerDown(second);
+    assert.equal(app.getHistoryTouchTracker().isCandidate(), true);
+    for (const id of [1, 2]) {
+      const up = pointer(id, "touch", "pointerup", id === 1 ? 100 : 140, 100); up.timeStamp = first.timeStamp + 60;
+      app.automaticTouchEnd(up); app.handlePointerEnd(up);
+    }
+  }
+  app.advance(300); assert.equal(app.strokes.length, 0);
+});
+
+test("a new content mutation cancels pending double-tap undo", () => {
+  const app = historyHarness(); drawHistoryStroke(app, "pen", 100);
+  historyTap(app); historyTap(app);
+  // Same mutation path as clearBoard(), including keyboard/remote activation.
+  app.saveUndoSnapshotForCurrentContext(); app.strokes.length = 0; app.finalizeStrokeMutation();
+  app.advance(300); assert.equal(app.strokes.length, 0);
+});
 
 test("touches during native pen ink do not consume the pen owner's release", () => {
   const app = harness({ currentInputPointerId: 9, drawing: true });
