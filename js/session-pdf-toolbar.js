@@ -68,6 +68,7 @@ function closeDocumentPopup() {
 }
 
 function setDocumentStatus(message, tone = "normal") {
+  if (tone !== "normal" && typeof showBoardAction === "function") showBoardAction(message, tone === "success" ? 1800 : 3500);
   documentStatus.textContent = message;
   documentStatus.classList.remove("is-success", "is-warning", "is-error");
 

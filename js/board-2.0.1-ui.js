@@ -265,9 +265,13 @@ let presentedBoardPageIndex = -1;
 let presentedBoardPageObject = null;
 function currentBoardPage() { return boardPageSequence[boardPageIndex] || null; }
 function markBoardPagePresented() {
+  const previousPage = presentedBoardPageObject;
   presentedBoardPageSequence = boardPageSequence;
   presentedBoardPageIndex = boardPageIndex;
   presentedBoardPageObject = currentBoardPage();
+  if (previousPage && previousPage !== presentedBoardPageObject && typeof showBoardAction === "function") {
+    showBoardAction(`페이지 ${boardPageIndex + 1} / ${boardPageSequence.length}`);
+  }
 }
 function cancelPendingBoardPageRender() {
   boardPageRenderRequest += 1;
@@ -290,6 +294,7 @@ function saveBoardPageView() {
   BoardState.savePageState(boardPageSequence, boardPageIndex, strokes, boardCamera);
 }
 function renderBoardPage(index = boardPageIndex) {
+  if (typeof hideBoardFeedbackCursor === "function") hideBoardFeedbackCursor();
   if (typeof cancelHistoryTouchTaps === "function") cancelHistoryTouchTaps();
   if (!boardPageSequence.length) boardPageSequence = BoardState.createPageSequence(0);
   const request = ++boardPageRenderRequest;
@@ -454,6 +459,7 @@ function applyBoardCamera() {
   if (boardWorld) boardWorld.style.transform = "none";
   renderBoardBackground();
   redrawAllStrokes();
+  if (typeof refreshBoardFeedback === "function") refreshBoardFeedback();
 }
 function boardPageFitCamera(page, rect, ratio = pixelRatio) {
   const bounds = page && page.pdfContentBounds;
@@ -512,6 +518,7 @@ function fitCurrentBoardPage(finishInput = true) {
     boardCamera = fitted;
   } else boardCamera = { x: 0, y: 0, scale: 1 };
   saveBoardPageView(); applyBoardCamera(); scheduleSessionAutosave();
+  if (finishInput && typeof showBoardAction === "function") showBoardAction("페이지 맞춤");
   return true;
 }
 function boardWorkSnapshot() {
@@ -760,6 +767,7 @@ function setPanMode(enabled) {
 }
 function setNavigationModeLock(locked) {
   const next = Boolean(locked);
+  const changed = next !== navModeLocked;
   if (next !== navModeLocked) {
     if (panMode) setPanMode(false);
     else finishActiveBoardInput();
@@ -772,6 +780,7 @@ function setNavigationModeLock(locked) {
   navModeLockButton.setAttribute("aria-label", navModeLocked ? "줌·패닝 잠금 해제" : "줌·패닝 잠금");
   navModeLockButton.title = navModeLocked ? "줌·패닝 잠금 해제" : "줌·패닝 잠금";
   updateToolUI();
+  if (changed && typeof showBoardAction === "function") showBoardAction(navModeLocked ? "줌·패닝 잠금" : "줌·패닝 잠금 해제");
 }
 function setBoardInteractionMode(mode) {
   const next = mode === "multi" ? "multi" : "single";
@@ -1337,6 +1346,14 @@ async function checkReleaseNotesAfterStartup(previousVersion) {
   } catch {}
 }
 function initBoard201Ui() {
+  window.BoardFeedback = BoardInteractionFeedback.create({
+    root: boardWrapper, canvas, document, window,
+    getState: () => ({
+      tool, panMode, passthrough: overlayMousePassthrough,
+      worldDiameter: tool === "strokeEraser" ? getStrokeEraserRadius() * 2 : Math.max(1, Number(eraserWidthInput.value) * pixelRatio),
+      scale: boardCamera.scale, pixelRatio, ownerId: currentInputPointerId
+    })
+  });
   toolbar.addEventListener("pointerdown", cancelHistoryTouchTaps, true);
   toolbar.addEventListener("keydown", cancelHistoryTouchTaps, true);
   toolbar.addEventListener("click", cancelHistoryTouchTaps, true);

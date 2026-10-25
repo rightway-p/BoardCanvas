@@ -77,6 +77,7 @@ function stepPenWidth(delta) {
 function applyEraserWidth(width, persist = true) {
   const normalized = normalizeEraserWidth(width);
   eraserWidthInput.value = String(normalized);
+  if (typeof refreshBoardFeedback === "function") refreshBoardFeedback();
   if (persist) {
     saveStoredEraserWidth(LAST_ERASER_WIDTH_STORAGE_KEY, normalized);
   }

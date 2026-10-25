@@ -32,6 +32,7 @@ function undoStrokeAction() {
   const entry = getOrCreateStrokeHistoryEntry();
   if (entry.undo.length <= 0) {
     updateUndoRedoUI();
+    if (typeof showBoardAction === "function") showBoardAction("되돌릴 작업이 없습니다");
     return false;
   }
 
@@ -41,6 +42,7 @@ function undoStrokeAction() {
   saveCurrentStrokeState();
   scheduleSessionAutosave();
   updateUndoRedoUI();
+  if (typeof showBoardAction === "function") showBoardAction("실행 취소");
   return true;
 }
 
@@ -53,6 +55,7 @@ function redoStrokeAction() {
   const entry = getOrCreateStrokeHistoryEntry();
   if (entry.redo.length <= 0) {
     updateUndoRedoUI();
+    if (typeof showBoardAction === "function") showBoardAction("다시 실행할 작업이 없습니다");
     return false;
   }
 
@@ -62,6 +65,7 @@ function redoStrokeAction() {
   saveCurrentStrokeState();
   scheduleSessionAutosave();
   updateUndoRedoUI();
+  if (typeof showBoardAction === "function") showBoardAction("다시 실행");
   return true;
 }
 
